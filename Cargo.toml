@@ -1,0 +1,13 @@
+[package]
+name = "health-oracle"
+version = "0.1.0"
+edition = "2021"
+description = "Universal anomaly detection via Detrended Fluctuation Analysis (DFA). One algorithm detects structural health shifts in any time series — bearings, heartbeats, spacecraft telemetry, DNA."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/philphauler/health-oracle"
+keywords = ["anomaly-detection", "dfa", "time-series", "health-monitoring", "fractal"]
+categories = ["science", "algorithms"]
+
+[dependencies]
+
+[dev-dependencies]
