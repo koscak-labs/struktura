@@ -131,6 +131,7 @@ fn main() {
         "validate" => cmd_validate(&args),
         "self-test" => cmd_self_test(),
         "codegen" => cmd_codegen(&args),
+        "generate" => cmd_generate(&args),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -537,3 +538,389 @@ fn cmd_codegen(args: &[String]) {
         print!("{}", struktura::codegen::generate_c_monitor(window, threshold));
     }
 }
+
+fn cmd_generate(args: &[String]) {
+    let mut db_path: Option<String> = None;
+    let mut target = "cfs";
+    let mut output_dir = "dfa_monitor_app".to_string();
+    let mut window: usize = 256;
+    let mut threshold: f64 = 0.08;
+
+    let mut i = 2;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--db" if i + 1 < args.len() => { db_path = Some(args[i + 1].clone()); i += 2; }
+            "--cfs" => { target = "cfs"; i += 1; }
+            "--fprime" => { target = "fprime"; i += 1; }
+            "--window" if i + 1 < args.len() => { window = args[i + 1].parse().unwrap_or(256); i += 2; }
+            "--threshold" if i + 1 < args.len() => { threshold = args[i + 1].parse().unwrap_or(0.08); i += 2; }
+            "-o" | "--output" if i + 1 < args.len() => { output_dir = args[i + 1].clone(); i += 2; }
+            "--help" => {
+                println!("struktura generate — generate complete cFS/F Prime DFA monitor apps");
+                println!();
+                println!("  Compatible with nasa/ogma db.json format. No Haskell required.");
+                println!();
+                println!("  OPTIONS:");
+                println!("    --db <db.json>         Variable database (ogma-compatible)");
+                println!("    --cfs                  Generate cFS application (default)");
+                println!("    --fprime               Generate F Prime component");
+                println!("    --window <N>           DFA window size (default: 256)");
+                println!("    --threshold <F>        Shift threshold (default: 0.08)");
+                println!("    -o, --output <dir>     Output directory (default: dfa_monitor_app)");
+                println!();
+                println!("  EXAMPLE:");
+                println!("    struktura generate --cfs --db channels.json -o my_monitor/");
+                println!();
+                println!("  The db.json format is compatible with nasa/ogma's variable database.");
+                println!("  See: https://github.com/nasa/ogma");
+                process::exit(0);
+            }
+            _ => { i += 1; }
+        }
+    }
+
+    let channels = if let Some(ref path) = db_path {
+        parse_db_json(path)
+    } else {
+        vec![Channel { name: "input_value".into(), c_type: "double".into(), topic: "SAMPLE_MID".into(), field: "payload".into(), msg_type: "sample_msg_t".into() }]
+    };
+
+    let out = std::path::Path::new(&output_dir);
+    fs::create_dir_all(out).unwrap_or_else(|e| {
+        eprintln!("Error creating {}: {}", output_dir, e);
+        process::exit(1);
+    });
+
+    match target {
+        "cfs" => generate_cfs_app_dir(out, &channels, window, threshold),
+        "fprime" => generate_fprime_dir(out, &channels, window, threshold),
+        _ => { eprintln!("Unknown target: {}", target); process::exit(1); }
+    }
+
+    println!("Generated {} DFA monitor app in {}/", target, output_dir);
+    println!("  Channels: {}", channels.len());
+    println!("  Window:   {}", window);
+    println!("  Threshold: {:.3}", threshold);
+    if db_path.is_some() {
+        println!("  Source:   {} (ogma-compatible db.json)", db_path.unwrap());
+    }
+}
+
+struct Channel {
+    name: String,
+    c_type: String,
+    topic: String,
+    field: String,
+    msg_type: String,
+}
+
+fn parse_db_json(path: &str) -> Vec<Channel> {
+    let content = fs::read_to_string(path).unwrap_or_else(|e| {
+        eprintln!("Error reading {}: {}", path, e);
+        process::exit(1);
+    });
+
+    let mut channels = Vec::new();
+    let mut in_inputs = false;
+    let mut cur_name = String::new();
+    let mut cur_type = String::new();
+    let mut cur_topic = String::new();
+    let mut cur_field = String::new();
+
+    for line in content.lines() {
+        let t = line.trim();
+        if t.contains("\"inputs\"") { in_inputs = true; }
+        if !in_inputs { continue; }
+
+        if t.contains("\"name\"") {
+            if let Some(v) = extract_json_string(t) { cur_name = v; }
+        }
+        if t.contains("\"type\"") && !t.contains("\"fromType\"") && !t.contains("\"toType\"") {
+            if let Some(v) = extract_json_string_after(t, "\"type\"") { cur_type = v; }
+        }
+        if t.contains("\"topic\"") {
+            if let Some(v) = extract_json_string(t) { cur_topic = v; }
+        }
+        if t.contains("\"field\"") && !t.contains("\"fromField\"") {
+            if let Some(v) = extract_json_string(t) { cur_field = v; }
+        }
+
+        if t == "}" || t == "}," {
+            if !cur_name.is_empty() && !cur_topic.is_empty() {
+                channels.push(Channel {
+                    name: cur_name.clone(),
+                    c_type: if cur_type.is_empty() { "double".into() } else { cur_type.clone() },
+                    topic: cur_topic.clone(),
+                    field: if cur_field.is_empty() { "payload".into() } else { cur_field.clone() },
+                    msg_type: format!("{}_msg_t", cur_topic.to_lowercase()),
+                });
+                cur_name.clear();
+                cur_type.clear();
+                cur_topic.clear();
+                cur_field.clear();
+            }
+        }
+
+        if t.contains("\"topics\"") { in_inputs = false; }
+    }
+    channels
+}
+
+fn extract_json_string(line: &str) -> Option<String> {
+    let parts: Vec<&str> = line.split('"').collect();
+    if parts.len() >= 4 { Some(parts[3].to_string()) } else { None }
+}
+
+fn extract_json_string_after(line: &str, key: &str) -> Option<String> {
+    if let Some(pos) = line.find(key) {
+        let rest = &line[pos + key.len()..];
+        let parts: Vec<&str> = rest.split('"').collect();
+        if parts.len() >= 2 { return Some(parts[1].to_string()); }
+    }
+    None
+}
+
+fn generate_cfs_app_dir(out: &std::path::Path, channels: &[Channel], window: usize, threshold: f64) {
+    let src = out.join("fsw").join("src");
+    fs::create_dir_all(&src).unwrap();
+    fs::create_dir_all(out.join("fsw").join("platform_inc")).unwrap();
+    fs::create_dir_all(out.join("fsw").join("mission_inc")).unwrap();
+
+    fs::write(src.join("dfa_core.h"), generate_dfa_core_h()).unwrap();
+    fs::write(src.join("dfa_monitor_cfs.c"), generate_cfs_main(channels, window, threshold)).unwrap();
+    fs::write(src.join("dfa_monitor_cfs.h"), generate_cfs_header(channels)).unwrap();
+    fs::write(src.join("dfa_monitor_cfs_events.h"), DFA_EVENTS_H).unwrap();
+    fs::write(out.join("fsw").join("platform_inc").join("dfa_monitor_cfs_msgids.h"), generate_cfs_msgids(channels)).unwrap();
+    fs::write(out.join("fsw").join("mission_inc").join("dfa_monitor_cfs_perfids.h"), DFA_PERFIDS_H).unwrap();
+    fs::write(out.join("CMakeLists.txt"), CFS_CMAKE).unwrap();
+}
+
+fn generate_fprime_dir(out: &std::path::Path, channels: &[Channel], window: usize, threshold: f64) {
+    fs::create_dir_all(out).unwrap();
+    fs::write(out.join("dfa_core.h"), generate_dfa_core_h()).unwrap();
+    fs::write(out.join("DfaMonitor.fpp"), generate_fprime_fpp(channels)).unwrap();
+    fs::write(out.join("DfaMonitor.cpp"), generate_fprime_cpp(channels, window, threshold)).unwrap();
+    fs::write(out.join("DfaMonitor.hpp"), generate_fprime_hpp(channels, window)).unwrap();
+    fs::write(out.join("CMakeLists.txt"), FPRIME_CMAKE).unwrap();
+}
+
+fn generate_dfa_core_h() -> String {
+    struktura::codegen::generate_c_monitor(512, 0.08)
+        .replace("dfa_monitor.c", "dfa_core.h")
+}
+
+fn generate_cfs_main(channels: &[Channel], window: usize, threshold: f64) -> String {
+    let mut s = String::with_capacity(4096);
+    s.push_str("/* dfa_monitor_cfs.c -- Generated by struktura generate --cfs\n");
+    s.push_str(" * DFA structural health monitor for NASA cFS.\n");
+    s.push_str(" * https://github.com/koscak-labs/struktura\n */\n\n");
+    s.push_str("#include \"dfa_monitor_cfs.h\"\n");
+    s.push_str("#include \"dfa_monitor_cfs_events.h\"\n");
+    s.push_str("#include \"dfa_monitor_cfs_msgids.h\"\n");
+    s.push_str("#include \"dfa_core.h\"\n\n");
+    s.push_str(&format!("#define DFA_WINDOW_SIZE {}\n", window));
+    s.push_str(&format!("#define DFA_THRESHOLD   {:.4}\n", threshold));
+    s.push_str("#define DFA_LEARN_WINDOWS 10\n");
+    s.push_str("#define DFA_R2_MIN 0.7\n\n");
+
+    s.push_str("typedef struct {\n");
+    s.push_str(&format!("    double buffer[{}];\n", window));
+    s.push_str("    uint32 pos;\n    uint32 filled;\n");
+    s.push_str("    double baseline_alpha;\n    uint8 baseline_set;\n    uint32 window_count;\n");
+    s.push_str("} dfa_channel_t;\n\n");
+
+    for ch in channels {
+        s.push_str(&format!("{} {};\n", ch.c_type, ch.name));
+        s.push_str(&format!("static dfa_channel_t dfa_ch_{};\n", ch.name));
+    }
+    s.push_str("\nstatic CFE_SB_PipeId_t DFA_MONITOR_Pipe;\n");
+    s.push_str("static CFE_SB_Buffer_t *SBBufPtr;\n\n");
+
+    s.push_str("void DFA_MONITOR_AppMain(void) {\n");
+    s.push_str("    CFE_Status_t status;\n    uint32 RunStatus = CFE_ES_RunStatus_APP_RUN;\n");
+    s.push_str("    status = DFA_MONITOR_Init();\n");
+    s.push_str("    if (status != CFE_SUCCESS) RunStatus = CFE_ES_RunStatus_APP_ERROR;\n");
+    s.push_str("    while (CFE_ES_RunLoop(&RunStatus) == true) {\n");
+    s.push_str("        status = CFE_SB_ReceiveBuffer(&SBBufPtr, DFA_MONITOR_Pipe, 500);\n");
+    s.push_str("        if (status == CFE_SUCCESS) DFA_MONITOR_ProcessPkt();\n");
+    s.push_str("    }\n    CFE_ES_ExitApp(RunStatus);\n}\n\n");
+
+    s.push_str("CFE_Status_t DFA_MONITOR_Init(void) {\n");
+    s.push_str("    CFE_Status_t status;\n");
+    s.push_str("    CFE_EVS_Register(NULL, 0, CFE_EVS_EventFilter_BINARY);\n");
+    s.push_str("    status = CFE_SB_CreatePipe(&DFA_MONITOR_Pipe, 32, \"DFA_MON_PIPE\");\n");
+    s.push_str("    if (status != CFE_SUCCESS) return status;\n\n");
+    for ch in channels {
+        s.push_str(&format!("    CFE_SB_Subscribe(CFE_SB_ValueToMsgId(DFA_{}_MID), DFA_MONITOR_Pipe);\n", ch.topic));
+        s.push_str(&format!("    memset(&dfa_ch_{}, 0, sizeof(dfa_ch_{}));\n", ch.name, ch.name));
+    }
+    s.push_str(&format!("\n    CFE_EVS_SendEvent(DFA_MON_INIT_EID, CFE_EVS_EventType_INFORMATION,\n"));
+    s.push_str(&format!("        \"DFA Monitor: {} channels, window={}, threshold={:.3}\");\n", channels.len(), window, threshold));
+    s.push_str("    return CFE_SUCCESS;\n}\n\n");
+
+    s.push_str("static void dfa_push(dfa_channel_t *ch, double value, const char *name) {\n");
+    s.push_str(&format!("    ch->buffer[ch->pos] = value;\n    ch->pos = (ch->pos + 1) % {};\n", window));
+    s.push_str("    if (ch->pos == 0) ch->filled = 1;\n    if (!ch->filled) return;\n");
+    s.push_str("    ch->window_count++;\n");
+    s.push_str(&format!("    dfa_result_t r = dfa_compute(ch->buffer, {});\n", window));
+    s.push_str("    if (!ch->baseline_set && ch->window_count >= DFA_LEARN_WINDOWS && r.r_squared > DFA_R2_MIN) {\n");
+    s.push_str("        ch->baseline_alpha = r.alpha;\n        ch->baseline_set = 1;\n");
+    s.push_str("        CFE_EVS_SendEvent(DFA_MON_BASELINE_EID, CFE_EVS_EventType_INFORMATION,\n");
+    s.push_str("            \"DFA baseline %s: alpha=%.3f R2=%.4f\", name, r.alpha, r.r_squared);\n");
+    s.push_str("        return;\n    }\n    if (!ch->baseline_set) return;\n");
+    s.push_str("    if (r.r_squared < DFA_R2_MIN) return;\n");
+    s.push_str("    double shift = r.alpha - ch->baseline_alpha;\n");
+    s.push_str("    if (shift < 0) shift = -shift;\n");
+    s.push_str("    if (shift >= DFA_THRESHOLD) {\n");
+    s.push_str("        CFE_EVS_SendEvent(DFA_MON_SHIFT_EID, CFE_EVS_EventType_ERROR,\n");
+    s.push_str("            \"DFA SHIFT %s: alpha=%.3f baseline=%.3f delta=%.3f\",\n");
+    s.push_str("            name, r.alpha, ch->baseline_alpha, r.alpha - ch->baseline_alpha);\n");
+    s.push_str("    }\n}\n\n");
+
+    s.push_str("void DFA_MONITOR_ProcessPkt(void) {\n");
+    s.push_str("    CFE_SB_MsgId_t MsgId = CFE_SB_INVALID_MSG_ID;\n");
+    s.push_str("    CFE_MSG_GetMsgId(&SBBufPtr->Msg, &MsgId);\n\n");
+    for (i, ch) in channels.iter().enumerate() {
+        let kw = if i == 0 { "if" } else { "else if" };
+        s.push_str(&format!("    {} (CFE_SB_MsgId_Equal(MsgId, CFE_SB_ValueToMsgId(DFA_{}_MID))) {{\n", kw, ch.topic));
+        s.push_str(&format!("        {} *msg = ({}*)&SBBufPtr->Msg;\n", ch.msg_type, ch.msg_type));
+        s.push_str(&format!("        dfa_push(&dfa_ch_{}, (double)msg->{}, \"{}\");\n", ch.name, ch.field, ch.name));
+        s.push_str("    }\n");
+    }
+    s.push_str("}\n");
+    s
+}
+
+fn generate_cfs_header(channels: &[Channel]) -> String {
+    let mut s = String::new();
+    s.push_str("#ifndef DFA_MONITOR_CFS_H\n#define DFA_MONITOR_CFS_H\n\n");
+    s.push_str("#include \"cfe.h\"\n#include <string.h>\n#include <math.h>\n\n");
+    s.push_str("void DFA_MONITOR_AppMain(void);\n");
+    s.push_str("CFE_Status_t DFA_MONITOR_Init(void);\n");
+    s.push_str("void DFA_MONITOR_ProcessPkt(void);\n\n");
+    let _ = channels;
+    s.push_str("#endif\n");
+    s
+}
+
+fn generate_cfs_msgids(channels: &[Channel]) -> String {
+    let mut s = String::new();
+    s.push_str("#ifndef DFA_MONITOR_CFS_MSGIDS_H\n#define DFA_MONITOR_CFS_MSGIDS_H\n\n");
+    for (i, ch) in channels.iter().enumerate() {
+        s.push_str(&format!("#define DFA_{}_MID 0x{:04X}\n", ch.topic, 0x1900 + i));
+    }
+    s.push_str("\n#endif\n");
+    s
+}
+
+fn generate_fprime_fpp(channels: &[Channel]) -> String {
+    let mut s = String::with_capacity(2048);
+    s.push_str("module Svc {\n");
+    s.push_str("  @ DFA structural health monitor\n");
+    s.push_str("  @ Generated by: struktura generate --fprime\n");
+    s.push_str("  @ https://github.com/koscak-labs/struktura\n");
+    s.push_str("  passive component DfaMonitor {\n\n");
+    s.push_str("    sync input port schedIn: Svc.Sched\n\n");
+    for ch in channels {
+        s.push_str(&format!("    guarded input port {}In: Fw.Tlm\n", ch.name));
+    }
+    s.push_str("\n    event StructuralShift(\n");
+    s.push_str("      channelName: string size 32\n");
+    s.push_str("      baseline_alpha: F64\n      current_alpha: F64\n      delta: F64\n");
+    s.push_str("    ) severity warning high\n\n");
+    s.push_str("    event BaselineEstablished(\n");
+    s.push_str("      channelName: string size 32\n      alpha: F64\n      r_squared: F64\n");
+    s.push_str("    ) severity activity high\n\n");
+    s.push_str("    telemetry DfaAlpha: F64\n    telemetry DfaR2: F64\n\n");
+    s.push_str("    time get port timeCaller\n    event port logOut\n    telemetry port tlmOut\n");
+    s.push_str("  }\n}\n");
+    s
+}
+
+fn generate_fprime_cpp(channels: &[Channel], window: usize, threshold: f64) -> String {
+    let mut s = String::with_capacity(2048);
+    s.push_str("// DfaMonitor.cpp -- Generated by struktura generate --fprime\n");
+    s.push_str("// https://github.com/koscak-labs/struktura\n\n");
+    s.push_str("#include \"DfaMonitor.hpp\"\n#include \"dfa_core.h\"\n\n");
+    s.push_str("namespace Svc {\n\n");
+    s.push_str("DfaMonitor::DfaMonitor(const char* name) : DfaMonitorComponentBase(name) {\n");
+    for ch in channels {
+        s.push_str(&format!("    memset(&m_ch_{}, 0, sizeof(m_ch_{}));\n", ch.name, ch.name));
+    }
+    s.push_str("}\n\n");
+    for ch in channels {
+        s.push_str(&format!("void DfaMonitor::{}In_handler(NATIVE_INT_TYPE portNum, FwTlmBuffer& val) {{\n", ch.name));
+        s.push_str(&format!("    F64 v; val.deserialize(v);\n"));
+        s.push_str(&format!("    pushSample(m_ch_{}, v, \"{}\");\n", ch.name, ch.name));
+        s.push_str("}\n\n");
+    }
+    s.push_str(&format!("void DfaMonitor::pushSample(DfaChannel& ch, F64 value, const char* name) {{\n"));
+    s.push_str(&format!("    ch.buffer[ch.pos] = value;\n    ch.pos = (ch.pos + 1) % {};\n", window));
+    s.push_str("    if (ch.pos == 0) ch.filled = true;\n    if (!ch.filled) return;\n");
+    s.push_str("    ch.windowCount++;\n");
+    s.push_str(&format!("    dfa_result_t r = dfa_compute(ch.buffer, {});\n", window));
+    s.push_str("    if (!ch.baselineSet && ch.windowCount >= 10 && r.r_squared > 0.7) {\n");
+    s.push_str("        ch.baselineAlpha = r.alpha; ch.baselineSet = true;\n");
+    s.push_str("        this->log_ACTIVITY_HI_BaselineEstablished(name, r.alpha, r.r_squared);\n");
+    s.push_str("        return;\n    }\n    if (!ch.baselineSet || r.r_squared < 0.7) return;\n");
+    s.push_str(&format!("    F64 shift = (r.alpha > ch.baselineAlpha) ? r.alpha - ch.baselineAlpha : ch.baselineAlpha - r.alpha;\n"));
+    s.push_str(&format!("    if (shift >= {:.4}) {{\n", threshold));
+    s.push_str("        this->log_WARNING_HI_StructuralShift(name, ch.baselineAlpha, r.alpha, r.alpha - ch.baselineAlpha);\n");
+    s.push_str("    }\n    this->tlmWrite_DfaAlpha(r.alpha);\n    this->tlmWrite_DfaR2(r.r_squared);\n");
+    s.push_str("}\n\n} // namespace Svc\n");
+    s
+}
+
+fn generate_fprime_hpp(channels: &[Channel], window: usize) -> String {
+    let mut s = String::with_capacity(1024);
+    s.push_str("#ifndef DFA_MONITOR_HPP\n#define DFA_MONITOR_HPP\n\n");
+    s.push_str("#include \"DfaMonitorComponentAc.hpp\"\n\n");
+    s.push_str("namespace Svc {\n\n");
+    s.push_str("struct DfaChannel {\n");
+    s.push_str(&format!("    double buffer[{}];\n", window));
+    s.push_str("    U32 pos; bool filled; double baselineAlpha;\n");
+    s.push_str("    bool baselineSet; U32 windowCount;\n};\n\n");
+    s.push_str("class DfaMonitor : public DfaMonitorComponentBase {\n");
+    s.push_str("  public:\n    DfaMonitor(const char* name);\n");
+    s.push_str("  private:\n");
+    for ch in channels {
+        s.push_str(&format!("    void {}In_handler(NATIVE_INT_TYPE portNum, FwTlmBuffer& val);\n", ch.name));
+    }
+    s.push_str("    void pushSample(DfaChannel& ch, F64 value, const char* name);\n");
+    for ch in channels {
+        s.push_str(&format!("    DfaChannel m_ch_{};\n", ch.name));
+    }
+    s.push_str("};\n\n} // namespace Svc\n\n#endif\n");
+    s
+}
+
+const DFA_EVENTS_H: &str = "\
+#ifndef DFA_MONITOR_CFS_EVENTS_H
+#define DFA_MONITOR_CFS_EVENTS_H
+#define DFA_MON_INIT_EID     1
+#define DFA_MON_BASELINE_EID 2
+#define DFA_MON_SHIFT_EID    3
+#endif
+";
+
+const DFA_PERFIDS_H: &str = "\
+#ifndef DFA_MONITOR_CFS_PERFIDS_H
+#define DFA_MONITOR_CFS_PERFIDS_H
+#define DFA_MON_PERF_ID 91
+#endif
+";
+
+const CFS_CMAKE: &str = "\
+cmake_minimum_required(VERSION 2.6.4)
+project(CFE_DFA_MONITOR_APP C)
+include_directories(fsw/mission_inc)
+include_directories(fsw/platform_inc)
+aux_source_directory(fsw/src APP_SRC_FILES)
+add_cfe_app(dfa_monitor_cfs ${APP_SRC_FILES})
+";
+
+const FPRIME_CMAKE: &str = "\
+set(SOURCE_FILES DfaMonitor.cpp)
+set(MOD_DEPS Fw/Tlm Svc/Sched)
+register_fprime_module()
+";
