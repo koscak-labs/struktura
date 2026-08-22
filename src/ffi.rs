@@ -1,4 +1,4 @@
-use crate::{dfa, acr, analyze, health_check, DfaResult, StructuralLaw, HealthVerdict, LawQuality};
+use crate::{dfa, analyze, health_check, DfaResult, StructuralLaw, HealthVerdict, LawQuality};
 use std::slice;
 
 #[repr(C)]

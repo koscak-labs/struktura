@@ -130,6 +130,7 @@ fn main() {
         "report" => cmd_report(&args),
         "validate" => cmd_validate(&args),
         "self-test" => cmd_self_test(),
+        "codegen" => cmd_codegen(&args),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -508,4 +509,20 @@ fn cmd_self_test() {
     if fail > 0 {
         process::exit(1);
     }
+}
+
+fn cmd_codegen(args: &[String]) {
+    let mut window: usize = 256;
+    let mut threshold: f64 = 0.08;
+
+    for i in 0..args.len() {
+        if args[i] == "--window" && i + 1 < args.len() {
+            window = args[i + 1].parse().unwrap_or(256);
+        }
+        if args[i] == "--threshold" && i + 1 < args.len() {
+            threshold = args[i + 1].parse().unwrap_or(0.08);
+        }
+    }
+
+    print!("{}", struktura::codegen::generate_c_monitor(window, threshold));
 }
