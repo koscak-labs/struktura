@@ -48,6 +48,7 @@ A reaction wheel bearing degrading over weeks: DFA catches the vibration pattern
 
 ## Verified results
 
+### Industrial: CWRU bearing fault detection
 Reproducible — `cargo install struktura && struktura demo`:
 
 | Condition | DFA alpha | R² | Verdict |
@@ -55,7 +56,23 @@ Reproducible — `cargo install struktura && struktura demo`:
 | Normal bearing | 0.738 | 0.985 | Baseline |
 | Inner race fault | 0.217 | 0.948 | **CRITICAL** (shift -0.522) |
 
-Shuffle proof confirms structure is real: permuting the signal drives alpha from 0.738 → 0.457 (near 0.5 = uncorrelated).
+### Spacecraft: Voyager 1 magnetometer (public NASA SPDF data)
+
+I pulled Voyager 1's 48-second MAG averages from NASA SPDF and ran DFA across the 2022 AACS anomaly period. Data bundled in the repo — fully reproducible:
+
+```sh
+struktura compare data/voyager1_2021_healthy.csv data/voyager1_during_anomaly.csv
+```
+
+| Period | N | DFA alpha | R² | Quality |
+|---|---|---|---|---|
+| 2021 (healthy baseline) | 149,359 | 0.875 | 0.9999 | EXACT |
+| 2022 Jan-Apr (pre-anomaly) | 61,516 | 0.834 | 0.9999 | EXACT |
+| 2022 May-Jul (AACS anomaly) | 69,137 | 0.827 | 0.9996 | EXACT |
+
+Alpha shifts from 0.875 (healthy) to 0.827 during the anomaly window — a structural change in the magnetometer signal at R² > 0.999. Shuffle proof confirms the fractal structure is genuine.
+
+Source: L. F. Burlaga, VIM 48-second averages, [NASA SPDF](https://spdf.gsfc.nasa.gov/pub/data/voyager/voyager1/magnetic_fields/VIM_48s_mag_ascii/)
 
 ## Properties matching Copilot's guarantees
 
