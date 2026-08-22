@@ -186,8 +186,13 @@ pub fn acr(values: &[f64]) -> DfaResult {
     linreg(&log_lag[..pts], &log_r[..pts])
 }
 
+pub fn sanitize(values: &[f64]) -> Vec<f64> {
+    values.iter().copied().filter(|v| v.is_finite()).collect()
+}
+
 #[must_use]
 pub fn analyze(values: &[f64]) -> StructuralLaw {
+    let values = &sanitize(values);
     let n = values.len();
     if n < 20 {
         return StructuralLaw {
@@ -201,7 +206,17 @@ pub fn analyze(values: &[f64]) -> StructuralLaw {
     let mean = values.iter().sum::<f64>() / n as f64;
     let var: f64 = values.iter().map(|&x| (x - mean) * (x - mean)).sum::<f64>() / n as f64;
     let std_dev = var.sqrt();
-    let sd = if std_dev > 1e-15 { std_dev } else { 1e-15 };
+
+    if std_dev < 1e-12 {
+        return StructuralLaw {
+            hurst: 0.5, dfa: DfaResult { alpha: 0.5, r_squared: 0.0 },
+            acr: DfaResult { alpha: 0.0, r_squared: 0.0 },
+            mean, std_dev: 0.0, kurtosis: 0.0, p99: mean, max: mean,
+            n, quality: LawQuality::Abstain,
+        };
+    }
+
+    let sd = std_dev;
     let kurtosis = values.iter().map(|&v| {
         let z = (v - mean) / sd;
         z * z * z * z

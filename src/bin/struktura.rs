@@ -209,8 +209,8 @@ fn cmd_check(args: &[String]) {
     let _ = threshold;
 
     if csv_mode {
-        let shift_s = baseline.map(|b| format!("{:.4}", law.dfa.alpha - b)).unwrap_or_else(|| "".to_string());
-        let verdict_s = baseline.map(|b| { let (_, l) = verdict_color(health_check(&law, b)); l.to_string() }).unwrap_or_else(|| "".to_string());
+        let shift_s = baseline.map(|b| format!("{:.4}", law.dfa.alpha - b)).unwrap_or_default();
+        let verdict_s = baseline.map(|b| { let (_, l) = verdict_color(health_check(&law, b)); l.to_string() }).unwrap_or_default();
         println!("{},{},{:.4},{:.4},{:.4},{},{},{}", path, law.n, law.dfa.alpha, law.dfa.r_squared, law.hurst, quality_str(law.quality), shift_s, verdict_s);
         return;
     }
