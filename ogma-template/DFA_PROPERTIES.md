@@ -218,25 +218,30 @@ Running both in the same application gives the earliest possible detection
 
 All numbers below are from actual runs of Struktura on real-world data.
 
-### Cross-Domain Universality
+### Bundled Data (reproducible with `struktura demo` and `struktura check`)
 
-| Domain | Signal | N | DFA alpha | R^2 | Interpretation |
-|--------|--------|---|-----------|------|----------------|
-| Spacecraft | Queue depth trace | 500 | 0.593 | 0.789 | Correlated (healthy) |
-| Bearing | CWRU normal (97.mat, 12 kHz) | 243,938 | 0.389 | 0.872 | Structured vibration |
-| Genome | Human chr1 GC% (250 bp windows) | 8,000 | 0.909 | 0.991 | Strong fractal scaling |
-| Cardiac | RR intervals (normal HRV) | 2,048 | 0.695 | 0.985 | Healthy fractal dynamics |
+| Condition | N | DFA alpha | R^2 | Quality | Command |
+|-----------|---|-----------|------|---------|---------|
+| CWRU bearing normal | 1,000 | 0.738 | 0.985 | EXACT | `struktura check data/normal_sample.csv` |
+| CWRU bearing inner fault | 1,000 | 0.217 | 0.948 | STRONG | `struktura check data/fault_sample.csv` |
 
 ### Bearing Fault Detection (CWRU Bearing Data Center, 12 kHz)
 
+Reproducible with bundled data (`cargo install struktura && struktura demo`):
+
 | Condition | DFA alpha | R^2 | Delta from normal | Verdict |
 |-----------|-----------|------|-------------------|---------|
-| Normal (97.mat) | 0.389 | 0.872 | -- | Baseline |
-| Inner race fault (105.mat) | 0.146 | 0.635 | -0.243 | **DETECTED** |
-| Outer race fault (130.mat) | 0.247 | 0.687 | -0.142 | **DETECTED** |
-| Ball fault (118.mat) | 0.275 | 0.746 | -0.114 | **DETECTED** |
+| Normal (1000 samples) | 0.738 | 0.985 | -- | Baseline |
+| Inner race fault (1000 samples) | 0.217 | 0.948 | -0.522 | **CRITICAL** |
 
-All three fault types produce alpha shifts exceeding 0.08 from baseline.
+Shift of -0.522 far exceeds any reasonable threshold (default 0.08).
+Reproduce: `struktura compare data/normal_sample.csv data/fault_sample.csv`
+
+Shuffle proof confirms structure is real:
+- Original alpha: 0.738
+- Shuffled alpha: 0.457 (near 0.5 = uncorrelated)
+- Delta: 0.281 (structure destroyed by permutation)
+
 No amplitude thresholds are needed -- the structural change alone is
 diagnostic.
 
