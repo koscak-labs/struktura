@@ -1,11 +1,38 @@
-// no_std compatible with the `libm` feature, but defaults to std for convenience
+/// Universal anomaly detection via Detrended Fluctuation Analysis.
+///
+/// ```
+/// use struktura::{analyze, health_check, HealthVerdict};
+///
+/// let signal = vec![0.1, 0.3, 0.2, 0.5, 0.4, 0.6, 0.3, 0.7,
+///                   0.2, 0.4, 0.5, 0.3, 0.6, 0.4, 0.5, 0.3,
+///                   0.1, 0.3, 0.2, 0.5, 0.4, 0.6, 0.3, 0.7,
+///                   0.2, 0.4, 0.5, 0.3, 0.6, 0.4, 0.5, 0.3,
+///                   0.1, 0.3, 0.2, 0.5, 0.4, 0.6, 0.3, 0.7,
+///                   0.2, 0.4, 0.5, 0.3, 0.6, 0.4, 0.5, 0.3,
+///                   0.1, 0.3, 0.2, 0.5, 0.4, 0.6, 0.3, 0.7,
+///                   0.2, 0.4, 0.5, 0.3, 0.6, 0.4, 0.5, 0.3];
+/// let law = analyze(&signal);
+/// assert!(law.n == 64);
+/// ```
 
+use std::fmt;
+
+/// Result of a DFA or ACR computation.
 #[derive(Debug, Clone, Copy)]
 pub struct DfaResult {
+    /// Scaling exponent (slope in log-log space).
     pub alpha: f64,
+    /// Coefficient of determination of the log-log fit.
     pub r_squared: f64,
 }
 
+impl fmt::Display for DfaResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "alpha={:.3} R2={:.4}", self.alpha, self.r_squared)
+    }
+}
+
+/// How confident the analysis is in the derived exponent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LawQuality {
     Exact,

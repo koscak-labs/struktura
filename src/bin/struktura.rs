@@ -104,6 +104,7 @@ fn main() {
         "check" => cmd_check(&args),
         "compare" => cmd_compare(&args),
         "bench" => cmd_bench(),
+        "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
             eprintln!("Try: struktura demo");
@@ -160,10 +161,26 @@ fn cmd_check(args: &[String]) {
 
     let law = analyze(&data);
     let mut baseline: Option<f64> = None;
+    let json_mode = args.iter().any(|a| a == "--json");
     for i in 0..args.len() {
         if args[i] == "--baseline" && i + 1 < args.len() {
             baseline = args[i + 1].parse().ok();
         }
+    }
+
+    if json_mode {
+        let verdict_s = baseline.map(|b| {
+            let v = health_check(&law, b);
+            let (_, l) = verdict_color(v);
+            l
+        });
+        let shift = baseline.map(|b| law.dfa.alpha - b);
+        println!("{{\"file\":\"{}\",\"n\":{},\"dfa_alpha\":{:.4},\"dfa_r2\":{:.4},\"hurst\":{:.4},\"kurtosis\":{:.2},\"quality\":\"{}\"{}{}}}",
+            path, law.n, law.dfa.alpha, law.dfa.r_squared, law.hurst, law.kurtosis, quality_str(law.quality),
+            shift.map(|s| format!(",\"shift\":{:.4}", s)).unwrap_or_default(),
+            verdict_s.map(|v| format!(",\"verdict\":\"{}\"", v)).unwrap_or_default()
+        );
+        return;
     }
 
     println!();
