@@ -1,0 +1,8 @@
+[book]
+title = "Struktura"
+description = "Predict failure before it happens"
+authors = ["Koscak Labs"]
+language = "en"
+
+[output.html]
+git-repository-url = "https://github.com/koscak-labs/struktura"
