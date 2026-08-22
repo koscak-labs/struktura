@@ -46,6 +46,7 @@ fn verdict_str(v: HealthVerdict) -> &'static str {
         HealthVerdict::Watch => "WATCH",
         HealthVerdict::Warning => "WARNING",
         HealthVerdict::Critical => "CRITICAL",
+        _ => "UNKNOWN",
     }
 }
 
@@ -57,6 +58,7 @@ fn quality_str(q: LawQuality) -> &'static str {
         LawQuality::Approx => "APPROX",
         LawQuality::Abstain => "ABSTAIN",
         LawQuality::Insufficient => "INSUFFICIENT",
+        _ => "UNKNOWN",
     }
 }
 
