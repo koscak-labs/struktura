@@ -72,7 +72,9 @@ I documented [formal DFA properties](https://github.com/koscak-labs/struktura/bl
 
 2. Could DFA and Copilot monitors coexist in the same generated app? I could see a mode where ogma generates an app that does both temporal checks AND structural health.
 
-3. I also submitted a small bug fix in PR [#552](https://github.com/nasa/ogma/pull/552) — `mergeSpecs` was using `s2` twice instead of `s1 ++ s2` for external variables.
+3. I submitted a couple of fixes in PR [#552](https://github.com/nasa/ogma/pull/552):
+   - `mergeSpecs` was using `s2` twice instead of `s1 ++ s2` for external variables (data loss when combining multiple `--input-file` args, refs #551)
+   - `cannotCopyTemplate` was swallowing the actual exception — now propagates the real error message for easier template debugging (refs #390)
 
 Really enjoying reading through the ogma architecture — the template system is surprisingly powerful for how clean it is 🙏⚡
 
