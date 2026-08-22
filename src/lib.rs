@@ -511,6 +511,20 @@ impl fmt::Display for StructuralLaw {
     }
 }
 
+impl From<&[f64]> for SlidingWindow {
+    fn from(data: &[f64]) -> Self {
+        let mut sw = SlidingWindow::new(data.len().max(64));
+        for &v in data { sw.push(v); }
+        sw
+    }
+}
+
+impl From<Vec<f64>> for SlidingWindow {
+    fn from(data: Vec<f64>) -> Self {
+        SlidingWindow::from(data.as_slice())
+    }
+}
+
 impl Default for SlidingWindow {
     fn default() -> Self {
         SlidingWindow::new(256)
