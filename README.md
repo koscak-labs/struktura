@@ -1,5 +1,9 @@
 # Struktura
 
+[![Crates.io](https://img.shields.io/crates/v/struktura.svg)](https://crates.io/crates/struktura)
+[![CI](https://github.com/koscak-labs/struktura/actions/workflows/ci.yml/badge.svg)](https://github.com/koscak-labs/struktura/actions/workflows/ci.yml)
+[![License](https://img.shields.io/crates/l/struktura.svg)](https://github.com/koscak-labs/struktura)
+
 **Predict failure before it happens.**
 
 ```rust
