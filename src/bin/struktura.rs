@@ -126,6 +126,7 @@ fn main() {
         "compare" => cmd_compare(&args),
         "bench" => cmd_bench(),
         "report" => cmd_report(&args),
+        "validate" => cmd_validate(&args),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -396,4 +397,28 @@ fn cmd_report(args: &[String]) {
         println!("| {} | {} | {:.3} | {:.4} | {} | {} |", short, law.n, law.dfa.alpha, law.dfa.r_squared, quality_str(law.quality), vs);
     }
     println!("\nAlgorithm: Detrended Fluctuation Analysis (Peng et al., 1994)");
+}
+
+fn cmd_validate(args: &[String]) {
+    if args.len() < 3 {
+        eprintln!("Usage: struktura validate <file.csv>");
+        process::exit(1);
+    }
+    let path = &args[2];
+    if !std::path::Path::new(path).exists() {
+        println!("FAIL: file not found: {}", path);
+        process::exit(1);
+    }
+    let data = read_csv(path);
+    if data.is_empty() {
+        println!("FAIL: no numeric values found in {}", path);
+        process::exit(1);
+    }
+    if data.len() < 20 {
+        println!("WARN: only {} values (need >= 20 for analysis, >= 64 for DFA)", data.len());
+    } else if data.len() < 64 {
+        println!("WARN: {} values (DFA needs >= 64, ACR works with >= 20)", data.len());
+    } else {
+        println!("OK: {} numeric values, ready for analysis", data.len());
+    }
 }
