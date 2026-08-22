@@ -1,7 +1,7 @@
 use std::env;
 use std::fs;
 use std::process;
-use struktura::{analyze, health_check, HealthVerdict, LawQuality, StructuralLaw};
+use struktura::{analyze, health_check, prove_structure, HealthVerdict, LawQuality, StructuralLaw};
 
 const NORMAL_SAMPLES: &str = include_str!("../../data/normal_sample.csv");
 const FAULT_SAMPLES: &str = include_str!("../../data/fault_sample.csv");
@@ -256,6 +256,20 @@ fn cmd_check(args: &[String]) {
         println!();
         println!("  >>> {}{}\x1b[0m", color, label);
     }
+
+    if args.iter().any(|a| a == "--shuffle") {
+        let proof = prove_structure(&data);
+        println!("  ------------------------------------------------");
+        println!("  \x1b[1mShuffle proof:\x1b[0m");
+        println!("    Real alpha:     {:.3}  (R2={:.4})", proof.real_alpha, proof.real_r2);
+        println!("    Shuffled alpha: {:.3}  (R2={:.4})", proof.shuffled_alpha, proof.shuffled_r2);
+        if proof.structure_confirmed {
+            println!("    Result: \x1b[32mCONFIRMED\x1b[0m — shuffling destroyed the structure");
+        } else {
+            println!("    Result: \x1b[33mINCONCLUSIVE\x1b[0m — signal may lack exploitable structure");
+        }
+    }
+
     println!();
 }
 

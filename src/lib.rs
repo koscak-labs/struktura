@@ -253,6 +253,50 @@ impl DfaResult {
     }
 }
 
+pub fn shuffle(values: &[f64], seed: u64) -> Vec<f64> {
+    let mut out = values.to_vec();
+    let n = out.len();
+    let mut state = seed;
+    for i in (1..n).rev() {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let j = (state >> 33) as usize % (i + 1);
+        out.swap(i, j);
+    }
+    out
+}
+
+#[derive(Debug, Clone)]
+pub struct ShuffleProof {
+    pub real_alpha: f64,
+    pub real_r2: f64,
+    pub shuffled_alpha: f64,
+    pub shuffled_r2: f64,
+    pub structure_confirmed: bool,
+}
+
+pub fn prove_structure(values: &[f64]) -> ShuffleProof {
+    let real = dfa(values);
+    let shuffled_values = shuffle(values, 42);
+    let shuffled = dfa(&shuffled_values);
+    let real_dist = (real.alpha - 0.5).abs();
+    let shuf_dist = (shuffled.alpha - 0.5).abs();
+    ShuffleProof {
+        real_alpha: real.alpha,
+        real_r2: real.r_squared,
+        shuffled_alpha: shuffled.alpha,
+        shuffled_r2: shuffled.r_squared,
+        structure_confirmed: shuf_dist < real_dist,
+    }
+}
+
+impl fmt::Display for ShuffleProof {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "real={:.3} shuffled={:.3} {}",
+            self.real_alpha, self.shuffled_alpha,
+            if self.structure_confirmed { "CONFIRMED" } else { "INCONCLUSIVE" })
+    }
+}
+
 #[must_use]
 pub fn health_check(current: &StructuralLaw, baseline_alpha: f64) -> HealthVerdict {
     HealthVerdict::from_shift(current.dfa.alpha - baseline_alpha)
