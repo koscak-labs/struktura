@@ -219,6 +219,94 @@ fn linreg(x: &[f64], y: &[f64]) -> DfaResult {
     DfaResult { alpha: slope, r_squared: r2 }
 }
 
+pub struct SlidingWindow {
+    buffer: Vec<f64>,
+    capacity: usize,
+    pos: usize,
+    filled: bool,
+}
+
+impl SlidingWindow {
+    pub fn new(capacity: usize) -> Self {
+        SlidingWindow {
+            buffer: vec![0.0; capacity],
+            capacity,
+            pos: 0,
+            filled: false,
+        }
+    }
+
+    pub fn push(&mut self, value: f64) {
+        self.buffer[self.pos] = value;
+        self.pos += 1;
+        if self.pos >= self.capacity {
+            self.pos = 0;
+            self.filled = true;
+        }
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.filled
+    }
+
+    pub fn analyze(&self) -> StructuralLaw {
+        if !self.filled {
+            return analyze(&self.buffer[..self.pos]);
+        }
+        let mut ordered = Vec::with_capacity(self.capacity);
+        ordered.extend_from_slice(&self.buffer[self.pos..]);
+        ordered.extend_from_slice(&self.buffer[..self.pos]);
+        analyze(&ordered)
+    }
+}
+
+pub struct BaselineTracker {
+    window: SlidingWindow,
+    baseline: Option<f64>,
+    learning_samples: usize,
+    samples_seen: usize,
+}
+
+impl BaselineTracker {
+    pub fn new(window_size: usize, learning_samples: usize) -> Self {
+        BaselineTracker {
+            window: SlidingWindow::new(window_size),
+            baseline: None,
+            learning_samples,
+            samples_seen: 0,
+        }
+    }
+
+    pub fn push(&mut self, value: f64) -> Option<HealthVerdict> {
+        self.window.push(value);
+        self.samples_seen += 1;
+
+        if !self.window.is_ready() {
+            return None;
+        }
+
+        if self.samples_seen <= self.learning_samples {
+            let law = self.window.analyze();
+            if law.dfa.r_squared > 0.7 {
+                self.baseline = Some(law.dfa.alpha);
+            }
+            return None;
+        }
+
+        let baseline = self.baseline?;
+        let law = self.window.analyze();
+        Some(health_check(&law, baseline))
+    }
+
+    pub fn baseline(&self) -> Option<f64> {
+        self.baseline
+    }
+
+    pub fn is_learning(&self) -> bool {
+        self.samples_seen <= self.learning_samples
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
