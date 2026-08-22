@@ -524,12 +524,15 @@ fn cmd_codegen(args: &[String]) {
         }
     }
 
+    let name = args.iter().position(|a| a == "--name")
+        .and_then(|i| args.get(i + 1))
+        .map(|s| s.as_str())
+        .unwrap_or("DfaHealthMonitor");
+
     if args.iter().any(|a| a == "--fprime") {
-        let name = args.iter().position(|a| a == "--name")
-            .and_then(|i| args.get(i + 1))
-            .map(|s| s.as_str())
-            .unwrap_or("DfaHealthMonitor");
         print!("{}", struktura::codegen::generate_fprime_component(name, window));
+    } else if args.iter().any(|a| a == "--cfs") {
+        print!("{}", struktura::codegen::generate_cfs_app(name, window));
     } else {
         print!("{}", struktura::codegen::generate_c_monitor(window, threshold));
     }
