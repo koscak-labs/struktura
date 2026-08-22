@@ -1,67 +1,79 @@
-# DFA structural health monitoring as a custom ogma template
+# DFA structural health monitoring — ogma-compatible generator + custom templates
 
-Hi @ivanperez-keera, following up from our conversations on [nasa/fprime#5772](https://github.com/nasa/fprime/issues/5772) and [nasa/cFS#1096](https://github.com/nasa/cFS/issues/1096).
+Hey @ivanperez-keera 👋
 
-I studied ogma's architecture — the Mustache template system, `--template-dir`, `--template-vars`, and the cFS/fprime/ROS examples. I built a first prototype of a custom cFS template that replaces Copilot's temporal monitors with DFA (Detrended Fluctuation Analysis) structural health monitoring.
+Following up from our chats on [fprime#5772](https://github.com/nasa/fprime/issues/5772) and [cFS#1096](https://github.com/nasa/cFS/issues/1096) — I went deep into ogma's source and built some things I think you'll find interesting.
 
-## What DFA adds to ogma
+## What I built
 
-Copilot monitors check **temporal properties** — "signal X shall always satisfy condition Y." DFA checks **structural health** — "is the signal's statistical structure changing?" These are complementary:
+### 1. `struktura generate` — ogma-compatible app generator (no Haskell)
 
-- A sensor drifting changes its correlation pattern (DFA catches this) before it violates a threshold (Copilot catches that)
-- DFA fires on degradation onset; Copilot fires on property violation
-- Running both gives earlier detection + formal verification
+Struktura now reads ogma's `db.json` variable database format and generates complete cFS or F Prime monitoring applications:
 
-## The prototype
-
-A custom ogma cFS template at [`ogma-template/cfs/dfa_monitor/`](https://github.com/koscak-labs/struktura/tree/main/ogma-template/cfs/dfa_monitor) that reuses ogma's existing infrastructure:
-
-**Same inputs as any ogma app:**
-- `db.json` — variable database connecting DFA channels to cFS message topics
-- `extra-vars.json` — DFA parameters: window size, threshold, R² minimum, learning windows
-
-**What the template generates:**
-- A cFS app that subscribes to configured telemetry topics
-- Per-channel DFA sliding window with automatic baseline learning
-- Event emission on structural shift detection
-- **Exact-or-abstain**: if R² falls below threshold, the channel suspends monitoring rather than alerting on unreliable data
-
-**Self-contained C code** (`dfa_core.h`):
-- ~90 lines, zero dependencies beyond `<math.h>`
-- Fixed-size buffers, no heap allocation, deterministic
-- 1,500 MACs per channel per tick (~3µs on RAD750)
-
-**Invocation would be:**
 ```sh
-ogma cfs --template-dir struktura-dfa-template/cfs/dfa_monitor \
-         --variable-db example/db.json \
-         --template-vars example/extra-vars.json \
-         --target-dir dfa_app
+cargo install struktura
+struktura generate --cfs --db channels.json -o dfa_monitor/
+struktura generate --fprime --db channels.json -o dfa_component/
 ```
+
+One command, 10-second install, works on Windows/Mac/Linux. The generated code follows the same cFS app structure as ogma's output — `AppMain`, `Init`, `ProcessPkt`, SB subscriptions, EVS events — but does DFA structural health monitoring instead of Copilot temporal logic.
+
+The idea is complementary: ogma generates monitors for temporal properties (Copilot specs), struktura generates monitors for structural health (DFA scaling analysis). Same `db.json`, different monitoring paradigm, both producing ready-to-compile flight software.
+
+### 2. Custom ogma templates for cFS and F Prime
+
+I also built custom ogma templates that work with `--template-dir`:
+
+- `ogma-template/cfs/dfa_monitor/` — cFS template using all the standard Mustache variables (`{{#variables}}`, `{{#msgCases}}`, `{{#msgHandlers}}`)
+- `ogma-template/fprime/dfa_monitor/` — F Prime template with `{{varDeclFPrimeType}}`, `{{#monitors}}`
+
+These replace `copilot_step()` with DFA computation while keeping ogma's subscription/dispatch infrastructure.
+
+### 3. Template preparation guide (re: #315)
+
+I noticed [discussion #315](https://github.com/nasa/ogma/discussions/315) asking for documentation on how to prepare a new template. While building the DFA templates, I documented the full process — available Mustache variables per backend, how `db.json` maps to subscriptions, how `extra-vars.json` works, and how to replace Copilot with custom logic. Happy to contribute this if useful.
+
+Everything is at: https://github.com/koscak-labs/struktura/tree/master/ogma-template
+
+## How DFA complements Copilot
+
+| | Copilot (temporal logic) | DFA (structural health) |
+|---|---|---|
+| Detects | Property violations | Behavioral degradation |
+| Fires when | A Boolean property becomes false | Signal's correlation structure shifts from baseline |
+| Catches | Known failure modes (specified) | Unknown degradation (structural change) |
+
+A reaction wheel bearing degrading over weeks: DFA catches the vibration pattern change (alpha shifts from 0.7 to 0.4) weeks before the amplitude crosses a Copilot threshold. Running both = earliest detection + formal correctness.
 
 ## Verified results
 
-All numbers from actual runs of the same DFA algorithm ([struktura](https://crates.io/crates/struktura)):
+Reproducible — `cargo install struktura && struktura demo`:
 
-| Domain | Signal | DFA alpha | R² | Detection |
-|--------|--------|-----------|-----|-----------|
-| Bearing normal | CWRU 97.mat | 0.389 | 0.872 | baseline |
-| Bearing inner fault | CWRU 105.mat | 0.146 | 0.635 | shift -0.243 |
-| Bearing outer fault | CWRU 130.mat | 0.247 | 0.687 | shift -0.142 |
-| Bearing ball fault | CWRU 118.mat | 0.275 | 0.746 | shift -0.114 |
-| Genome | 8 human chromosomes | 0.66-0.91 | >0.99 | exact structure |
-| Cardiac normal | RR intervals | 0.695 | 0.985 | healthy fractal |
-| Cardiac arrhythmic | RR intervals | 0.483 | 0.990 | structure destroyed |
+| Condition | DFA alpha | R² | Verdict |
+|---|---|---|---|
+| Normal bearing | 0.738 | 0.985 | Baseline |
+| Inner race fault | 0.217 | 0.948 | **CRITICAL** (shift -0.522) |
 
-## Questions for you
+Shuffle proof confirms structure is real: permuting the signal drives alpha from 0.738 → 0.457 (near 0.5 = uncorrelated).
 
-1. **Template compatibility**: Does the Mustache variable set I'm using (`{{#variables}}`, `{{#msgIds}}`, `{{#msgCases}}`, `{{#msgHandlers}}`) cover what `--template-dir` provides? I mapped these from the default cFS template — want to confirm they're stable.
+## Properties matching Copilot's guarantees
 
-2. **DFA + Copilot together**: Is there a way to have a single ogma-generated app run BOTH Copilot temporal monitors AND DFA structural monitors? The most useful deployment would combine them.
+I documented [formal DFA properties](https://github.com/koscak-labs/struktura/blob/master/ogma-template/DFA_PROPERTIES.md) to show the guarantees align with Copilot's:
 
-3. **fprime + ROS templates**: I can create parallel templates for fprime and ROS using the same `dfa_core.h`. Does `--template-dir` work the same way for `ogma fprime` and `ogma ros`?
+- **Constant memory**: fixed circular buffer, no dynamic allocation
+- **Deterministic**: same input → same output, zero randomness
+- **Bounded time**: O(n·B) per evaluation, ~1500 MACs for 256-sample window
+- **Exact-or-abstain**: if R² < threshold, monitor suspends (never alerts on noise)
 
-4. **Custom `ogma dfa` command**: Long-term, would it make sense for ogma to have a built-in `dfa` backend (parallel to `diagram`)? I'd be happy to contribute the Haskell side if that's the right direction.
+## Questions
 
+1. Does the `db.json` compatibility approach make sense, or would you prefer tighter integration (e.g., a Haskell backend in ogma itself)?
+
+2. Could DFA and Copilot monitors coexist in the same generated app? I could see a mode where ogma generates an app that does both temporal checks AND structural health.
+
+3. I also submitted a small bug fix in PR [#552](https://github.com/nasa/ogma/pull/552) — `mergeSpecs` was using `s2` twice instead of `s1 ++ s2` for external variables.
+
+Really enjoying reading through the ogma architecture — the template system is surprisingly powerful for how clean it is 🙏⚡
+
+Crate: https://crates.io/crates/struktura
 Source: https://github.com/koscak-labs/struktura
-Try it: `cargo install struktura && struktura demo`

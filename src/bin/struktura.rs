@@ -606,6 +606,7 @@ fn cmd_generate(args: &[String]) {
     }
 }
 
+#[allow(dead_code)]
 struct Channel {
     name: String,
     c_type: String,
