@@ -33,39 +33,71 @@ impl fmt::Display for DfaResult {
     }
 }
 
-/// How confident the analysis is in the derived exponent.
+/// How confident the analysis is in the derived scaling exponent.
+///
+/// Determined by the R-squared of the log-log fit. Higher R-squared means
+/// the scaling law is a better fit to the data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub enum LawQuality {
+    /// R-squared > 0.95 — the scaling law fits the data almost perfectly.
     Exact,
+    /// R-squared > 0.85 — strong confidence in the derived exponent.
     Strong,
+    /// R-squared > 0.7 — good enough for health monitoring.
     Good,
+    /// R-squared > 0.3 — approximate; use with caution.
     Approx,
+    /// R-squared <= 0.3 — insufficient structure; the crate abstains from diagnosis.
     Abstain,
+    /// Fewer than 20 data points — not enough data to analyze.
     Insufficient,
 }
 
+/// Complete structural analysis of a time series.
+///
+/// Contains the DFA and ACR results plus distributional statistics.
+/// Use [`analyze`] to compute this from raw data.
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct StructuralLaw {
+    /// Hurst exponent estimated from ACR decay: H = 1 + acr_exponent/2.
     pub hurst: f64,
+    /// Detrended Fluctuation Analysis result.
     pub dfa: DfaResult,
+    /// Autocorrelation decay result.
     pub acr: DfaResult,
+    /// Arithmetic mean of the signal.
     pub mean: f64,
+    /// Standard deviation of the signal.
     pub std_dev: f64,
+    /// Kurtosis (4th moment). Values > 4 indicate heavy tails / bursty behavior.
     pub kurtosis: f64,
+    /// 99th percentile value.
     pub p99: f64,
+    /// Maximum observed value.
     pub max: f64,
+    /// Number of samples analyzed.
     pub n: usize,
+    /// Confidence classification of the analysis.
     pub quality: LawQuality,
 }
 
+/// Health verdict comparing current DFA alpha against a known baseline.
+///
+/// Thresholds: Healthy < 0.03, Watch < 0.08, Warning < 0.15, Critical >= 0.15.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub enum HealthVerdict {
+    /// Shift < 0.03 from baseline — within normal variation.
     Healthy,
+    /// Shift 0.03-0.08 — minor structural change, monitor closely.
     Watch,
+    /// Shift 0.08-0.15 — significant structural departure.
     Warning,
+    /// Shift >= 0.15 — major structural breakdown.
     Critical,
 }
 
@@ -84,6 +116,17 @@ impl HealthVerdict {
     }
 }
 
+/// Compute the DFA scaling exponent of a time series.
+///
+/// Returns alpha (the scaling exponent) and R-squared (fit quality).
+/// Requires at least 64 data points.
+///
+/// ```
+/// use struktura::dfa;
+/// let noise: Vec<f64> = (0..256).map(|i| (i as f64 * 0.1).sin()).collect();
+/// let result = dfa(&noise);
+/// assert!(result.r_squared >= 0.0);
+/// ```
 #[must_use]
 pub fn dfa(values: &[f64]) -> DfaResult {
     let n = values.len();
@@ -147,6 +190,10 @@ pub fn dfa(values: &[f64]) -> DfaResult {
     linreg(&log_s[..pts], &log_f[..pts])
 }
 
+/// Compute autocorrelation decay exponent.
+///
+/// Measures how fast temporal correlations decay with lag.
+/// Requires at least 20 data points.
 #[must_use]
 pub fn acr(values: &[f64]) -> DfaResult {
     let n = values.len();
@@ -186,10 +233,25 @@ pub fn acr(values: &[f64]) -> DfaResult {
     linreg(&log_lag[..pts], &log_r[..pts])
 }
 
+/// Filter out NaN and Inf values from a signal.
+///
+/// Called automatically by [`analyze`]. You only need this if using [`dfa`] directly.
 pub fn sanitize(values: &[f64]) -> Vec<f64> {
     values.iter().copied().filter(|v| v.is_finite()).collect()
 }
 
+/// Full structural analysis of a time series.
+///
+/// Computes DFA, ACR, Hurst exponent, kurtosis, and classifies law quality.
+/// Automatically filters NaN/Inf and handles constant signals.
+///
+/// ```
+/// use struktura::{analyze, LawQuality};
+/// let data: Vec<f64> = (0..256).map(|i| (i as f64 * 0.07).sin() * 3.0).collect();
+/// let law = analyze(&data);
+/// assert!(law.n == 256);
+/// assert!(law.quality != LawQuality::Insufficient);
+/// ```
 #[must_use]
 pub fn analyze(values: &[f64]) -> StructuralLaw {
     let values = &sanitize(values);
@@ -362,6 +424,17 @@ impl fmt::Display for ShuffleProof {
     }
 }
 
+/// Compare current DFA alpha against a known healthy baseline.
+///
+/// Returns a [`HealthVerdict`] based on how far alpha shifted from baseline.
+///
+/// ```
+/// use struktura::{analyze, health_check, HealthVerdict};
+/// let data: Vec<f64> = (0..256).map(|i| (i as f64 * 0.07).sin()).collect();
+/// let law = analyze(&data);
+/// let verdict = health_check(&law, 0.5);
+/// // verdict is one of: Healthy, Watch, Warning, Critical
+/// ```
 #[must_use]
 pub fn health_check(current: &StructuralLaw, baseline_alpha: f64) -> HealthVerdict {
     HealthVerdict::from_shift(current.dfa.alpha - baseline_alpha)
