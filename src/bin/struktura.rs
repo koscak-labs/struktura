@@ -29,12 +29,19 @@ fn read_stdin() -> Vec<f64> {
 }
 
 fn parse_values(content: &str) -> Vec<f64> {
+    parse_values_col(content, None)
+}
+
+fn parse_values_col(content: &str, column: Option<usize>) -> Vec<f64> {
     content
         .lines()
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
         .filter_map(|l| {
-            let s = if let Some(pos) = l.rfind(',') {
-                &l[pos + 1..]
+            let parts: Vec<&str> = l.split(',').collect();
+            let s = if let Some(col) = column {
+                parts.get(col).copied().unwrap_or("")
+            } else if parts.len() > 1 {
+                parts.last().copied().unwrap_or("")
             } else {
                 l
             };
@@ -192,12 +199,13 @@ fn cmd_check(args: &[String]) {
     let csv_mode = args.iter().any(|a| a == "--csv");
     for i in 0..args.len() {
         if args[i] == "--baseline" && i + 1 < args.len() {
+            baseline = args[i + 1].parse().ok();
+        }
         if args[i] == "--threshold" && i + 1 < args.len() {
             threshold = args[i + 1].parse().ok();
         }
-            baseline = args[i + 1].parse().ok();
-        }
     }
+    let _ = threshold;
 
     if csv_mode {
         let shift_s = baseline.map(|b| format!("{:.4}", law.dfa.alpha - b)).unwrap_or_else(|| "".to_string());
@@ -254,12 +262,13 @@ fn cmd_check_multi(files: &[&str], args: &[String]) {
     let mut threshold: Option<f64> = None;
     for i in 0..args.len() {
         if args[i] == "--baseline" && i + 1 < args.len() {
+            baseline = args[i + 1].parse().ok();
+        }
         if args[i] == "--threshold" && i + 1 < args.len() {
             threshold = args[i + 1].parse().ok();
         }
-            baseline = args[i + 1].parse().ok();
-        }
     }
+    let _ = threshold;
 
     println!();
     println!("  \x1b[1mSTRUKTURA\x1b[0m — batch analysis ({} files)", files.len());
