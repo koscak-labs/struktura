@@ -524,5 +524,13 @@ fn cmd_codegen(args: &[String]) {
         }
     }
 
-    print!("{}", struktura::codegen::generate_c_monitor(window, threshold));
+    if args.iter().any(|a| a == "--fprime") {
+        let name = args.iter().position(|a| a == "--name")
+            .and_then(|i| args.get(i + 1))
+            .map(|s| s.as_str())
+            .unwrap_or("DfaHealthMonitor");
+        print!("{}", struktura::codegen::generate_fprime_component(name, window));
+    } else {
+        print!("{}", struktura::codegen::generate_c_monitor(window, threshold));
+    }
 }
