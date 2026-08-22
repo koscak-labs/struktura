@@ -1,6 +1,6 @@
 [package]
 name = "struktura"
-version = "1.0.1"
+version = "1.1.0"
 edition = "2021"
 rust-version = "1.70"
 description = "Predict failure before it happens. Universal anomaly detection via DFA scaling analysis — spacecraft, bearings, biomedical signals. Zero dependencies."
@@ -15,6 +15,9 @@ readme = "README.md"
 [features]
 default = []
 serde = ["dep:serde"]
+
+[lib]
+crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"], optional = true }
