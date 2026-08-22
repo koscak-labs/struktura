@@ -5,6 +5,7 @@ edition = "2021"
 description = "Predict failure before it happens. Universal anomaly detection via DFA scaling analysis — bearings, heartbeats, spacecraft, drones, DNA. Zero dependencies."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/koscak-labs/struktura"
+documentation = "https://docs.rs/struktura"
 homepage = "https://koscak-labs.github.io/struktura"
 keywords = ["anomaly-detection", "dfa", "time-series", "predictive-maintenance", "fractal"]
 categories = ["science", "algorithms"]
