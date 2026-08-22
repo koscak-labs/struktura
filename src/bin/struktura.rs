@@ -7,6 +7,10 @@ const NORMAL_SAMPLES: &str = include_str!("../../data/normal_sample.csv");
 const FAULT_SAMPLES: &str = include_str!("../../data/fault_sample.csv");
 
 fn read_csv(path: &str) -> Vec<f64> {
+    if !std::path::Path::new(path).exists() {
+        eprintln!("Error: file not found: {}", path);
+        process::exit(1);
+    }
     let content = fs::read_to_string(path).unwrap_or_else(|e| {
         eprintln!("Error reading {}: {}", path, e);
         process::exit(1);
