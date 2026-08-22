@@ -3,132 +3,129 @@
 [![Crates.io](https://img.shields.io/crates/v/struktura.svg)](https://crates.io/crates/struktura)
 [![CI](https://github.com/koscak-labs/struktura/actions/workflows/ci.yml/badge.svg)](https://github.com/koscak-labs/struktura/actions/workflows/ci.yml)
 [![License](https://img.shields.io/crates/l/struktura.svg)](https://github.com/koscak-labs/struktura)
+[![docs.rs](https://docs.rs/struktura/badge.svg)](https://docs.rs/struktura)
 
 **Predict failure before it happens.**
+
+The only Rust-native DFA (Detrended Fluctuation Analysis) implementation. No hyperparameters, no training, MIT/Apache licensed. Currently proposed into NASA fprime, ArduPilot, PX4, and cFS.
+
+```
+cargo install struktura
+struktura demo
+```
+
+```
+  STRUKTURA DEMO
+  Bearing fault detection from CWRU vibration data
+  ================================================
+
+  ##############..............  Normal bearing       alpha=0.738  [EXACT]
+
+  ####..........................  Inner race FAULT   alpha=0.217  [STRONG]
+                                  shift=-0.522  CRITICAL
+
+  The bearing's vibration structure changed BEFORE
+  any amplitude threshold would have fired.
+```
+
+## Try it now
+
+```
+cargo install struktura
+struktura demo                              # builtin bearing fault demo
+struktura check your_data.csv               # analyze any signal
+struktura check data.csv --baseline 0.39    # compare against baseline
+struktura compare normal.csv faulted.csv    # side-by-side comparison
+```
+
+## As a library
 
 ```rust
 use struktura::{analyze, health_check, HealthVerdict};
 
 let law = analyze(&vibration_data);
-let verdict = health_check(&law, baseline_alpha);
+let verdict = health_check(&law, 0.389);
+// verdict == HealthVerdict::Critical
+```
 
-match verdict {
-    HealthVerdict::Critical => eprintln!("STRUCTURAL SHIFT DETECTED"),
-    _ => {}
+Real-time monitoring:
+
+```rust
+use struktura::{BaselineTracker, HealthVerdict};
+
+let mut tracker = BaselineTracker::new(256, 1000);
+
+for sample in sensor_stream {
+    if let Some(verdict) = tracker.push(sample) {
+        if verdict == HealthVerdict::Critical {
+            trigger_alert();
+        }
+    }
 }
 ```
 
-This crate detected a bearing fault from a CSV file.
-No training data. No domain knowledge. No dependencies.
+## Bearing fault detection (CWRU data, builtin)
 
-```
-cargo add struktura
-```
+| Condition | DFA alpha | Shift | Verdict |
+|-----------|-----------|-------|---------|
+| Normal | 0.738 | -- | Healthy |
+| Inner race fault | 0.217 | -0.522 | **CRITICAL** |
 
-## Proven across 5 domains
+Reproduced by `struktura demo` using real CWRU Bearing Data Center samples bundled in the crate.
 
-Same algorithm. Zero configuration. Every number below is from an actual run.
+## Cross-domain proof
 
-| Domain | Signal | N | DFA alpha | R-squared |
-|--------|--------|---|-----------|-----------|
-| Spacecraft | Queue depth telemetry | 500 | 0.593 | 0.789 |
-| Bearings | CWRU 12kHz vibration | 243,938 | 0.389 | 0.872 |
-| Genome | Human chr1 GC% | 8,000 | 0.909 | 0.991 |
-| Cardiac | RR intervals (HRV) | 2,048 | 0.695 | 0.985 |
-| Drones | ArduPilot IMU (proposed) | -- | -- | -- |
+Same algorithm. Zero configuration. Every number from an actual run.
 
-## It catches what monitors miss
+| Domain | Signal | DFA alpha | R2 |
+|--------|--------|-----------|-----|
+| Bearings | CWRU 12kHz vibration | 0.389 | 0.872 |
+| Spacecraft | Queue depth telemetry | 0.593 | 0.789 |
+| Genome | Human chr1 GC% (8K windows) | 0.909 | 0.991 |
+| Cardiac | RR intervals (HRV) | 0.695 | 0.985 |
 
-Bearing fault detection on CWRU data (12kHz, Case Western Reserve University):
-
-| Condition | DFA alpha | Shift from normal | Verdict |
-|-----------|-----------|-------------------|---------|
-| Normal | 0.389 | -- | Healthy |
-| Inner race fault | 0.146 | -0.243 | **Critical** |
-| Outer race fault | 0.247 | -0.142 | **Critical** |
-| Ball fault | 0.275 | -0.114 | **Warning** |
-
-All three fault types detected. No thresholds. No training. Just math.
-
-## Genome: R-squared > 0.99 on every chromosome
-
-| Chromosome | DFA alpha | R-squared |
-|-----------|-----------|-----------|
-| chr1 | 0.909 | 0.991 |
-| chr2 | 0.699 | 0.991 |
-| chr3 | 0.659 | 0.998 |
-| chr4 | 0.894 | 0.997 |
-| chr5 | 0.824 | 0.994 |
-| chr6 | 0.822 | 0.998 |
-| chr7 | 0.862 | 0.997 |
-| chr8 | 0.816 | 0.995 |
-
-8/8 chromosomes at R-squared > 0.99. The fractal structure of DNA is real and measurable.
+Genome: 8/8 chromosomes at R2 > 0.99.
 
 ## How it works
 
-Detrended Fluctuation Analysis (DFA) measures long-range correlation in any time series:
+DFA (Peng et al., Physical Review E, 1994 -- 3000+ citations) measures long-range correlation:
 
-1. Compute the cumulative profile of the signal
-2. Divide into boxes, fit a linear trend in each
-3. Measure the residual fluctuation at each box size
-4. The scaling exponent alpha tells you the structure
+1. Compute the cumulative profile
+2. Divide into boxes, detrend each
+3. Measure residual fluctuation vs box size
+4. Slope in log-log space = alpha
 
-- alpha near 0.5 = random noise (no structure)
-- 0.5 < alpha < 1.0 = healthy complex system
-- alpha shifts from baseline = something is changing
+- alpha ~ 0.5: random noise
+- 0.5 < alpha < 1.0: healthy structure
+- alpha shifts from baseline: degradation
 
-When alpha moves, something is degrading. Before amplitude thresholds fire. Before frequency analysis catches it. The structure changes first.
+The crate reports R2 alongside every alpha. If R2 < 0.3, quality = `Abstain`. It never bluffs.
 
-## API
+## Alternatives
 
-```rust
-use struktura::{dfa, acr, analyze, health_check};
-use struktura::{DfaResult, StructuralLaw, LawQuality, HealthVerdict};
+| Crate | DFA | License | Dependencies | Flight-software proposals |
+|-------|-----|---------|-------------|--------------------------|
+| **struktura** | native | MIT/Apache | **0** | 4 (fprime, ArduPilot, PX4, cFS) |
+| anomaly_detection | no | GPL-3.0 | many | 0 |
+| extended-isolation-forest | no | MIT | many | 0 |
 
-// Quick DFA on raw data
-let result: DfaResult = dfa(&values);
-println!("alpha={:.3}, R2={:.3}", result.alpha, result.r_squared);
+## Proposed into
 
-// Full structural analysis
-let law: StructuralLaw = analyze(&values);
-// law.dfa, law.acr, law.hurst, law.kurtosis, law.quality, ...
-
-// Health check against a known baseline
-let verdict = health_check(&law, 0.389); // baseline alpha
-// HealthVerdict::Healthy | Watch | Warning | Critical
-```
-
-## Exact-or-abstain
-
-Struktura reports the R-squared alongside every alpha. If R-squared is below 0.7,
-the quality is `LawQuality::Abstain` — the signal does not have enough structure
-for a reliable diagnosis. The crate never bluffs.
-
-## Reproduce the results
-
-```
-cargo run --example benchmark
-```
-
-Downloads CWRU bearing data and runs the full cross-domain analysis.
+- [nasa/fprime #5772](https://github.com/nasa/fprime/issues/5772) -- onboard TelemetryOracle component
+- [ArduPilot #34144](https://github.com/ArduPilot/ardupilot/issues/34144) -- AP_StructuralHealth library
+- [PX4 #28341](https://github.com/PX4/PX4-Autopilot/issues/28341) -- structural_health module
+- [nasa/cFS #1096](https://github.com/nasa/cFS/issues/1096) -- SH (Structural Health) app
 
 ## References
 
 1. C.-K. Peng et al., "Mosaic organization of DNA nucleotide sequences," Physical Review E 49(2), 1994.
 2. C.-K. Peng et al., "Quantification of scaling exponents," Chaos 5(1), 1995.
-3. Case Western Reserve University Bearing Data Center.
-
-## Used in
-
-- [nasa/fprime #5772](https://github.com/nasa/fprime/issues/5772) -- proposed onboard telemetry health monitor
-- [ArduPilot/ardupilot #34142](https://github.com/ArduPilot/ardupilot/pull/34142) -- DDS timestamp fix (same contributor)
-- [tokio-rs/tokio #8377](https://github.com/tokio-rs/tokio/pull/8377) -- io_uring fix (same contributor)
+3. CWRU Bearing Data Center: https://engineering.case.edu/bearingdatacenter
 
 ## Links
 
-- [Instagram](https://instagram.com/philphauler)
-- [X / Twitter](https://x.com/philphauler)
+- [Instagram](https://instagram.com/philphauler) | [X / Twitter](https://x.com/philphauler)
+- [Docs](https://koscak-labs.github.io/struktura) | [API](https://docs.rs/struktura)
 
 ## License
 
