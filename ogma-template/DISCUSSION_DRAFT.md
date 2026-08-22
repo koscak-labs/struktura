@@ -8,15 +8,16 @@ Following up from our chats on [fprime#5772](https://github.com/nasa/fprime/issu
 
 ### 1. `struktura generate` — ogma-compatible app generator (no Haskell)
 
-Struktura now reads ogma's `db.json` variable database format and generates complete cFS or F Prime monitoring applications:
+Struktura now reads ogma's `db.json` variable database format and generates complete monitoring applications for all 3 ogma backends:
 
 ```sh
 cargo install struktura
-struktura generate --cfs --db channels.json -o dfa_monitor/
-struktura generate --fprime --db channels.json -o dfa_component/
+struktura generate --cfs    --db channels.json -o dfa_cfs_app/
+struktura generate --fprime --db channels.json -o dfa_fprime_component/
+struktura generate --ros    --db channels.json -o dfa_ros_node/
 ```
 
-One command, 10-second install, works on Windows/Mac/Linux. The generated code follows the same cFS app structure as ogma's output — `AppMain`, `Init`, `ProcessPkt`, SB subscriptions, EVS events — but does DFA structural health monitoring instead of Copilot temporal logic.
+One command, 10-second install, works on Windows/Mac/Linux. Each backend generates code that follows the same structure as ogma's output — cFS gets `AppMain`/`Init`/`ProcessPkt` with SB subscriptions and EVS events, F Prime gets an FPP model with async ports and typed events, ROS 2 gets an `rclcpp` node with topic subscriptions and a shift publisher.
 
 The idea is complementary: ogma generates monitors for temporal properties (Copilot specs), struktura generates monitors for structural health (DFA scaling analysis). Same `db.json`, different monitoring paradigm, both producing ready-to-compile flight software.
 
