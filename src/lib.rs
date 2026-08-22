@@ -510,3 +510,15 @@ impl fmt::Display for StructuralLaw {
         write!(f, "alpha={:.3} R2={:.4} H={:.3} quality={}", self.dfa.alpha, self.dfa.r_squared, self.hurst, self.quality)
     }
 }
+
+impl Default for SlidingWindow {
+    fn default() -> Self {
+        SlidingWindow::new(256)
+    }
+}
+
+impl Default for BaselineTracker {
+    fn default() -> Self {
+        BaselineTracker::new(256, 1000)
+    }
+}
