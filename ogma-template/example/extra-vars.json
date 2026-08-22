@@ -1,0 +1,9 @@
+{ "impl_extra_header":  "#include \"sensor_defs.h\""
+, "CFS_CMD_MID":        "0x18A0"
+, "CFS_SEND_HK_MID":    "0x18A1"
+, "CFS_HK_TLM_MID":     "0x08A1"
+, "DFA_WINDOW_SIZE":     "256"
+, "DFA_THRESHOLD":       "0.08"
+, "DFA_LEARN_WINDOWS":   "10"
+, "DFA_R2_MIN":          "0.7"
+}

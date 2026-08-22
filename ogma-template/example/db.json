@@ -1,0 +1,67 @@
+{ "inputs":
+     [ { "name": "accel_x"
+       , "type": "double"
+       , "active": true
+       , "connections":
+           [ { "scope": "cfs"
+             , "topic": "SENSOR_ACCEL_MID"
+             , "field": "x"
+             }
+           ]
+       }
+     , { "name": "gyro_z"
+       , "type": "double"
+       , "active": true
+       , "connections":
+           [ { "scope": "cfs"
+             , "topic": "SENSOR_GYRO_MID"
+             , "field": "z"
+             }
+           ]
+       }
+     , { "name": "batt_voltage"
+       , "type": "double"
+       , "active": true
+       , "connections":
+           [ { "scope": "cfs"
+             , "topic": "BATT_TLM_MID"
+             , "field": "voltage"
+             }
+           ]
+       }
+     ]
+, "topics":
+     [ { "scope": "cfs"
+       , "topic": "SENSOR_ACCEL_MID"
+       , "type":  "sensor_accel_msg_t"
+       }
+     , { "scope": "cfs"
+       , "topic": "SENSOR_GYRO_MID"
+       , "type":  "sensor_gyro_msg_t"
+       }
+     , { "scope": "cfs"
+       , "topic": "BATT_TLM_MID"
+       , "type":  "batt_tlm_msg_t"
+       }
+     ]
+, "types":
+     [ { "fromScope": "cfs"
+       , "fromType":  "sensor_accel_msg_t"
+       , "fromField": "x"
+       , "toScope":   "C"
+       , "toType":    "double"
+       }
+     , { "fromScope": "cfs"
+       , "fromType":  "sensor_gyro_msg_t"
+       , "fromField": "z"
+       , "toScope":   "C"
+       , "toType":    "double"
+       }
+     , { "fromScope": "cfs"
+       , "fromType":  "batt_tlm_msg_t"
+       , "fromField": "voltage"
+       , "toScope":   "C"
+       , "toType":    "double"
+       }
+     ]
+}
