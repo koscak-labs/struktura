@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: "If you use Struktura in your research, please cite it."
+title: "Struktura: Universal Anomaly Detection via Detrended Fluctuation Analysis"
+authors:
+  - family-names: "Koščák"
+    given-names: "Filip"
+    alias: "philphauler"
+type: software
+license: "MIT OR Apache-2.0"
+repository-code: "https://github.com/koscak-labs/struktura"
+url: "https://crates.io/crates/struktura"
+keywords:
+  - detrended-fluctuation-analysis
+  - anomaly-detection
+  - predictive-maintenance
+  - structural-health
+  - rust
+  - dfa
+abstract: >-
+  Struktura detects structural shifts in any time-series signal
+  using Detrended Fluctuation Analysis (DFA). Bearings, heartbeats,
+  spacecraft, DNA. Zero deps, no_std, no hyperparameters.
+version: "0.3.0"
+date-released: "2026-08-22"
