@@ -1,6 +1,6 @@
 [package]
 name = "struktura"
-version = "0.3.3"
+version = "0.4.0"
 edition = "2021"
 description = "Predict failure before it happens. Universal anomaly detection via DFA scaling analysis — bearings, heartbeats, spacecraft, drones, DNA. Zero dependencies."
 license = "MIT OR Apache-2.0"
@@ -11,7 +11,12 @@ keywords = ["anomaly-detection", "dfa", "time-series", "health-monitor", "fracta
 categories = ["science", "algorithms"]
 readme = "README.md"
 
+[features]
+default = []
+serde = ["dep:serde"]
+
 [dependencies]
+serde = { version = "1", features = ["derive"], optional = true }
 
 [dev-dependencies]
 

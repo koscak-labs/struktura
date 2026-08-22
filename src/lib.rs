@@ -19,6 +19,7 @@ use std::fmt;
 
 /// Result of a DFA or ACR computation.
 #[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DfaResult {
     /// Scaling exponent (slope in log-log space).
     pub alpha: f64,
@@ -34,6 +35,7 @@ impl fmt::Display for DfaResult {
 
 /// How confident the analysis is in the derived exponent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum LawQuality {
     Exact,
     Strong,
@@ -44,6 +46,7 @@ pub enum LawQuality {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct StructuralLaw {
     pub hurst: f64,
     pub dfa: DfaResult,
@@ -58,6 +61,7 @@ pub struct StructuralLaw {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum HealthVerdict {
     Healthy,
     Watch,
