@@ -163,9 +163,20 @@ fn cmd_demo() {
 
 fn cmd_check(args: &[String]) {
     if args.len() < 3 {
-        eprintln!("Usage: struktura check <file.csv> [--baseline N]");
+        eprintln!("Usage: struktura check <file.csv> [file2.csv ...] [--baseline N]");
         process::exit(1);
     }
+
+    let files: Vec<&str> = args[2..].iter()
+        .map(|s| s.as_str())
+        .take_while(|s| !s.starts_with("--"))
+        .collect();
+
+    if files.len() > 1 {
+        cmd_check_multi(&files, args);
+        return;
+    }
+
     let path = &args[2];
     let data = if path == "-" { read_stdin() } else { read_csv(path) };
     if data.len() < 20 {
@@ -230,6 +241,41 @@ fn cmd_check(args: &[String]) {
         let (color, label) = verdict_color(verdict);
         println!();
         println!("  >>> {}{}\x1b[0m", color, label);
+    }
+    println!();
+}
+
+fn cmd_check_multi(files: &[&str], args: &[String]) {
+    let mut baseline: Option<f64> = None;
+    for i in 0..args.len() {
+        if args[i] == "--baseline" && i + 1 < args.len() {
+            baseline = args[i + 1].parse().ok();
+        }
+    }
+
+    println!();
+    println!("  \x1b[1mSTRUKTURA\x1b[0m — batch analysis ({} files)", files.len());
+    println!("  ================================================");
+    println!();
+    println!("  | {:<30} | {:>6} | {:>7} | {:>6} | {:>8} | {:>8} |", "File", "N", "Alpha", "R2", "Quality", "Verdict");
+    println!("  |{:-<32}|{:-<8}|{:-<9}|{:-<8}|{:-<10}|{:-<10}|", "", "", "", "", "", "");
+
+    for &path in files {
+        let data = read_csv(path);
+        if data.len() < 20 {
+            println!("  | {:<30} | {:>6} | {:>7} | {:>6} | {:>8} | {:>8} |",
+                path, data.len(), "--", "--", "TOO FEW", "--");
+            continue;
+        }
+        let law = analyze(&data);
+        let verdict_s = baseline.map(|b| {
+            let (_, l) = verdict_color(health_check(&law, b));
+            l.to_string()
+        }).unwrap_or_else(|| "--".to_string());
+        let short_path: &str = path.rsplit('/').next().unwrap_or(path);
+        let short_path: &str = short_path.rsplit('\\').next().unwrap_or(short_path);
+        println!("  | {:<30} | {:>6} | {:>7.3} | {:>6.4} | {:>8} | {:>8} |",
+            short_path, law.n, law.dfa.alpha, law.dfa.r_squared, quality_str(law.quality), verdict_s);
     }
     println!();
 }
