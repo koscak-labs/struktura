@@ -178,7 +178,7 @@ pub fn generate_cfs_app(name: &str, window_size: usize) -> String {
     s.push_str("#include \"cfe.h\"\n");
     s.push_str("#include \"struktura.h\"\n\n");
     s.push_str(&format!("#define {}_WINDOW_SIZE {}\n\n", name.to_uppercase(), window_size));
-    s.push_str(&format!("typedef struct {{\n"));
+    s.push_str("typedef struct {\n");
     s.push_str(&format!("    double buffer[{}_WINDOW_SIZE];\n", name.to_uppercase()));
     s.push_str("    uint32 pos;\n");
     s.push_str("    uint32 filled;\n");
@@ -188,7 +188,7 @@ pub fn generate_cfs_app(name: &str, window_size: usize) -> String {
     s.push_str(&format!("static {}_Data_t {}_Data;\n\n", name, name));
     s.push_str(&format!("void {}_Init(void) {{\n", name));
     s.push_str(&format!("    memset(&{}_Data, 0, sizeof({}_Data));\n", name, name));
-    s.push_str(&format!("    CFE_EVS_SendEvent(1, CFE_EVS_EventType_INFORMATION,\n"));
+    s.push_str("    CFE_EVS_SendEvent(1, CFE_EVS_EventType_INFORMATION,\n");
     s.push_str(&format!("        \"{} DFA health monitor initialized (window={})\");\n", name, window_size));
     s.push_str("}\n\n");
     s.push_str(&format!("void {}_ProcessSample(double value) {{\n", name));
@@ -210,6 +210,6 @@ pub fn generate_cfs_app(name: &str, window_size: usize) -> String {
     s.push_str(&format!("            \"{} structural shift: alpha=%.3f baseline=%.3f verdict=%d\",\n", name));
     s.push_str(&format!("            r.alpha, {}_Data.baseline, verdict);\n", name));
     s.push_str("    }\n}\n\n");
-    s.push_str(&format!("// See: https://github.com/koscak-labs/struktura\n"));
+    s.push_str("// See: https://github.com/koscak-labs/struktura\n");
     s
 }

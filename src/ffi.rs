@@ -1,6 +1,7 @@
 use crate::{dfa, analyze, health_check, DfaResult, StructuralLaw, HealthVerdict, LawQuality};
 use std::slice;
 
+/// C-compatible DFA result.
 #[repr(C)]
 pub struct CStructuralLaw {
     pub dfa_alpha: f64,
@@ -15,12 +16,18 @@ pub struct CStructuralLaw {
     pub quality: u8,
 }
 
+/// C-compatible DFA scaling result.
 #[repr(C)]
 pub struct CDfaResult {
     pub alpha: f64,
     pub r_squared: f64,
 }
 
+/// Compute DFA scaling exponent from a C array.
+///
+/// # Safety
+///
+/// `data` must point to a valid array of at least `len` f64 values.
 #[no_mangle]
 pub unsafe extern "C" fn struktura_dfa(data: *const f64, len: u32) -> CDfaResult {
     if data.is_null() || len < 64 {
@@ -31,6 +38,11 @@ pub unsafe extern "C" fn struktura_dfa(data: *const f64, len: u32) -> CDfaResult
     CDfaResult { alpha: result.alpha, r_squared: result.r_squared }
 }
 
+/// Full structural analysis from a C array.
+///
+/// # Safety
+///
+/// `data` must point to a valid array of at least `len` f64 values.
 #[no_mangle]
 pub unsafe extern "C" fn struktura_analyze(data: *const f64, len: u32) -> CStructuralLaw {
     if data.is_null() || len < 20 {
@@ -49,7 +61,6 @@ pub unsafe extern "C" fn struktura_analyze(data: *const f64, len: u32) -> CStruc
         LawQuality::Approx => 3,
         LawQuality::Abstain => 4,
         LawQuality::Insufficient => 5,
-        _ => 6,
     };
     CStructuralLaw {
         dfa_alpha: law.dfa.alpha, dfa_r2: law.dfa.r_squared,
@@ -59,6 +70,11 @@ pub unsafe extern "C" fn struktura_analyze(data: *const f64, len: u32) -> CStruc
     }
 }
 
+/// Compare current DFA alpha against baseline. Returns verdict (0-3).
+///
+/// # Safety
+///
+/// No pointer arguments. Safe to call from any context.
 #[no_mangle]
 pub unsafe extern "C" fn struktura_health_check(current_alpha: f64, baseline_alpha: f64) -> u8 {
     let law = StructuralLaw {
@@ -72,6 +88,5 @@ pub unsafe extern "C" fn struktura_health_check(current_alpha: f64, baseline_alp
         HealthVerdict::Watch => 1,
         HealthVerdict::Warning => 2,
         HealthVerdict::Critical => 3,
-        _ => 4,
     }
 }
