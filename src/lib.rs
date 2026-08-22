@@ -386,4 +386,54 @@ mod tests {
         let result = acr(&data);
         assert!(result.alpha < -0.05, "brownian ACR exponent should be negative, got {}", result.alpha);
     }
+
+    #[test]
+    fn sliding_window_detects_after_fill() {
+        let mut sw = SlidingWindow::new(256);
+        assert!(!sw.is_ready());
+        let noise = white_noise(256, 77);
+        for v in &noise { sw.push(*v); }
+        assert!(sw.is_ready());
+        let law = sw.analyze();
+        assert!(law.n == 256);
+        assert!(law.dfa.alpha > 0.3);
+    }
+
+    #[test]
+    fn baseline_tracker_learns_then_verdicts() {
+        let mut bt = BaselineTracker::new(256, 500);
+        let normal = brownian(600, 88);
+        for (i, v) in normal.iter().enumerate() {
+            let result = bt.push(*v);
+            if i < 500 {
+                assert!(result.is_none(), "should be learning at sample {}", i);
+            }
+        }
+        assert!(!bt.is_learning());
+    }
+
+    #[test]
+    fn sliding_window_before_fill_still_works() {
+        let mut sw = SlidingWindow::new(512);
+        for i in 0..100 {
+            sw.push(i as f64 * 0.1);
+        }
+        assert!(!sw.is_ready());
+        let law = sw.analyze();
+        assert!(law.n == 100);
+    }
+
+    #[test]
+    fn builtin_demo_data_detects_fault() {
+        let normal: Vec<f64> = include_str!("../data/normal_sample.csv")
+            .lines().filter_map(|l| l.trim().parse().ok()).collect();
+        let fault: Vec<f64> = include_str!("../data/fault_sample.csv")
+            .lines().filter_map(|l| l.trim().parse().ok()).collect();
+        let law_n = analyze(&normal);
+        let law_f = analyze(&fault);
+        let verdict = health_check(&law_f, law_n.dfa.alpha);
+        assert_eq!(verdict, HealthVerdict::Critical);
+        assert!(law_n.dfa.r_squared > 0.9);
+        assert!(law_f.dfa.r_squared > 0.9);
+    }
 }
