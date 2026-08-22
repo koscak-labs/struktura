@@ -604,8 +604,8 @@ fn cmd_generate(args: &[String]) {
     println!("  Channels: {}", channels.len());
     println!("  Window:   {}", window);
     println!("  Threshold: {:.3}", threshold);
-    if db_path.is_some() {
-        println!("  Source:   {} (ogma-compatible db.json)", db_path.unwrap());
+    if let Some(ref path) = db_path {
+        println!("  Source:   {} (ogma-compatible db.json)", path);
     }
 }
 
@@ -649,21 +649,19 @@ fn parse_db_json(path: &str) -> Vec<Channel> {
             if let Some(v) = extract_json_string(t) { cur_field = v; }
         }
 
-        if t == "}" || t == "}," {
-            if !cur_name.is_empty() && !cur_topic.is_empty() {
-                let clean_topic = cur_topic.trim_end_matches("_MID").to_string();
-                channels.push(Channel {
-                    name: cur_name.clone(),
-                    c_type: if cur_type.is_empty() { "double".into() } else { cur_type.clone() },
-                    topic: clean_topic.clone(),
-                    field: if cur_field.is_empty() { "payload".into() } else { cur_field.clone() },
-                    msg_type: format!("{}_msg_t", clean_topic.to_lowercase()),
-                });
-                cur_name.clear();
-                cur_type.clear();
-                cur_topic.clear();
-                cur_field.clear();
-            }
+        if (t == "}" || t == "},") && !cur_name.is_empty() && !cur_topic.is_empty() {
+            let clean_topic = cur_topic.trim_end_matches("_MID").to_string();
+            channels.push(Channel {
+                name: cur_name.clone(),
+                c_type: if cur_type.is_empty() { "double".into() } else { cur_type.clone() },
+                topic: clean_topic.clone(),
+                field: if cur_field.is_empty() { "payload".into() } else { cur_field.clone() },
+                msg_type: format!("{}_msg_t", clean_topic.to_lowercase()),
+            });
+            cur_name.clear();
+            cur_type.clear();
+            cur_topic.clear();
+            cur_field.clear();
         }
 
         if t.contains("\"topics\"") { in_inputs = false; }
@@ -803,7 +801,7 @@ fn generate_cfs_main(channels: &[Channel], window: usize, threshold: f64) -> Str
         s.push_str(&format!("    CFE_SB_Subscribe(CFE_SB_ValueToMsgId({}_MID), DFA_MONITOR_Pipe);\n", ch.topic.to_uppercase()));
         s.push_str(&format!("    memset(&dfa_ch_{}, 0, sizeof(dfa_ch_{}));\n", ch.name, ch.name));
     }
-    s.push_str(&format!("\n    CFE_EVS_SendEvent(DFA_MON_INIT_EID, CFE_EVS_EventType_INFORMATION,\n"));
+    s.push_str("\n    CFE_EVS_SendEvent(DFA_MON_INIT_EID, CFE_EVS_EventType_INFORMATION,\n");
     s.push_str(&format!("        \"DFA Monitor: {} channels, window={}, threshold={:.3}\");\n", channels.len(), window, threshold));
     s.push_str("    return CFE_SUCCESS;\n}\n\n");
 
@@ -899,11 +897,11 @@ fn generate_fprime_cpp(channels: &[Channel], window: usize, threshold: f64) -> S
     s.push_str("}\n\n");
     for ch in channels {
         s.push_str(&format!("void DfaMonitor::{}In_handler(NATIVE_INT_TYPE portNum, FwTlmBuffer& val) {{\n", ch.name));
-        s.push_str(&format!("    F64 v; val.deserialize(v);\n"));
+        s.push_str("    F64 v; val.deserialize(v);\n");
         s.push_str(&format!("    pushSample(m_ch_{}, v, \"{}\");\n", ch.name, ch.name));
         s.push_str("}\n\n");
     }
-    s.push_str(&format!("void DfaMonitor::pushSample(DfaChannel& ch, F64 value, const char* name) {{\n"));
+    s.push_str("void DfaMonitor::pushSample(DfaChannel& ch, F64 value, const char* name) {\n");
     s.push_str(&format!("    ch.buffer[ch.pos] = value;\n    ch.pos = (ch.pos + 1) % {};\n", window));
     s.push_str("    if (ch.pos == 0) ch.filled = true;\n    if (!ch.filled) return;\n");
     s.push_str("    ch.windowCount++;\n");
@@ -912,7 +910,7 @@ fn generate_fprime_cpp(channels: &[Channel], window: usize, threshold: f64) -> S
     s.push_str("        ch.baselineAlpha = r.alpha; ch.baselineSet = true;\n");
     s.push_str("        this->log_ACTIVITY_HI_BaselineEstablished(name, r.alpha, r.r_squared);\n");
     s.push_str("        return;\n    }\n    if (!ch.baselineSet || r.r_squared < 0.7) return;\n");
-    s.push_str(&format!("    F64 shift = (r.alpha > ch.baselineAlpha) ? r.alpha - ch.baselineAlpha : ch.baselineAlpha - r.alpha;\n"));
+    s.push_str("    F64 shift = (r.alpha > ch.baselineAlpha) ? r.alpha - ch.baselineAlpha : ch.baselineAlpha - r.alpha;\n");
     s.push_str(&format!("    if (shift >= {:.4}) {{\n", threshold));
     s.push_str("        this->log_WARNING_HI_StructuralShift(name, ch.baselineAlpha, r.alpha, r.alpha - ch.baselineAlpha);\n");
     s.push_str("    }\n    this->tlmWrite_DfaAlpha(r.alpha);\n    this->tlmWrite_DfaR2(r.r_squared);\n");
