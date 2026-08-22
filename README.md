@@ -11,6 +11,7 @@ The only Rust-native DFA (Detrended Fluctuation Analysis) implementation. No hyp
 
 ```
 cargo install struktura
+struktura self-test    # verifies all claims
 struktura demo
 ```
 
@@ -32,6 +33,7 @@ struktura demo
 
 ```
 cargo install struktura
+struktura self-test    # verifies all claims
 struktura demo                              # builtin bearing fault demo
 struktura check your_data.csv               # analyze any signal
 struktura check data.csv --baseline 0.39    # compare against baseline
