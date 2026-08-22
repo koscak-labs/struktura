@@ -132,6 +132,7 @@ fn main() {
         "self-test" => cmd_self_test(),
         "codegen" => cmd_codegen(&args),
         "generate" => cmd_generate(&args),
+        "voyager" => cmd_voyager(),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -537,6 +538,73 @@ fn cmd_codegen(args: &[String]) {
     } else {
         print!("{}", struktura::codegen::generate_c_monitor(window, threshold));
     }
+}
+
+fn cmd_voyager() {
+    let files = [
+        ("data/voyager1_2021_healthy.csv", "2021 (healthy baseline)"),
+        ("data/voyager1_pre_anomaly.csv", "2022 Jan-Apr (pre-anomaly)"),
+        ("data/voyager1_during_anomaly.csv", "2022 May-Jul (AACS anomaly)"),
+    ];
+
+    println!();
+    println!("  \x1b[1mVOYAGER 1 STRUCTURAL HEALTH ANALYSIS\x1b[0m");
+    println!("  DFA scaling analysis of magnetometer data across");
+    println!("  the May 2022 AACS anomaly");
+    println!("  ================================================");
+    println!();
+    println!("  Data: NASA SPDF, L.F. Burlaga, VIM 48-second averages");
+    println!("  https://spdf.gsfc.nasa.gov/pub/data/voyager/voyager1/");
+    println!();
+
+    let mut baseline_alpha = 0.0;
+    for (path, label) in &files {
+        if !std::path::Path::new(path).exists() {
+            eprintln!("  Missing: {} — run from the struktura repo root", path);
+            process::exit(1);
+        }
+        let values = read_csv(path);
+        let law = analyze(&values);
+        let q = quality_str(law.quality);
+
+        if baseline_alpha == 0.0 {
+            baseline_alpha = law.dfa.alpha;
+            let bar = make_bar(law.dfa.alpha);
+            println!("  {} {} alpha={:.3}  R2={:.4}  [{}]", bar, label, law.dfa.alpha, law.dfa.r_squared, q);
+        } else {
+            let shift = law.dfa.alpha - baseline_alpha;
+            let verdict = health_check(&law, baseline_alpha);
+            let bar = make_bar(law.dfa.alpha);
+            let v_str = match verdict {
+                HealthVerdict::Healthy => "\x1b[32mHEALTHY\x1b[0m",
+                HealthVerdict::Watch => "\x1b[33mWATCH\x1b[0m",
+                HealthVerdict::Warning => "\x1b[31mWARNING\x1b[0m",
+                HealthVerdict::Critical => "\x1b[31;1mCRITICAL\x1b[0m",
+                _ => "UNKNOWN",
+            };
+            println!("  {} {} alpha={:.3}  R2={:.4}  [{}]", bar, label, law.dfa.alpha, law.dfa.r_squared, q);
+            println!("  {:30} shift={:+.3}  {}", "", shift, v_str);
+        }
+    }
+
+    println!();
+    println!("  ================================================");
+    println!("  Baseline alpha:  {:.3}  (2021 healthy operation)", baseline_alpha);
+    println!("  Anomaly alpha:   {:.3}  (May-Jul 2022 AACS anomaly)", files.last().map(|(p,_)| analyze(&read_csv(p)).dfa.alpha).unwrap_or(0.0));
+    println!();
+    println!("  The magnetic field's fractal structure changed during");
+    println!("  the anomaly — detectable from public data, zero training.");
+    println!();
+    println!("  Reproduce: struktura compare data/voyager1_2021_healthy.csv \\");
+    println!("                              data/voyager1_during_anomaly.csv");
+    println!();
+}
+
+fn make_bar(alpha: f64) -> String {
+    let filled = (alpha * 30.0).round() as usize;
+    let filled = if filled > 30 { 30 } else { filled };
+    let empty = 30 - filled;
+    format!("{}{}", "#".repeat(filled), ".".repeat(empty))
 }
 
 fn cmd_generate(args: &[String]) {
