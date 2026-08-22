@@ -7,12 +7,13 @@
 
 **Predict failure before it happens.**
 
-The only Rust-native DFA (Detrended Fluctuation Analysis) implementation. No hyperparameters, no training, MIT/Apache licensed. Currently proposed into NASA fprime, ArduPilot, PX4, and cFS.
+Zero-dependency Rust DFA (Detrended Fluctuation Analysis). No training, no hyperparameters, MIT/Apache licensed. Generates complete [cFS](https://github.com/nasa/cFS), [F Prime](https://github.com/nasa/fprime), and [ROS 2](https://ros.org) monitoring apps — compatible with [nasa/ogma](https://github.com/nasa/ogma)'s `db.json` format.
 
 ```
 cargo install struktura
-struktura self-test    # verifies all claims
-struktura demo
+struktura demo         # bearing fault detection (CWRU data)
+struktura voyager      # Voyager 1 AACS anomaly (NASA SPDF data)
+struktura self-test    # 5-point validation suite
 ```
 
 ```
@@ -111,12 +112,34 @@ The crate reports R2 alongside every alpha. If R2 < 0.3, quality = `Abstain`. It
 | anomaly_detection | no | GPL-3.0 | many | 0 |
 | extended-isolation-forest | no | MIT | many | 0 |
 
+## Generate flight monitoring apps
+
+Compatible with [nasa/ogma](https://github.com/nasa/ogma)'s variable database format. No Haskell required.
+
+```
+struktura generate --cfs    --db channels.json -o dfa_cfs_app/
+struktura generate --fprime --db channels.json -o dfa_fprime_component/
+struktura generate --ros    --db channels.json -o dfa_ros_node/
+```
+
+See [ogma-template/](ogma-template/) for custom ogma templates, formal DFA properties, and a template preparation guide.
+
+## Voyager 1 AACS anomaly
+
+DFA detects structural change in Voyager 1's magnetometer during the May 2022 AACS anomaly — from public NASA SPDF data, zero training:
+
+| Period | DFA alpha | R² |
+|--------|-----------|-----|
+| 2021 (healthy) | 0.875 | 0.9999 |
+| 2022 May-Jul (AACS anomaly) | 0.827 | 0.9996 |
+
+Reproduce: `struktura voyager` (data bundled in repo)
+
 ## Proposed into
 
 - [nasa/fprime #5772](https://github.com/nasa/fprime/issues/5772) -- onboard TelemetryOracle component
-- [ArduPilot #34144](https://github.com/ArduPilot/ardupilot/issues/34144) -- AP_StructuralHealth library
-- [PX4 #28341](https://github.com/PX4/PX4-Autopilot/issues/28341) -- structural_health module
 - [nasa/cFS #1096](https://github.com/nasa/cFS/issues/1096) -- SH (Structural Health) app
+- [ArduPilot #34144](https://github.com/ArduPilot/ardupilot/issues/34144) -- AP_StructuralHealth library
 
 ## References
 
