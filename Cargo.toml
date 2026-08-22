@@ -1,6 +1,6 @@
 [package]
 name = "struktura"
-version = "0.8.1"
+version = "0.9.0"
 edition = "2021"
 rust-version = "1.70"
 description = "Predict failure before it happens. Universal anomaly detection via DFA scaling analysis — spacecraft, bearings, biomedical signals. Zero dependencies."

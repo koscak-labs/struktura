@@ -58,6 +58,7 @@ fn quality_str(q: LawQuality) -> &'static str {
         LawQuality::Approx => "APPROX",
         LawQuality::Abstain => "ABSTAIN",
         LawQuality::Insufficient => "INSUFFICIENT",
+        _ => "UNKNOWN",
     }
 }
 
@@ -67,6 +68,7 @@ fn verdict_color(v: HealthVerdict) -> (&'static str, &'static str) {
         HealthVerdict::Watch => ("\x1b[33m", "WATCH"),
         HealthVerdict::Warning => ("\x1b[33;1m", "WARNING"),
         HealthVerdict::Critical => ("\x1b[31;1m", "CRITICAL"),
+        _ => ("", "UNKNOWN"),
     }
 }
 
@@ -127,6 +129,7 @@ fn main() {
         "bench" => cmd_bench(),
         "report" => cmd_report(&args),
         "validate" => cmd_validate(&args),
+        "self-test" => cmd_self_test(),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -434,5 +437,75 @@ fn cmd_validate(args: &[String]) {
         println!("WARN: {} values (DFA needs >= 64, ACR works with >= 20)", data.len());
     } else {
         println!("OK: {} numeric values, ready for analysis", data.len());
+    }
+}
+
+fn cmd_self_test() {
+    println!("  STRUKTURA SELF-TEST v{}", env!("CARGO_PKG_VERSION"));
+    println!("  ========================================");
+    let mut pass = 0;
+    let mut fail = 0;
+
+    // Test 1: Demo data detects fault
+    let normal = parse_values(NORMAL_SAMPLES);
+    let fault = parse_values(FAULT_SAMPLES);
+    let law_n = analyze(&normal);
+    let law_f = analyze(&fault);
+    let verdict = health_check(&law_f, law_n.dfa.alpha);
+    if verdict == HealthVerdict::Critical {
+        println!("  [PASS] Demo data: fault detected as CRITICAL");
+        pass += 1;
+    } else {
+        println!("  [FAIL] Demo data: expected CRITICAL, got {:?}", verdict);
+        fail += 1;
+    }
+
+    // Test 2: R2 > 0.9 on both signals
+    if law_n.dfa.r_squared > 0.9 && law_f.dfa.r_squared > 0.9 {
+        println!("  [PASS] Both signals R2 > 0.9");
+        pass += 1;
+    } else {
+        println!("  [FAIL] R2 too low: normal={:.3} fault={:.3}", law_n.dfa.r_squared, law_f.dfa.r_squared);
+        fail += 1;
+    }
+
+    // Test 3: Shuffle proof on normal bearing
+    let proof = prove_structure(&normal);
+    if proof.structure_confirmed {
+        println!("  [PASS] Shuffle proof: structure CONFIRMED (real={:.3} shuffled={:.3})", proof.real_alpha, proof.shuffled_alpha);
+        pass += 1;
+    } else {
+        println!("  [FAIL] Shuffle proof: INCONCLUSIVE");
+        fail += 1;
+    }
+
+    // Test 4: Constant signal returns Abstain
+    let constant: Vec<f64> = vec![5.0; 100];
+    let law_c = analyze(&constant);
+    if law_c.quality == LawQuality::Abstain {
+        println!("  [PASS] Constant signal: Abstain (no panic)");
+        pass += 1;
+    } else {
+        println!("  [FAIL] Constant signal: expected Abstain, got {:?}", law_c.quality);
+        fail += 1;
+    }
+
+    // Test 5: NaN handling
+    let mut with_nan = normal.clone();
+    with_nan[0] = f64::NAN;
+    with_nan[10] = f64::INFINITY;
+    let law_nan = analyze(&with_nan);
+    if law_nan.n > 0 && law_nan.quality != LawQuality::Insufficient {
+        println!("  [PASS] NaN/Inf filtered: {} samples analyzed", law_nan.n);
+        pass += 1;
+    } else {
+        println!("  [FAIL] NaN handling failed");
+        fail += 1;
+    }
+
+    println!("  ========================================");
+    println!("  {}/{} passed", pass, pass + fail);
+    if fail > 0 {
+        process::exit(1);
     }
 }
