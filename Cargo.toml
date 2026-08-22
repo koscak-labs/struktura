@@ -1,6 +1,6 @@
 [package]
 name = "struktura"
-version = "0.5.4"
+version = "0.5.5"
 edition = "2021"
 description = "Predict failure before it happens. Universal anomaly detection via DFA scaling analysis — spacecraft, bearings, biomedical signals. Zero dependencies."
 license = "MIT OR Apache-2.0"

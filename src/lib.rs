@@ -84,6 +84,7 @@ impl HealthVerdict {
     }
 }
 
+#[must_use]
 pub fn dfa(values: &[f64]) -> DfaResult {
     let n = values.len();
     if n < 64 {
@@ -146,6 +147,7 @@ pub fn dfa(values: &[f64]) -> DfaResult {
     linreg(&log_s[..pts], &log_f[..pts])
 }
 
+#[must_use]
 pub fn acr(values: &[f64]) -> DfaResult {
     let n = values.len();
     if n < 20 {
@@ -184,6 +186,7 @@ pub fn acr(values: &[f64]) -> DfaResult {
     linreg(&log_lag[..pts], &log_r[..pts])
 }
 
+#[must_use]
 pub fn analyze(values: &[f64]) -> StructuralLaw {
     let n = values.len();
     if n < 20 {
@@ -235,6 +238,7 @@ impl DfaResult {
     }
 }
 
+#[must_use]
 pub fn health_check(current: &StructuralLaw, baseline_alpha: f64) -> HealthVerdict {
     HealthVerdict::from_shift(current.dfa.alpha - baseline_alpha)
 }
@@ -292,7 +296,8 @@ impl SlidingWindow {
         self.filled
     }
 
-    pub fn analyze(&self) -> StructuralLaw {
+    #[must_use]
+pub fn analyze(&self) -> StructuralLaw {
         if !self.filled {
             return analyze(&self.buffer[..self.pos]);
         }
