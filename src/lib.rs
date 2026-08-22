@@ -289,6 +289,71 @@ pub fn prove_structure(values: &[f64]) -> ShuffleProof {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct BootstrapCI {
+    pub alpha: f64,
+    pub ci_low: f64,
+    pub ci_high: f64,
+    pub n_resamples: usize,
+}
+
+pub fn bootstrap_alpha(values: &[f64], n_resamples: usize) -> BootstrapCI {
+    let n = values.len();
+    let base = dfa(values);
+    let mut alphas = Vec::with_capacity(n_resamples);
+    for r in 0..n_resamples {
+        let mut state = (r as u64).wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let resampled: Vec<f64> = (0..n).map(|_| {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let idx = (state >> 33) as usize % n;
+            values[idx]
+        }).collect();
+        let result = dfa(&resampled);
+        if result.r_squared > 0.3 {
+            alphas.push(result.alpha);
+        }
+    }
+    alphas.sort_by(|a, b| a.partial_cmp(b).unwrap_or(core::cmp::Ordering::Equal));
+    let lo = if alphas.len() > 4 { alphas[alphas.len() / 40] } else { base.alpha };
+    let hi = if alphas.len() > 4 { alphas[alphas.len() * 39 / 40] } else { base.alpha };
+    BootstrapCI { alpha: base.alpha, ci_low: lo, ci_high: hi, n_resamples }
+}
+
+impl fmt::Display for BootstrapCI {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:.3} [{:.3}, {:.3}] (n={})", self.alpha, self.ci_low, self.ci_high, self.n_resamples)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SplitHalfResult {
+    pub first_half_alpha: f64,
+    pub second_half_alpha: f64,
+    pub difference: f64,
+    pub consistent: bool,
+}
+
+pub fn split_half_validate(values: &[f64]) -> SplitHalfResult {
+    let mid = values.len() / 2;
+    let a = dfa(&values[..mid]);
+    let b = dfa(&values[mid..]);
+    let diff = (a.alpha - b.alpha).abs();
+    SplitHalfResult {
+        first_half_alpha: a.alpha,
+        second_half_alpha: b.alpha,
+        difference: diff,
+        consistent: diff < 0.1,
+    }
+}
+
+impl fmt::Display for SplitHalfResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "half1={:.3} half2={:.3} delta={:.3} {}",
+            self.first_half_alpha, self.second_half_alpha, self.difference,
+            if self.consistent { "CONSISTENT" } else { "INCONSISTENT" })
+    }
+}
+
 impl fmt::Display for ShuffleProof {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "real={:.3} shuffled={:.3} {}",
@@ -613,5 +678,13 @@ impl HealthVerdict {
         } else {
             HealthVerdict::Critical
         }
+    }
+}
+
+impl PartialEq for StructuralLaw {
+    fn eq(&self, other: &Self) -> bool {
+        self.quality == other.quality
+            && (self.dfa.alpha - other.dfa.alpha).abs() < 1e-10
+            && self.n == other.n
     }
 }
