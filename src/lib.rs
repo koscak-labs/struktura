@@ -223,6 +223,18 @@ pub fn analyze(values: &[f64]) -> StructuralLaw {
     StructuralLaw { hurst, dfa: dfa_result, acr: acr_result, mean, std_dev, kurtosis, p99, max, n, quality }
 }
 
+impl StructuralLaw {
+    pub fn is_healthy(&self) -> bool {
+        self.quality != LawQuality::Abstain && self.quality != LawQuality::Insufficient
+    }
+}
+
+impl DfaResult {
+    pub fn is_reliable(&self) -> bool {
+        self.r_squared > 0.7
+    }
+}
+
 pub fn health_check(current: &StructuralLaw, baseline_alpha: f64) -> HealthVerdict {
     HealthVerdict::from_shift(current.dfa.alpha - baseline_alpha)
 }
