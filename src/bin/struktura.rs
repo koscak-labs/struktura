@@ -172,10 +172,22 @@ fn cmd_check(args: &[String]) {
     let law = analyze(&data);
     let mut baseline: Option<f64> = None;
     let json_mode = args.iter().any(|a| a == "--json");
+    let quiet_mode = args.iter().any(|a| a == "--quiet");
     for i in 0..args.len() {
         if args[i] == "--baseline" && i + 1 < args.len() {
             baseline = args[i + 1].parse().ok();
         }
+    }
+
+    if quiet_mode {
+        if let Some(b) = baseline {
+            let v = health_check(&law, b);
+            let (_, l) = verdict_color(v);
+            println!("{}", l);
+        } else {
+            println!("{}", quality_str(law.quality));
+        }
+        return;
     }
 
     if json_mode {
