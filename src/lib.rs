@@ -468,3 +468,33 @@ mod tests {
         assert!(law_f.dfa.r_squared > 0.9);
     }
 }
+
+impl fmt::Display for LawQuality {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LawQuality::Exact => write!(f, "EXACT"),
+            LawQuality::Strong => write!(f, "STRONG"),
+            LawQuality::Good => write!(f, "GOOD"),
+            LawQuality::Approx => write!(f, "APPROX"),
+            LawQuality::Abstain => write!(f, "ABSTAIN"),
+            LawQuality::Insufficient => write!(f, "INSUFFICIENT"),
+        }
+    }
+}
+
+impl fmt::Display for HealthVerdict {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            HealthVerdict::Healthy => write!(f, "HEALTHY"),
+            HealthVerdict::Watch => write!(f, "WATCH"),
+            HealthVerdict::Warning => write!(f, "WARNING"),
+            HealthVerdict::Critical => write!(f, "CRITICAL"),
+        }
+    }
+}
+
+impl fmt::Display for StructuralLaw {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "alpha={:.3} R2={:.4} H={:.3} quality={}", self.dfa.alpha, self.dfa.r_squared, self.hurst, self.quality)
+    }
+}
