@@ -14,6 +14,16 @@ fn read_csv(path: &str) -> Vec<f64> {
     parse_values(&content)
 }
 
+fn read_stdin() -> Vec<f64> {
+    use std::io::Read;
+    let mut buf = String::new();
+    std::io::stdin().read_to_string(&mut buf).unwrap_or_else(|e| {
+        eprintln!("Error reading stdin: {}", e);
+        process::exit(1);
+    });
+    parse_values(&buf)
+}
+
 fn parse_values(content: &str) -> Vec<f64> {
     content
         .lines()
@@ -153,7 +163,7 @@ fn cmd_check(args: &[String]) {
         process::exit(1);
     }
     let path = &args[2];
-    let data = read_csv(path);
+    let data = if path == "-" { read_stdin() } else { read_csv(path) };
     if data.len() < 20 {
         eprintln!("Error: need >= 20 data points, got {}", data.len());
         process::exit(1);
