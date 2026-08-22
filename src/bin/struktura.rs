@@ -186,11 +186,15 @@ fn cmd_check(args: &[String]) {
 
     let law = analyze(&data);
     let mut baseline: Option<f64> = None;
+    let mut threshold: Option<f64> = None;
     let json_mode = args.iter().any(|a| a == "--json");
     let quiet_mode = args.iter().any(|a| a == "--quiet");
     let csv_mode = args.iter().any(|a| a == "--csv");
     for i in 0..args.len() {
         if args[i] == "--baseline" && i + 1 < args.len() {
+        if args[i] == "--threshold" && i + 1 < args.len() {
+            threshold = args[i + 1].parse().ok();
+        }
             baseline = args[i + 1].parse().ok();
         }
     }
@@ -247,8 +251,12 @@ fn cmd_check(args: &[String]) {
 
 fn cmd_check_multi(files: &[&str], args: &[String]) {
     let mut baseline: Option<f64> = None;
+    let mut threshold: Option<f64> = None;
     for i in 0..args.len() {
         if args[i] == "--baseline" && i + 1 < args.len() {
+        if args[i] == "--threshold" && i + 1 < args.len() {
+            threshold = args[i + 1].parse().ok();
+        }
             baseline = args[i + 1].parse().ok();
         }
     }

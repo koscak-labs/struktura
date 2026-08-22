@@ -536,3 +536,18 @@ impl Default for BaselineTracker {
         BaselineTracker::new(256, 1000)
     }
 }
+
+impl HealthVerdict {
+    pub fn from_shift_threshold(shift: f64, threshold: f64) -> Self {
+        let s = if shift < 0.0 { -shift } else { shift };
+        if s < threshold * 0.375 {
+            HealthVerdict::Healthy
+        } else if s < threshold {
+            HealthVerdict::Watch
+        } else if s < threshold * 1.875 {
+            HealthVerdict::Warning
+        } else {
+            HealthVerdict::Critical
+        }
+    }
+}
