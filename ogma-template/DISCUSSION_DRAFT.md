@@ -83,17 +83,36 @@ I documented [formal DFA properties](https://github.com/koscak-labs/struktura/bl
 - **Bounded time**: O(n·B) per evaluation, ~1500 MACs for 256-sample window
 - **Exact-or-abstain**: if R² < threshold, monitor suspends (never alerts on noise)
 
-## Questions
+## Copilot integration path (sketch)
 
-1. Does the `db.json` compatibility approach make sense, or would you prefer tighter integration (e.g., a Haskell backend in ogma itself)?
+I also sketched what DFA-as-a-Copilot-extern could look like ([full spec](https://github.com/koscak-labs/struktura/blob/master/ogma-template/copilot_dfa_spec.hs)):
 
-2. Could DFA and Copilot monitors coexist in the same generated app? I could see a mode where ogma generates an app that does both temporal checks AND structural health.
+```haskell
+-- DFA computation in C, monitoring logic in Copilot
+dfaAlpha :: Stream Double -> Stream Double
+dfaAlpha channel = extern "dfa_compute_alpha" [channel]
 
-3. I submitted a couple of fixes in PR [#552](https://github.com/nasa/ogma/pull/552):
-   - `mergeSpecs` was using `s2` twice instead of `s1 ++ s2` for external variables (data loss when combining multiple `--input-file` args, refs #551)
-   - `cannotCopyTemplate` was swallowing the actual exception — now propagates the real error message for easier template debugging (refs #390)
+structuralShiftDetected :: Stream Double -> Stream Bool
+structuralShiftDetected channel =
+  let alpha    = dfaAlpha channel
+      r2       = dfaR2 channel
+      shift    = abs (alpha - baselineAlpha)
+  in (r2 > 0.7) && (shift > 0.08)  -- exact-or-abstain + threshold
+```
 
-Really enjoying reading through the ogma architecture — the template system is surprisingly powerful for how clean it is 🙏⚡
+The idea: DFA computation stays in C (via `dfa_core.h`), the detection logic lives in Copilot's temporal DSL. That way the monitoring logic gets Copilot's bisimulation guarantee, and the DFA computation gets its own convergence guarantees. No changes to Copilot needed — just an extern.
+
+You'd know way better than me whether this fits ogma's architecture — this is just a sketch of how I imagine the pieces connecting. Happy to go whatever direction makes sense 🙏
+
+## Also
+
+I submitted a couple of fixes while reading through the source — PR [#552](https://github.com/nasa/ogma/pull/552):
+- `mergeSpecs` was using `s2` twice instead of `s1 ++ s2` for external variables (data loss when combining multiple `--input-file` args, refs #551)
+- `cannotCopyTemplate` was swallowing the actual exception — now propagates the real error message for easier template debugging (refs #390)
+
+And I wrote a [template preparation guide](https://github.com/koscak-labs/struktura/blob/master/ogma-template/TEMPLATE_GUIDE.md) with the full Mustache variable tables for all 3 backends, in case it's useful for [discussion #315](https://github.com/nasa/ogma/discussions/315).
+
+Really enjoying the codebase — learned a lot reading through it ⚡🙏
 
 Crate: https://crates.io/crates/struktura
-Source: https://github.com/koscak-labs/struktura
+Source + templates + Voyager data: https://github.com/koscak-labs/struktura/tree/master/ogma-template
