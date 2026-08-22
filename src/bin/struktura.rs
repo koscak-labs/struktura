@@ -173,10 +173,18 @@ fn cmd_check(args: &[String]) {
     let mut baseline: Option<f64> = None;
     let json_mode = args.iter().any(|a| a == "--json");
     let quiet_mode = args.iter().any(|a| a == "--quiet");
+    let csv_mode = args.iter().any(|a| a == "--csv");
     for i in 0..args.len() {
         if args[i] == "--baseline" && i + 1 < args.len() {
             baseline = args[i + 1].parse().ok();
         }
+    }
+
+    if csv_mode {
+        let shift_s = baseline.map(|b| format!("{:.4}", law.dfa.alpha - b)).unwrap_or_else(|| "".to_string());
+        let verdict_s = baseline.map(|b| { let (_, l) = verdict_color(health_check(&law, b)); l.to_string() }).unwrap_or_else(|| "".to_string());
+        println!("{},{},{:.4},{:.4},{:.4},{},{},{}", path, law.n, law.dfa.alpha, law.dfa.r_squared, law.hurst, quality_str(law.quality), shift_s, verdict_s);
+        return;
     }
 
     if quiet_mode {
