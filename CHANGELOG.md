@@ -2,6 +2,28 @@
 
 All notable changes to Struktura are documented here.
 
+## v1.2.x (2026-08-23) — Code Generation
+
+- v1.2.4: Fix all clippy errors — safety docs, remove unreachable patterns
+- v1.2.3: cFS app codegen (`struktura codegen --cfs`) + `--name` flag
+- v1.2.2: Fix fprime codegen (no format! crash) + clean FPP output
+- v1.2.1: F Prime component codegen (`struktura codegen --fprime`)
+- v1.2.0: C code generator (`struktura codegen`) + `codegen.rs` module
+
+## v1.1.x (2026-08-22) — C FFI
+
+- v1.1.1: `struktura.h` C header + C test program
+- v1.1.0: C FFI layer for cross-language integration
+
+## v1.0.0 (2026-08-22) — STABLE RELEASE
+
+- Semver-stable API: `dfa()`, `acr()`, `analyze()`, `health_check()`
+- CLI: `check`, `compare`, `demo`, `report`, `validate`, `self-test`, `codegen`
+- Flight-software ready: zero alloc in hot path, `no_std`-compatible core
+- CWRU bearing dataset validation (all 3 fault types detected)
+- CI matrix: Ubuntu + macOS + Windows
+- CITATION.cff, GUARANTEES.md, full rustdoc
+
 ## v0.9.x (2026-08-22) — Pre-Release
 
 - v0.9.0: `struktura self-test` — verifies all claims (5/5 pass)
