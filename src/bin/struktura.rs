@@ -111,6 +111,7 @@ fn main() {
         println!();
         println!("  COMMANDS:");
         println!("    struktura demo                            Run builtin bearing fault demo");
+        println!("    struktura voyager                         Voyager 1 AACS anomaly analysis");
         println!("    struktura check <file.csv>                Analyze a signal");
         println!("    struktura check <file.csv> --baseline N   Compare against baseline");
         println!("    struktura compare <a.csv> <b.csv>         Compare two signals");
@@ -541,62 +542,41 @@ fn cmd_codegen(args: &[String]) {
 }
 
 fn cmd_voyager() {
-    let files = [
-        ("data/voyager1_2021_healthy.csv", "2021 (healthy baseline)"),
-        ("data/voyager1_pre_anomaly.csv", "2022 Jan-Apr (pre-anomaly)"),
-        ("data/voyager1_during_anomaly.csv", "2022 May-Jul (AACS anomaly)"),
-    ];
+    use struktura::space::voyager_demo;
+    let result = voyager_demo();
 
     println!();
     println!("  \x1b[1mVOYAGER 1 STRUCTURAL HEALTH ANALYSIS\x1b[0m");
     println!("  DFA scaling analysis of magnetometer data across");
-    println!("  the May 2022 AACS anomaly");
-    println!("  ================================================");
+    println!("  the May 2022 AACS anomaly (embedded data — works after cargo install)");
+    println!("  ====================================================================");
     println!();
     println!("  Data: NASA SPDF, L.F. Burlaga, VIM 48-second averages");
     println!("  https://spdf.gsfc.nasa.gov/pub/data/voyager/voyager1/");
     println!();
 
-    let mut baseline_alpha = 0.0;
-    for (path, label) in &files {
-        if !std::path::Path::new(path).exists() {
-            eprintln!("  Missing: {} — run from the struktura repo root", path);
-            process::exit(1);
-        }
-        let values = read_csv(path);
-        let law = analyze(&values);
-        let q = quality_str(law.quality);
+    let bar_h = make_bar(result.healthy_alpha);
+    let bar_a = make_bar(result.anomaly_alpha);
 
-        if baseline_alpha == 0.0 {
-            baseline_alpha = law.dfa.alpha;
-            let bar = make_bar(law.dfa.alpha);
-            println!("  {} {} alpha={:.3}  R2={:.4}  [{}]", bar, label, law.dfa.alpha, law.dfa.r_squared, q);
-        } else {
-            let shift = law.dfa.alpha - baseline_alpha;
-            let verdict = health_check(&law, baseline_alpha);
-            let bar = make_bar(law.dfa.alpha);
-            let v_str = match verdict {
-                HealthVerdict::Healthy => "\x1b[32mHEALTHY\x1b[0m",
-                HealthVerdict::Watch => "\x1b[33mWATCH\x1b[0m",
-                HealthVerdict::Warning => "\x1b[31mWARNING\x1b[0m",
-                HealthVerdict::Critical => "\x1b[31;1mCRITICAL\x1b[0m",
-                _ => "UNKNOWN",
-            };
-            println!("  {} {} alpha={:.3}  R2={:.4}  [{}]", bar, label, law.dfa.alpha, law.dfa.r_squared, q);
-            println!("  {:30} shift={:+.3}  {}", "", shift, v_str);
-        }
-    }
+    println!("  {} 2021 (healthy)    alpha={:.3}  R²={:.4}", bar_h, result.healthy_alpha, result.healthy_r2);
+    println!("  {} 2022 (anomaly)    alpha={:.3}  R²={:.4}", bar_a, result.anomaly_alpha, result.anomaly_r2);
+
+    let v_str = match result.verdict {
+        HealthVerdict::Healthy => "\x1b[32mHEALTHY\x1b[0m",
+        HealthVerdict::Watch => "\x1b[33mWATCH\x1b[0m",
+        HealthVerdict::Warning => "\x1b[31mWARNING\x1b[0m",
+        HealthVerdict::Critical => "\x1b[31;1mCRITICAL\x1b[0m",
+        _ => "UNKNOWN",
+    };
+    println!("  {:30} shift={:+.3}  {}", "", result.shift, v_str);
 
     println!();
-    println!("  ================================================");
-    println!("  Baseline alpha:  {:.3}  (2021 healthy operation)", baseline_alpha);
-    println!("  Anomaly alpha:   {:.3}  (May-Jul 2022 AACS anomaly)", files.last().map(|(p,_)| analyze(&read_csv(p)).dfa.alpha).unwrap_or(0.0));
+    println!("  ====================================================================");
+    println!("  Baseline alpha:  {:.3}  (2021 healthy operation)", result.healthy_alpha);
+    println!("  Anomaly alpha:   {:.3}  (May-Jul 2022 AACS anomaly)", result.anomaly_alpha);
     println!();
-    println!("  The magnetic field's fractal structure changed during");
-    println!("  the anomaly — detectable from public data, zero training.");
-    println!();
-    println!("  Reproduce: struktura compare data/voyager1_2021_healthy.csv \\");
-    println!("                              data/voyager1_during_anomaly.csv");
+    println!("  The magnetic field's fractal structure changed during the anomaly —");
+    println!("  detectable from public NASA data, zero training, zero ML.");
     println!();
 }
 

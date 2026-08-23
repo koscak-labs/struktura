@@ -786,5 +786,6 @@ impl PartialEq for StructuralLaw {
     }
 }
 pub mod ffi;
+pub mod space;
 #[cfg(feature = "std")]
 pub mod codegen;
