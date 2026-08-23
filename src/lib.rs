@@ -1,5 +1,9 @@
 //! Universal anomaly detection via Detrended Fluctuation Analysis.
 //!
+//! Works in `no_std` environments with the `alloc` crate (enable via
+//! `default-features = false`). The `std` feature (on by default) adds nothing
+//! to the API but enables the standard library.
+//!
 //! ```
 //! use struktura::{analyze, health_check, HealthVerdict};
 //!
@@ -15,7 +19,27 @@
 //! assert!(law.n == 64);
 //! ```
 
-use std::fmt;
+#![cfg_attr(not(feature = "std"), no_std)]
+
+#[cfg(not(feature = "std"))]
+extern crate alloc;
+
+#[cfg(not(feature = "std"))]
+use alloc::vec;
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
+use core::fmt;
+
+#[cfg(not(feature = "std"))]
+fn ln(x: f64) -> f64 { libm::log(x) }
+#[cfg(feature = "std")]
+fn ln(x: f64) -> f64 { x.ln() }
+
+#[cfg(not(feature = "std"))]
+fn sqrt(x: f64) -> f64 { libm::sqrt(x) }
+#[cfg(feature = "std")]
+fn sqrt(x: f64) -> f64 { x.sqrt() }
 
 /// Result of a DFA or ACR computation.
 #[derive(Debug, Clone, Copy)]
@@ -175,10 +199,10 @@ pub fn dfa(values: &[f64]) -> DfaResult {
             }
             f2_sum += resid / k;
         }
-        let f = (f2_sum / num_segs as f64).sqrt();
+        let f = sqrt(f2_sum / num_segs as f64);
         if f > 0.0 {
-            log_s[pts] = (s as f64).ln();
-            log_f[pts] = f.ln();
+            log_s[pts] = ln(s as f64);
+            log_f[pts] = ln(f);
             pts += 1;
         }
     }
@@ -220,8 +244,8 @@ pub fn acr(values: &[f64]) -> DfaResult {
         }
         let r = num / var;
         if r > 0.001 {
-            log_lag[pts] = (lag as f64).ln();
-            log_r[pts] = r.ln();
+            log_lag[pts] = ln(lag as f64);
+            log_r[pts] = ln(r);
             pts += 1;
         }
     }
@@ -267,7 +291,7 @@ pub fn analyze(values: &[f64]) -> StructuralLaw {
 
     let mean = values.iter().sum::<f64>() / n as f64;
     let var: f64 = values.iter().map(|&x| (x - mean) * (x - mean)).sum::<f64>() / n as f64;
-    let std_dev = var.sqrt();
+    let std_dev = sqrt(var);
 
     if std_dev < 1e-12 {
         return StructuralLaw {
@@ -762,4 +786,5 @@ impl PartialEq for StructuralLaw {
     }
 }
 pub mod ffi;
+#[cfg(feature = "std")]
 pub mod codegen;

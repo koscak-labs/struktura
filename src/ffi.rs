@@ -1,5 +1,5 @@
 use crate::{dfa, analyze, health_check, DfaResult, StructuralLaw, HealthVerdict, LawQuality};
-use std::slice;
+use core::slice;
 
 /// C-compatible DFA result.
 #[repr(C)]

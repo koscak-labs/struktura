@@ -2,6 +2,14 @@
 
 All notable changes to Struktura are documented here.
 
+## v1.3.0 (2026-08-23) — no_std Support
+
+- `#![no_std]` with `extern crate alloc` — runs on embedded flight computers
+- `std` feature (default on) — existing users unaffected
+- `libm` for transcendentals (`ln`, `sqrt`) in no_std mode
+- Codegen module gated behind `std` (not needed on embedded)
+- FFI uses `core::slice` instead of `std::slice`
+
 ## v1.2.x (2026-08-23) — Code Generation
 
 - v1.2.4: Fix all clippy errors — safety docs, remove unreachable patterns
