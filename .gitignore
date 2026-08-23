@@ -3,3 +3,8 @@ target/
 voyager1_2021.dat
 voyager1_2022.dat
 voyager2_2022.dat
+node_modules/
+test-ogma-output/
+test-ogma-expansion.js
+package.json
+package-lock.json

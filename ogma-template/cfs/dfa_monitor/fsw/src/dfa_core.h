@@ -28,9 +28,14 @@ static dfa_result_t dfa_compute(const double *values, int n) {
     for (i = 0; i < n; i++) mean += values[i];
     mean /= (double)n;
 
-    double y[512];
+    /* Stack buffer sized to match the monitor's configured window.
+     * DFA_WINDOW_SIZE is defined by the ogma template via extra-vars. */
+#ifndef DFA_WINDOW_SIZE
+#define DFA_WINDOW_SIZE 256
+#endif
+    double y[DFA_WINDOW_SIZE];
     double cum = 0.0;
-    int nn = n > 512 ? 512 : n;
+    int nn = n > DFA_WINDOW_SIZE ? DFA_WINDOW_SIZE : n;
     for (i = 0; i < nn; i++) {
         cum += values[i] - mean;
         y[i] = cum;

@@ -1,0 +1,17 @@
+{
+  "DFAMonitor": {
+    "internal_variables": [],
+    "external_variables": [
+      {"name": "accel_x", "type": "Double", "meaning": "InputDouble"},
+      {"name": "gyro_z", "type": "Double", "meaning": "InputDouble"},
+      {"name": "batt_voltage", "type": "Double", "meaning": "InputDouble"}
+    ],
+    "properties": [
+      {
+        "id": "DFAHealthCheck",
+        "formula": "true",
+        "text": "DFA structural health monitoring (logic in custom template)"
+      }
+    ]
+  }
+}

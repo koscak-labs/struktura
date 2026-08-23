@@ -114,9 +114,7 @@ static int dfa_channel_push(dfa_channel_t *ch, double value,
 
     double shift = fabs(r.alpha - ch->baseline_alpha);
     if (shift >= DFA_THRESHOLD) {
-        int severity = (shift >= DFA_THRESHOLD * 1.875) ? 4
-                     : (shift >= DFA_THRESHOLD)         ? 3
-                     :                                    2;
+        int severity = (shift >= DFA_THRESHOLD * 1.875) ? 4 : 3;
         CFE_EVS_SendEvent(DFA_MONITOR_SHIFT_ERR_EID,
             CFE_EVS_EventType_ERROR,
             "DFA structural shift on %s: alpha=%.3f baseline=%.3f "
