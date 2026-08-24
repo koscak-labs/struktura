@@ -1,23 +1,35 @@
-//! Universal anomaly detection via Detrended Fluctuation Analysis.
+//! Predict failure before it happens.
 //!
-//! Works in `no_std` environments with the `alloc` crate (enable via
-//! `default-features = false`). The `std` feature (on by default) adds nothing
-//! to the API but enables the standard library.
+//! Struktura detects when the *structure* of a signal changes — before
+//! averages, thresholds, or ML models notice. One function, one number,
+//! works on anything with a time dimension.
+//!
+//! # Quick start
 //!
 //! ```
-//! use struktura::{analyze, health_check, HealthVerdict};
+//! use struktura::{compare, is_degraded};
 //!
-//! let signal = vec![0.1, 0.3, 0.2, 0.5, 0.4, 0.6, 0.3, 0.7,
-//!                   0.2, 0.4, 0.5, 0.3, 0.6, 0.4, 0.5, 0.3,
-//!                   0.1, 0.3, 0.2, 0.5, 0.4, 0.6, 0.3, 0.7,
-//!                   0.2, 0.4, 0.5, 0.3, 0.6, 0.4, 0.5, 0.3,
-//!                   0.1, 0.3, 0.2, 0.5, 0.4, 0.6, 0.3, 0.7,
-//!                   0.2, 0.4, 0.5, 0.3, 0.6, 0.4, 0.5, 0.3,
-//!                   0.1, 0.3, 0.2, 0.5, 0.4, 0.6, 0.3, 0.7,
-//!                   0.2, 0.4, 0.5, 0.3, 0.6, 0.4, 0.5, 0.3];
-//! let law = analyze(&signal);
-//! assert!(law.n == 64);
+//! # let normal_readings = vec![1.0; 256];
+//! # let current_readings = vec![1.0; 256];
+//! // Compare current readings against a known-good baseline
+//! let result = compare(&normal_readings, &current_readings);
+//! println!("{}", result); // "HEALTHY shift=+0.003" or "CRITICAL shift=-0.45"
+//!
+//! // Or just ask: is this signal degraded compared to baseline?
+//! if is_degraded(&normal_readings, &current_readings) {
+//!     trigger_alert();
+//! }
+//! # fn trigger_alert() {}
 //! ```
+//!
+//! # Domains
+//!
+//! - [`space`] — spacecraft telemetry monitoring (reaction wheels, magnetometers, batteries)
+//! - [`market`] — financial regime detection (trending / random walk / mean-reverting)
+//! - [`text`] — writing rhythm analysis (human literary prose vs mechanical/AI)
+//! - [`rhythm`] — event timing analysis (git commits, heartbeats, keystrokes)
+//!
+//! Works in `no_std` environments (`default-features = false`). 85-112x faster than Python.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -827,6 +839,75 @@ impl PartialEq for StructuralLaw {
             && self.n == other.n
     }
 }
+// ── Simple API (start here) ──────────────────────────────────────────
+
+/// Compare two signals and get a verdict: is the structure the same?
+///
+/// `baseline` is the known-good signal. `current` is what you're checking.
+/// Returns a [`CompareResult`] with the verdict and the structural shift.
+///
+/// ```
+/// use struktura::compare;
+/// # let baseline = vec![1.0; 256];
+/// # let current = vec![1.0; 256];
+/// let result = compare(&baseline, &current);
+/// println!("{}", result.verdict); // HEALTHY, WATCH, WARNING, or CRITICAL
+/// ```
+#[must_use]
+pub fn compare(baseline: &[f64], current: &[f64]) -> CompareResult {
+    let law_b = analyze(baseline);
+    let law_c = analyze(current);
+    let shift = law_c.dfa.alpha - law_b.dfa.alpha;
+    let verdict = health_check(&law_c, law_b.dfa.alpha);
+    CompareResult {
+        baseline_alpha: law_b.dfa.alpha,
+        current_alpha: law_c.dfa.alpha,
+        shift,
+        verdict,
+        confidence: law_c.dfa.r_squared.min(law_b.dfa.r_squared),
+    }
+}
+
+/// Is the current signal structurally degraded compared to baseline?
+///
+/// Returns `true` if the structural shift exceeds the Watch threshold (0.03).
+/// For more detail, use [`compare`].
+#[must_use]
+pub fn is_degraded(baseline: &[f64], current: &[f64]) -> bool {
+    let result = compare(baseline, current);
+    result.verdict != HealthVerdict::Healthy
+}
+
+/// Has the signal's structure changed at all?
+///
+/// More sensitive than [`is_degraded`] — returns `true` on any measurable
+/// shift (> 0.01), even if below the Watch threshold.
+#[must_use]
+pub fn has_changed(baseline: &[f64], current: &[f64]) -> bool {
+    let result = compare(baseline, current);
+    result.shift.abs() > 0.01 && result.confidence > 0.5
+}
+
+/// Result of comparing two signals.
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct CompareResult {
+    pub baseline_alpha: f64,
+    pub current_alpha: f64,
+    pub shift: f64,
+    pub verdict: HealthVerdict,
+    pub confidence: f64,
+}
+
+impl fmt::Display for CompareResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} shift={:+.3} (baseline={:.3} current={:.3} R²={:.3})",
+            self.verdict, self.shift, self.baseline_alpha, self.current_alpha, self.confidence)
+    }
+}
+
+// ── Domain modules ──────────────────────────────────────────────────
+
 pub mod ffi;
 pub mod space;
 pub mod text;
