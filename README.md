@@ -14,8 +14,6 @@
 
 anomaly detection that actually works. not thresholds. not ML. not vibes.
 
-**[try it in your browser →](https://koscak-labs.github.io/struktura/playground/)** no install needed.
-
 <p align="center">
   <img src="assets/terminal-demo.svg" alt="struktura voyager demo" width="100%">
 </p>
