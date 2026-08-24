@@ -128,25 +128,26 @@ fn main() {
 
     if args.len() < 2 {
         println!();
-        println!("  \x1b[1mstruktura\x1b[0m - predict failure before it happens");
-        println!("  the only Rust-native DFA anomaly detector");
+        println!("  \x1b[1mstruktura\x1b[0m - detect when a signal's structure changes");
         println!();
-        println!("  COMMANDS:");
-        println!("    struktura demo                            Run builtin bearing fault demo");
-        println!("    struktura voyager                         Voyager 1 AACS anomaly analysis");
-        println!("    struktura heliopause                      Detect the edge of the solar system");
-        println!("    struktura ims                             NASA bearing run-to-failure timeline");
-        println!("    struktura spacecraft                      Multi-channel spacecraft health demo");
-        println!("    struktura nasa                            SMAP satellite anomaly (real NASA data, embedded)");
-        println!("    struktura guard <file.csv> [--baseline N]  Stream monitor: calibrate on first N rows, watch the rest");
-        println!("    struktura mission                         24K-sample autonomous gauntlet (no human in the loop)");
-        println!("    struktura scan <file_or_-> [--baseline f]  Auto-analyze any signal (pipe with -)");
-        println!("    struktura mf <file_or_->                 Multifractal spectrum (multi-scale complexity)");
-        println!("    struktura text <file.txt>                  Writing rhythm analysis");
+        println!("  USE IT ON YOUR DATA:");
+        println!("    struktura guard <file.csv>                 Monitor a CSV for anomalies (autonomous)");
+        println!("    struktura guard <file.csv> --baseline 500  Calibrate on first 500 rows");
+        println!("    struktura guard <file.csv> --json          Machine-readable output");
+        println!("    cat stream.csv | struktura guard -         Pipe from stdin");
+        println!("    struktura check <file.csv>                 One-shot structural analysis");
+        println!("    struktura scan <file_or_->                 Auto-classify + trend + health");
+        println!();
+        println!("  DEMOS (zero setup, embedded data):");
+        println!("    struktura demo                             Bearing fault (CWRU data)");
+        println!("    struktura nasa                             SMAP satellite anomaly");
+        println!("    struktura voyager                          Voyager 1 AACS anomaly");
+        println!("    struktura mission                          Autonomous 24K-sample gauntlet");
+        println!();
+        println!("  DOMAIN:");
+        println!("    struktura text <file.txt>                  Writing rhythm");
         println!("    struktura market <prices.csv>              Financial regime detection");
-        println!("    struktura rhythm <timestamps.csv>          Event rhythm (git/heartbeat/keystrokes)");
-        println!("    struktura check <file.csv>                Analyze a signal");
-        println!("    struktura check <file.csv> --baseline N   Compare against baseline");
+        println!("    struktura rhythm <timestamps.csv>          Event timing (heartbeat/git/IoT)");
         println!("    struktura compare <a.csv> <b.csv>         Compare two signals");
         println!("    struktura bench                           Full benchmark with all fault types");
         println!("    struktura benchmark-faults                 F1 scores across 6 telemetry fault types");
@@ -3181,41 +3182,42 @@ fn cmd_nasa() {
 
 fn cmd_guard(args: &[String]) {
     let mut file_path = String::new();
-    let mut baseline_n = 0usize; // 0 = auto (first third)
+    let mut baseline_n = 0usize;
+    let mut json = false;
     let mut i = 2;
     while i < args.len() {
         match args[i].as_str() {
-            "--baseline" if i + 1 < args.len() => {
-                baseline_n = args[i + 1].parse().unwrap_or(0);
-                i += 2;
+            "--baseline" if i + 1 < args.len() => { baseline_n = args[i + 1].parse().unwrap_or(0); i += 2; }
+            "--json" => { json = true; i += 1; }
+            "--help" | "-h" => {
+                println!("struktura guard <file.csv> [--baseline N] [--json]");
+                println!("  Monitor any CSV for anomalies. Exit: 0=healthy 1=fault 2=error");
+                process::exit(0);
             }
-            s if !s.starts_with('-') && file_path.is_empty() => {
-                file_path = s.to_string();
-                i += 1;
-            }
+            s if !s.starts_with('-') && file_path.is_empty() => { file_path = s.to_string(); i += 1; }
             _ => { i += 1; }
         }
     }
-    if file_path.is_empty() || file_path == "-" {
-        // Read from stdin
+    let content = if file_path.is_empty() || file_path == "-" {
         use std::io::Read;
         let mut buf = String::new();
         std::io::stdin().read_to_string(&mut buf).expect("read stdin");
-        run_guard(&buf, baseline_n);
+        buf
     } else {
-        let content = std::fs::read_to_string(&file_path).unwrap_or_else(|e| {
+        std::fs::read_to_string(&file_path).unwrap_or_else(|e| {
             eprintln!("cannot read {}: {}", file_path, e);
-            process::exit(1);
-        });
-        run_guard(&content, baseline_n);
-    }
+            process::exit(2);
+        })
+    };
+    let exit = run_guard(&content, baseline_n, json);
+    process::exit(exit);
 }
 
-fn run_guard(content: &str, baseline_n: usize) {
+/// Returns exit code: 0 = healthy, 1 = faults found, 2 = calibration error.
+fn run_guard(content: &str, baseline_n: usize, json: bool) -> i32 {
     use struktura::monitor::HybridMonitor;
+    use struktura::autopilot::{AutoPilot, Event};
 
-    // Parse multi-column CSV (last column = primary channel, or all columns
-    // as independent channels). Auto-detect width from first row.
     let rows: Vec<Vec<f64>> = content
         .lines()
         .filter_map(|l| {
@@ -3224,14 +3226,17 @@ fn run_guard(content: &str, baseline_n: usize) {
         })
         .collect();
     if rows.is_empty() {
-        eprintln!("no numeric rows");
-        process::exit(1);
+        if json {
+            println!("{{\"error\":\"no numeric rows\"}}");
+        } else {
+            eprintln!("no numeric rows");
+        }
+        return 2;
     }
     let n = rows.len();
     let ncols = rows[0].len();
     let calib_n = if baseline_n > 0 { baseline_n.min(n) } else { n / 3 };
 
-    // Transpose to per-channel vectors
     let channels: Vec<Vec<f64>> = (0..ncols)
         .map(|ch| rows.iter().map(|r| r.get(ch).copied().unwrap_or(0.0)).collect())
         .collect();
@@ -3240,24 +3245,26 @@ fn run_guard(content: &str, baseline_n: usize) {
     let mon = match HybridMonitor::calibrate(&calib) {
         Some(m) => m,
         None => {
-            eprintln!("calibration failed (need >= 192 samples)");
-            process::exit(1);
+            if json {
+                println!("{{\"error\":\"calibration failed\",\"samples\":{},\"min_required\":192}}", calib_n);
+            } else {
+                eprintln!("calibration failed (need >= 192 samples, got {})", calib_n);
+            }
+            return 2;
         }
     };
 
-    println!();
-    println!("  \x1b[1mSTRUKTURA GUARD\x1b[0m — streaming health monitor");
-    println!("  {} samples x {} channels. Calibrated on first {} samples.", n, ncols, calib_n);
-    println!("  ================================================================");
-    println!();
+    if !json {
+        eprintln!("struktura guard: {} samples x {} ch, calibrated on {} rows", n, ncols, calib_n);
+    }
 
     let mut sample = vec![0.0f64; ncols];
-    // Wrap in AutoPilot: regime changes that stabilize are adapted to,
-    // genuine faults are logged, dead sensors get quarantined — all autonomously.
-    use struktura::autopilot::{AutoPilot, Event};
     let mut ap = AutoPilot::new(mon);
     let mut alarm_count = 0usize;
+    let mut adapt_count = 0usize;
+    let mut quarantine_count = 0usize;
     let valid: Vec<bool> = vec![true; ncols];
+
     for t in calib_n..n {
         for ch in 0..ncols {
             sample[ch] = channels[ch][t];
@@ -3266,33 +3273,61 @@ fn run_guard(content: &str, baseline_n: usize) {
             match &ev {
                 Event::Alarm { report, class, .. } => {
                     alarm_count += 1;
-                    println!(
-                        "  t={:>6}  \x1b[33mALARM\x1b[0m  {:?} on ch{} (class: {})",
-                        t, report.leg, report.channel, class
-                    );
+                    if json {
+                        println!("{{\"event\":\"alarm\",\"t\":{},\"leg\":\"{:?}\",\"channel\":{},\"class\":\"{}\",\"observed\":{:.4},\"threshold\":{:.4}}}",
+                            t, report.leg, report.channel, class, report.observed, report.threshold);
+                    } else {
+                        eprintln!("  t={:>6}  ALARM  {:?} ch{} ({})", t, report.leg, report.channel, class);
+                    }
                 }
                 Event::Quarantined { channel, .. } => {
-                    println!("  t={:>6}  \x1b[31mQUARANTINE\x1b[0m  ch{} -> virtual mode", t, channel);
+                    quarantine_count += 1;
+                    if json {
+                        println!("{{\"event\":\"quarantine\",\"t\":{},\"channel\":{}}}", t, channel);
+                    } else {
+                        eprintln!("  t={:>6}  QUARANTINE ch{}", t, channel);
+                    }
                 }
                 Event::AdaptationStarted { .. } => {
-                    println!("  t={:>6}  \x1b[36mADAPTING\x1b[0m   collecting new-regime window", t);
+                    if json {
+                        println!("{{\"event\":\"adapting\",\"t\":{}}}", t);
+                    } else {
+                        eprintln!("  t={:>6}  ADAPTING", t);
+                    }
                 }
                 Event::Recalibrated { .. } => {
-                    println!("  t={:>6}  \x1b[32mRECALIBRATED\x1b[0m guard passed -> new normal", t);
+                    adapt_count += 1;
+                    if json {
+                        println!("{{\"event\":\"recalibrated\",\"t\":{}}}", t);
+                    } else {
+                        eprintln!("  t={:>6}  RECALIBRATED", t);
+                    }
                 }
                 Event::RolledBack { .. } => {
-                    println!("  t={:>6}  \x1b[31mROLLBACK\x1b[0m   adaptation rejected", t);
+                    if json {
+                        println!("{{\"event\":\"rollback\",\"t\":{}}}", t);
+                    } else {
+                        eprintln!("  t={:>6}  ROLLBACK", t);
+                    }
                 }
             }
         }
     }
-    if alarm_count == 0 {
-        println!("  \x1b[32mNo anomalies detected.\x1b[0m Stream healthy across {} samples.", n - calib_n);
+
+    if json {
+        println!("{{\"summary\":true,\"samples\":{},\"channels\":{},\"baseline\":{},\"alarms\":{},\"adaptations\":{},\"quarantines\":{},\"verdict\":\"{}\"}}",
+            n, ncols, calib_n, alarm_count, adapt_count, quarantine_count,
+            if alarm_count == 0 { "healthy" } else { "fault_detected" });
+    } else {
+        if alarm_count == 0 {
+            eprintln!("  HEALTHY — {} samples, no anomalies", n - calib_n);
+        } else {
+            eprintln!("  {} faults detected across {} samples ({} adaptations, {} quarantines)",
+                alarm_count, n - calib_n, adapt_count, quarantine_count);
+        }
     }
-    println!();
-    println!("  Alarms: {}. Self-calibrated, autonomous (adapts + quarantines).", alarm_count);
-    println!("  Pipe any CSV: cat data.csv | struktura guard -");
-    println!();
+
+    if alarm_count > 0 { 1 } else { 0 }
 }
 
 fn generate_ros_package() -> String {
