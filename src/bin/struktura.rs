@@ -2241,6 +2241,7 @@ fn cmd_monitor_perf() {
                 Leg::LevelShift => leg_counts[3] += 1,
                 Leg::ResidualCusum => leg_counts[4] += 1,
                 Leg::Missingness => {}
+                Leg::Parity => {}
             }
             mon.reset();
         }
@@ -2307,6 +2308,32 @@ fn cmd_monitor_perf() {
                         if let Some(report) = m.last_alarm() {
                             let fi = FAULT_TYPES.iter().position(|f| f == fault).unwrap();
                             class_total[fi] += 1;
+                            // Two-stage: the parity leg detects fastest but
+                            // generically. For diagnosis, replay the stream
+                            // through a monitor with parity muted and use
+                            // the specific leg's report.
+                            let report = if report.leg == struktura::monitor::Leg::Parity {
+                                let mut d = HybridMonitor::calibrate(&cal).unwrap();
+                                d.set_leg_enabled(struktura::monitor::Leg::Parity, false);
+                                let mut smp2 = [0.0f64; 6];
+                                let mut vld2 = [true; 6];
+                                let mut rep2 = report;
+                                for t2 in 0..len {
+                                    for ch in 0..6 {
+                                        smp2[ch] = faulted[ch][t2];
+                                        vld2[ch] = validity[ch][t2];
+                                    }
+                                    if d.push_with_validity(&smp2, &vld2).is_some() {
+                                        if let Some(r2) = d.last_alarm() {
+                                            rep2 = r2;
+                                        }
+                                        break;
+                                    }
+                                }
+                                rep2
+                            } else {
+                                report
+                            };
                             let predicted = classify_alarm(&report);
                             // "mixed" is a compound fault: any of its three
                             // components is a correct identification.

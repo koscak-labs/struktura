@@ -118,6 +118,11 @@ pub enum Leg {
     /// loss) — value-and-structure detectors are provably blind to
     /// forward-filled gaps, only an explicit validity signal sees them.
     Missingness,
+    /// Cross-channel parity: this channel's value is inconsistent with
+    /// what the OTHER channels' coupled physics predicts for it
+    /// (analytical redundancy). Catches faults where every channel looks
+    /// individually plausible but the relations between them break.
+    Parity,
 }
 
 /// Invalid samples within the trailing `MISS_SPAN` ticks required to alarm.
@@ -151,6 +156,16 @@ pub struct AlarmReport {
 pub fn classify_alarm(r: &AlarmReport) -> &'static str {
     match r.leg {
         Leg::Missingness => "packet_loss",
+        Leg::Parity => {
+            // A transient spike violates the cross-channel relation by many
+            // multiples of its threshold; a subtle inconsistency (sensor
+            // miscalibration, gain error) sits just above it.
+            if r.observed > 2.0 * r.threshold {
+                "spike"
+            } else {
+                "cross_channel_inconsistency"
+            }
+        }
         Leg::RepeatedValue => "stuck",
         Leg::Dfa => "drift",
         Leg::ResidualCusum => "drift",
@@ -208,6 +223,7 @@ struct ChannelState {
     t: u64,
     res_hit_times: [u64; RES_HITS],
     miss_times: [u64; MISS_HITS],
+    parity_hit_times: [u64; RES_HITS],
     dfa_streak: usize,
     roll_streak: usize,
 }
@@ -226,11 +242,32 @@ pub struct HybridMonitor {
     scratch: Vec<f64>,
     alarmed: bool,
     last_alarm: Option<AlarmReport>,
-    /// Per-leg enable mask: [residual, repeated, dfa, level, cusum, miss].
+    /// Cross-channel reconstruction models (analytical redundancy).
+    recon: Vec<Reconstructor>,
+    /// Parity-leg threshold (Gumbel return level of calibration parity z).
+    parity_thr: f64,
+    /// Channels switched to virtual mode (dead sensor; reconstruction
+    /// substitutes, own legs disabled).
+    quarantined: Vec<bool>,
+    /// Per-leg enable mask: [residual, repeated, dfa, level, cusum, miss, parity].
     /// Legs whose stationarity assumptions a deployment cannot meet
     /// (e.g. level-shift on a naturally trending channel) are disabled
     /// at configuration time — standard flight-monitor practice.
-    leg_enabled: [bool; 6],
+    leg_enabled: [bool; 7],
+}
+
+/// Linear reconstruction model: one channel estimated from all others.
+/// Learned at calibration by least squares (analytical redundancy — the
+/// coupled physics that relates channels is captured empirically).
+#[derive(Debug, Clone)]
+struct Reconstructor {
+    /// Weight per source channel (own channel's weight is 0).
+    weights: Vec<f64>,
+    bias: f64,
+    /// Residual sd of the reconstruction on calibration data.
+    sd: f64,
+    /// Fraction of the channel's variance explained (R²) on calibration.
+    r2: f64,
 }
 
 /// Calibrated constants exported for code generation.
@@ -290,6 +327,122 @@ fn gumbel_return_level(scores: &[f64], horizon: f64) -> f64 {
     // Gumbel quantile at exceedance probability 1/T: x = μ − β ln(−ln(1 − 1/T))
     let p = 1.0 - 1.0 / t;
     mu - beta * crate::ln(-crate::ln(p))
+}
+
+/// Solve the linear system A x = b in place (Gauss–Jordan with partial
+/// pivoting). A is n×n row-major. Returns false when singular.
+fn solve_linear(a: &mut [f64], b: &mut [f64], n: usize) -> bool {
+    for col in 0..n {
+        let mut pivot = col;
+        for row in col + 1..n {
+            if a[row * n + col].abs() > a[pivot * n + col].abs() {
+                pivot = row;
+            }
+        }
+        if a[pivot * n + col].abs() < 1e-12 {
+            return false;
+        }
+        if pivot != col {
+            for k in 0..n {
+                a.swap(col * n + k, pivot * n + k);
+            }
+            b.swap(col, pivot);
+        }
+        let d = a[col * n + col];
+        for k in 0..n {
+            a[col * n + k] /= d;
+        }
+        b[col] /= d;
+        for row in 0..n {
+            if row != col {
+                let f = a[row * n + col];
+                if f != 0.0 {
+                    for k in 0..n {
+                        a[row * n + k] -= f * a[col * n + k];
+                    }
+                    b[row] -= f * b[col];
+                }
+            }
+        }
+    }
+    true
+}
+
+/// Fit `target = bias + Σ w_j · source_j` (j ≠ target) by least squares
+/// over the calibration streams. Ridge-regularized (λ = 1e-6 · trace/n)
+/// for numerical safety on collinear channels.
+fn fit_reconstructor(clean: &[Vec<f64>], target: usize) -> Reconstructor {
+    let channels = clean.len();
+    let length = clean[0].len();
+    let sources: Vec<usize> = (0..channels).filter(|&c| c != target).collect();
+    let p = sources.len();
+
+    // Standardize every channel first — raw scales differ by orders of
+    // magnitude (wheel speed ~2200 vs SOC ~0.7) and make the raw normal
+    // equations ill-conditioned. Fit in z-space, back-transform after.
+    let stats: Vec<(f64, f64)> = clean
+        .iter()
+        .map(|c| {
+            let m = c.iter().sum::<f64>() / length as f64;
+            let v = c.iter().map(|x| (x - m) * (x - m)).sum::<f64>() / length as f64;
+            (m, crate::sqrt(v).max(1e-12))
+        })
+        .collect();
+
+    // Normal equations in standardized space (centered → no bias column)
+    let mut xtx = vec![0.0f64; p * p];
+    let mut xty = vec![0.0f64; p];
+    let (ym, ys) = stats[target];
+    for t in 0..length {
+        let yz = (clean[target][t] - ym) / ys;
+        let mut row = Vec::with_capacity(p);
+        for &s in &sources {
+            let (m, sd) = stats[s];
+            row.push((clean[s][t] - m) / sd);
+        }
+        for i in 0..p {
+            xty[i] += row[i] * yz;
+            for j in 0..p {
+                xtx[i * p + j] += row[i] * row[j];
+            }
+        }
+    }
+    // Ridge in standardized space (diagonal ≈ length per entry)
+    let lambda = 1e-4 * length as f64;
+    for i in 0..p {
+        xtx[i * p + i] += lambda;
+    }
+    let mut coef = xty.clone();
+    let ok = solve_linear(&mut xtx, &mut coef, p);
+
+    // Back-transform: y = ym + ys·Σ wz_s·(x_s − m_s)/sd_s
+    let mut weights = vec![0.0f64; channels];
+    let mut bias = ym;
+    if ok {
+        for (k, &s) in sources.iter().enumerate() {
+            let (m, sd) = stats[s];
+            let w_raw = ys * coef[k] / sd;
+            weights[s] = w_raw;
+            bias -= w_raw * m;
+        }
+    }
+
+    // Residual sd + R² on calibration
+    let ymean: f64 = clean[target].iter().sum::<f64>() / length as f64;
+    let mut ss_res = 0.0;
+    let mut ss_tot = 0.0;
+    for t in 0..length {
+        let mut pred = bias;
+        for &s in &sources {
+            pred += weights[s] * clean[s][t];
+        }
+        let y = clean[target][t];
+        ss_res += (y - pred) * (y - pred);
+        ss_tot += (y - ymean) * (y - ymean);
+    }
+    let sd = crate::sqrt(ss_res / length as f64).max(1e-9);
+    let r2 = if ss_tot > 1e-12 { 1.0 - ss_res / ss_tot } else { 0.0 };
+    Reconstructor { weights, bias, sd, r2 }
 }
 
 fn alloc_zeroed(n: usize) -> Vec<f64> {
@@ -453,6 +606,29 @@ impl HybridMonitor {
         }
         let dfa_thr = gumbel_return_level(&dfa_scores, DESIGN_HORIZON / DFA_STRIDE as f64);
 
+        // Analytical redundancy: reconstruct each channel from the others,
+        // and calibrate the parity leg on the max-over-channels
+        // standardized reconstruction error.
+        let recon: Vec<Reconstructor> =
+            (0..channels).map(|t| fit_reconstructor(clean, t)).collect();
+        let mut parity_scores = Vec::with_capacity(length);
+        for t in 0..length {
+            let mut mz = 0.0f64;
+            for ch in 0..channels {
+                let r = &recon[ch];
+                let mut pred = r.bias;
+                for (s, c) in clean.iter().enumerate() {
+                    pred += r.weights[s] * c[t];
+                }
+                let z = (clean[ch][t] - pred).abs() / r.sd;
+                if z > mz {
+                    mz = z;
+                }
+            }
+            parity_scores.push(mz);
+        }
+        let parity_thr = gumbel_return_level(&parity_scores, DESIGN_HORIZON);
+
         let state = clean
             .iter()
             .map(|c| ChannelState {
@@ -465,6 +641,7 @@ impl HybridMonitor {
                 t: 0,
                 res_hit_times: [u64::MAX; RES_HITS],
                 miss_times: [u64::MAX; MISS_HITS],
+                parity_hit_times: [u64::MAX; RES_HITS],
                 dfa_streak: 0,
                 roll_streak: 0,
             })
@@ -479,7 +656,14 @@ impl HybridMonitor {
             scratch,
             alarmed: false,
             last_alarm: None,
-            leg_enabled: [true; 6],
+            recon,
+            parity_thr,
+            quarantined: {
+                let mut q = Vec::with_capacity(channels);
+                q.resize(channels, false);
+                q
+            },
+            leg_enabled: [true; 7],
         })
     }
 
@@ -529,6 +713,28 @@ impl HybridMonitor {
         if self.alarmed || ch >= self.calib.len() {
             return None;
         }
+        // Quarantined sensor: substitute the reconstructed reading so the
+        // ring state stays coherent for a later unquarantine; its own
+        // detector legs stay silent (the sensor is declared dead).
+        if self.quarantined[ch] {
+            let virt = self.virtual_value(ch).map(|(v, _)| v).unwrap_or(0.0);
+            let st = &mut self.state[ch];
+            let t = st.t;
+            st.t += 1;
+            st.prev = virt;
+            st.ring[(t % WINDOW as u64) as usize] = virt;
+            st.roll_ring[(t % ROLL as u64) as usize] = virt;
+            return None;
+        }
+        // Parity prediction must be computed before borrowing state mutably.
+        let parity_pred = {
+            let r = &self.recon[ch];
+            let mut pred = r.bias;
+            for (s, stx) in self.state.iter().enumerate() {
+                pred += r.weights[s] * stx.prev;
+            }
+            (pred, r.sd)
+        };
         let cc = &self.calib[ch];
         let st = &mut self.state[ch];
         let t = st.t;
@@ -617,6 +823,33 @@ impl HybridMonitor {
                 return Some(Leg::Residual);
             }
         }
+        // Leg 7: cross-channel parity (2-in-20 persistence). Skipped while
+        // any channel is quarantined — a substituted reading would feed the
+        // predictor its own reconstruction.
+        if self.leg_enabled[6] && !self.quarantined.iter().any(|&q| q) {
+            let (pred, sd) = parity_pred;
+            let pz = (v - pred).abs() / sd;
+            if pz > self.parity_thr {
+                for i in 1..RES_HITS {
+                    st.parity_hit_times[i - 1] = st.parity_hit_times[i];
+                }
+                st.parity_hit_times[RES_HITS - 1] = t;
+                let oldest = st.parity_hit_times[0];
+                if oldest != u64::MAX && t - oldest < RES_SPAN as u64 {
+                    self.alarmed = true;
+                    self.last_alarm = Some(AlarmReport {
+                        leg: Leg::Parity,
+                        channel: ch,
+                        tick: t,
+                        observed: pz,
+                        threshold: self.parity_thr,
+                        hit_gap: t - oldest,
+                    });
+                    return Some(Leg::Parity);
+                }
+            }
+        }
+
         if repeat_alarm && self.leg_enabled[1] {
             self.alarmed = true;
             self.last_alarm = Some(AlarmReport {
@@ -699,6 +932,48 @@ impl HybridMonitor {
         self.last_alarm
     }
 
+    /// Switch a channel to virtual mode: its own detector legs stop (the
+    /// sensor is declared dead), and [`HybridMonitor::virtual_value`]
+    /// serves a reconstructed reading from the surviving channels.
+    /// The rest of the monitor keeps operating — degraded, not blind.
+    pub fn quarantine(&mut self, ch: usize) {
+        if ch < self.quarantined.len() {
+            self.quarantined[ch] = true;
+        }
+    }
+
+    /// Return a quarantined channel to normal operation.
+    pub fn unquarantine(&mut self, ch: usize) {
+        if ch < self.quarantined.len() {
+            self.quarantined[ch] = false;
+        }
+    }
+
+    /// Reconstructed estimate of a channel from the most recent values of
+    /// the other channels, with its calibrated 1-sigma reconstruction
+    /// uncertainty. Works for any channel; this is the virtual reading a
+    /// downstream consumer uses when the physical sensor is quarantined.
+    #[must_use]
+    pub fn virtual_value(&self, ch: usize) -> Option<(f64, f64)> {
+        if ch >= self.recon.len() {
+            return None;
+        }
+        let r = &self.recon[ch];
+        let mut pred = r.bias;
+        for (s, st) in self.state.iter().enumerate() {
+            pred += r.weights[s] * st.prev;
+        }
+        Some((pred, r.sd))
+    }
+
+    /// Reconstruction quality (R², residual sd) for a channel, measured on
+    /// the calibration data. R² near 1 = the channel is physically coupled
+    /// to the others and a virtual reading is trustworthy.
+    #[must_use]
+    pub fn reconstruction_quality(&self, ch: usize) -> Option<(f64, f64)> {
+        self.recon.get(ch).map(|r| (r.r2, r.sd))
+    }
+
     /// Export every calibrated constant — for baking a calibration into
     /// generated flight code (see `codegen::generate_hybrid_c`).
     #[must_use]
@@ -734,6 +1009,7 @@ impl HybridMonitor {
             Leg::LevelShift => 3,
             Leg::ResidualCusum => 4,
             Leg::Missingness => 5,
+            Leg::Parity => 6,
         };
         self.leg_enabled[idx] = on;
     }
@@ -747,6 +1023,7 @@ impl HybridMonitor {
             st.roll_streak = 0;
             st.res_hit_times = [u64::MAX; RES_HITS];
             st.miss_times = [u64::MAX; MISS_HITS];
+            st.parity_hit_times = [u64::MAX; RES_HITS];
         }
     }
 }
@@ -852,6 +1129,92 @@ mod tests {
                         "clean multi-rate alarmed at t={} ch={}", t, ch
                     );
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn virtual_sensor_reconstruction_is_accurate() {
+        // Quarantine bus_voltage (physically coupled to SOC: v = 26.5 +
+        // 3.4*soc + ...). The virtual reading must track the real value.
+        let calib = synth_spacecraft(1400, 7 + 100);
+        let clean = synth_spacecraft(1400, 7 + 200);
+        let mut mon = HybridMonitor::calibrate(&calib).expect("calibration");
+        let (r2, _sd) = mon.reconstruction_quality(1).expect("recon");
+        assert!(r2 > 0.9, "bus_voltage should be well-coupled, R2 = {}", r2);
+
+        mon.quarantine(1);
+        let mut err_sum = 0.0f64;
+        let mut n = 0usize;
+        for t in 0..1400usize {
+            for ch in 0..6 {
+                if ch == 1 {
+                    // dead sensor: no data pushed
+                    mon.push_channel(1, None);
+                } else {
+                    mon.push_channel(ch, Some(clean[ch][t]));
+                }
+            }
+            if t > 10 {
+                let (virt, _) = mon.virtual_value(1).expect("virtual");
+                err_sum += (virt - clean[1][t]).abs();
+                n += 1;
+            }
+        }
+        let mae = err_sum / n as f64;
+        let true_sd = {
+            let m = clean[1].iter().sum::<f64>() / 1400.0;
+            (clean[1].iter().map(|x| (x - m).powi(2)).sum::<f64>() / 1400.0).sqrt()
+        };
+        // Virtual reading must be far better than just guessing the mean.
+        assert!(
+            mae < 0.3 * true_sd,
+            "virtual MAE {} vs channel sd {}",
+            mae, true_sd
+        );
+    }
+
+    #[test]
+    fn survives_double_fault_with_dead_sensor() {
+        // Iron Man scenario: temp sensor (ch2) declared dead and
+        // quarantined. A drift fault later hits SOC. The monitor must still
+        // catch it — degraded, not blind.
+        let calib = synth_spacecraft(1400, 99 + 100);
+        let clean = synth_spacecraft(1400, 99 + 200);
+        let faulted = inject_fault(&clean, "drift", 99);
+        let mut mon = HybridMonitor::calibrate(&calib).expect("calibration");
+        mon.quarantine(2);
+        let mut alarm = None;
+        for t in 0..1400usize {
+            for ch in 0..6 {
+                let v = if ch == 2 { None } else { Some(faulted[ch][t]) };
+                if let Some(leg) = mon.push_channel(ch, v) {
+                    alarm = Some((t, leg));
+                }
+            }
+            if alarm.is_some() {
+                break;
+            }
+        }
+        let (t, _leg) = alarm.expect("drift must still be caught with ch2 dead");
+        // fault starts at 58% of 1400 = 812
+        assert!(t >= 812, "alarm at {} before fault", t);
+    }
+
+    #[test]
+    fn quarantined_channel_never_alarms_clean() {
+        let calib = synth_spacecraft(1400, 55 + 100);
+        let clean = synth_spacecraft(1400, 55 + 200);
+        let mut mon = HybridMonitor::calibrate(&calib).expect("calibration");
+        mon.quarantine(0);
+        for t in 0..1400usize {
+            for ch in 0..6 {
+                let v = if ch == 0 { None } else { Some(clean[ch][t]) };
+                assert!(
+                    mon.push_channel(ch, v).is_none(),
+                    "clean stream alarmed at t={} ch={}",
+                    t, ch
+                );
             }
         }
     }
