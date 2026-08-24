@@ -185,6 +185,7 @@ fn main() {
         "monitor-perf" => cmd_monitor_perf(),
         "monitor-real" => cmd_monitor_real(),
         "generate-hybrid" => cmd_generate_hybrid(&args),
+        "mission" => cmd_mission(),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -2665,6 +2666,75 @@ fn cmd_generate_hybrid(args: &[String]) {
     println!("Generated {} ({} channels, {} bytes)", out, mon.channels(), code.len());
     println!("Compile:  gcc -std=c99 -Wall -Werror -O2 -DHYBRID_STANDALONE_TEST -o hybrid {} -lm", out);
     println!("Self-test: ./hybrid  (expects: SELFTEST PASS)");
+}
+
+fn cmd_mission() {
+    use struktura::autopilot::{AutoPilot, Event};
+    use struktura::monitor::HybridMonitor;
+    use struktura::telemetry_bench::synth_spacecraft;
+
+    println!();
+    println!("  \x1b[1mAUTONOMOUS MISSION GAUNTLET\x1b[0m — no human in the loop");
+    println!("  24,000 samples. Scripted events the autopilot must survive alone:");
+    println!("    t= 4,000  temp sensor freezes (dead sensor)");
+    println!("    t=10,000  PERMANENT regime change (+0.8 sigma, all channels)");
+    println!("    t=18,000  drift fault on SOC — in the NEW regime");
+    println!("  ================================================================");
+    println!();
+
+    let n = 24_000usize;
+    let calib = synth_spacecraft(2048, 31_337 + 100);
+    let stream = synth_spacecraft(n, 31_337 + 200);
+    let ch_sd: Vec<f64> = (0..6)
+        .map(|ch| {
+            let c = &calib[ch];
+            let m = c.iter().sum::<f64>() / c.len() as f64;
+            (c.iter().map(|x| (x - m) * (x - m)).sum::<f64>() / c.len() as f64).sqrt()
+        })
+        .collect();
+    let mon = HybridMonitor::calibrate(&calib).expect("calibration");
+    let mut ap = AutoPilot::new(mon);
+
+    let valid = [true; 6];
+    let mut sample = [0.0f64; 6];
+    let names = ["soc", "bus_voltage", "temp", "wheel", "pointing", "payload_current"];
+    for t in 0..n {
+        for ch in 0..6 {
+            let mut v = stream[ch][t];
+            if ch == 2 && t >= 4000 { v = stream[2][4000]; }
+            if t >= 10_000 { v += 0.8 * ch_sd[ch]; }
+            if ch == 0 && t >= 18_000 { v += (t - 18_000) as f64 * 0.0005 * ch_sd[0]; }
+            sample[ch] = v;
+        }
+        for ev in ap.push(&sample, &valid) {
+            match ev {
+                Event::Alarm { tick, report, class } => println!(
+                    "  t={:>6}  \x1b[33mALARM\x1b[0m        {:?} on {} (class: {})",
+                    tick, report.leg, names[report.channel], class
+                ),
+                Event::Quarantined { tick, channel } => println!(
+                    "  t={:>6}  \x1b[31mQUARANTINE\x1b[0m   {} declared dead -> virtual mode",
+                    tick, names[channel]
+                ),
+                Event::AdaptationStarted { tick } => println!(
+                    "  t={:>6}  \x1b[36mADAPTING\x1b[0m     level shift: collecting new-regime window",
+                    tick
+                ),
+                Event::Recalibrated { tick } => println!(
+                    "  t={:>6}  \x1b[32mRECALIBRATED\x1b[0m guard passed -> new normal accepted",
+                    tick
+                ),
+                Event::RolledBack { tick, .. } => println!(
+                    "  t={:>6}  \x1b[31mROLLBACK\x1b[0m     guard alarmed -> adaptation rejected",
+                    tick
+                ),
+            }
+        }
+    }
+    println!();
+    println!("  Mission complete. Every decision above was made autonomously.");
+    println!("  (Reproduce exactly: deterministic seeds. Assertions in autopilot tests.)");
+    println!();
 }
 
 fn generate_ros_package() -> String {

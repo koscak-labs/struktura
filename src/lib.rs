@@ -1217,6 +1217,7 @@ pub mod genome;
 pub mod telemetry_bench;
 pub mod monitor;
 pub mod prognosis;
+pub mod autopilot;
 pub mod mfdfa;
 pub mod trend;
 pub mod classify;
