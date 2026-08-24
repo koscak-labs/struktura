@@ -856,14 +856,21 @@ fn cmd_fingerprint(args: &[String]) {
 
 fn cmd_classify(args: &[String]) {
     if args.len() < 3 {
-        eprintln!("Usage: struktura classify <file_or_->  (alias: what)");
+        eprintln!("Usage: struktura classify <file_or_-> [--json]  (alias: what)");
         eprintln!("  What kind of signal is this? White noise? Brownian? 1/f?");
         process::exit(1);
     }
     use struktura::classify::classify;
 
+    let json_mode = args.iter().any(|a| a == "--json");
     let values = read_input(&args[2]);
     let result = classify(&values);
+
+    if json_mode {
+        println!("{{\"alpha\":{:.4},\"r_squared\":{:.4},\"type\":\"{}\",\"description\":\"{}\",\"n\":{}}}",
+            result.alpha, result.r_squared, result.signal_type, result.description, result.law.n);
+        return;
+    }
 
     println!();
     println!("  \x1b[1mSIGNAL CLASSIFICATION\x1b[0m");
