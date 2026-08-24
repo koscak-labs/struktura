@@ -26,6 +26,7 @@ serde = { version = "1", features = ["derive"], optional = true }
 libm = "0.2"
 
 [dev-dependencies]
+proptest = "1"
 
 [[example]]
 name = "benchmark"

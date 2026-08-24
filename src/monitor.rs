@@ -311,6 +311,9 @@ impl HybridMonitor {
         if length < 2 * WINDOW || length <= ROLL {
             return None;
         }
+        if clean.iter().any(|c| c.len() != length) {
+            return None;
+        }
 
         let mut scratch: Vec<f64> = Vec::with_capacity(WINDOW);
         let mut calib = Vec::with_capacity(channels);
