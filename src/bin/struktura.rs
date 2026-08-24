@@ -739,6 +739,38 @@ fn cmd_batch(args: &[String]) {
     println!();
 }
 
+fn cmd_oneline(args: &[String]) {
+    if args.len() < 3 {
+        eprintln!("Usage: struktura oneline <file_or_-> [--baseline <file>]");
+        eprintln!("  One-line summary for logs, alerts, Slack webhooks.");
+        process::exit(1);
+    }
+    use struktura::classify::classify;
+
+    let values = read_input(&args[2]);
+    let law = analyze(&values);
+    let cls = classify(&values);
+
+    let mut baseline_file: Option<String> = None;
+    let mut i = 3;
+    while i < args.len() {
+        if args[i] == "--baseline" && i + 1 < args.len() {
+            baseline_file = Some(args[i + 1].clone());
+            i += 2;
+        } else { i += 1; }
+    }
+
+    if let Some(ref bf) = baseline_file {
+        let baseline = read_input(bf);
+        let result = struktura::compare(&baseline, &values);
+        println!("struktura: α={:.3} R²={:.3} {} shift={:+.3} {} n={}",
+            law.dfa.alpha, law.dfa.r_squared, cls.signal_type, result.shift, result.verdict, law.n);
+    } else {
+        println!("struktura: α={:.3} R²={:.3} {} n={}",
+            law.dfa.alpha, law.dfa.r_squared, cls.signal_type, law.n);
+    }
+}
+
 fn cmd_watch(args: &[String]) {
     if args.len() < 3 {
         eprintln!("Usage: struktura watch <file.csv> [--interval <secs>] [--baseline <file>]");
