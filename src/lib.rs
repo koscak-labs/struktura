@@ -1325,6 +1325,7 @@ pub(crate) fn solve_ridge(a: &mut [f64], b: &mut [f64], n: usize) -> bool {
 pub mod mfdfa;
 pub mod trend;
 pub mod classify;
+pub mod changepoint;
 pub mod fingerprint;
 #[cfg(feature = "std")]
 pub mod codegen;

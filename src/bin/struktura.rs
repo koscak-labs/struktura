@@ -3252,8 +3252,7 @@ fn cmd_guard(args: &[String]) {
 /// new rows — like `tail -f` but with anomaly detection. Ctrl-C to stop.
 fn run_guard_watch(path: &str, baseline_n: usize, json: bool, poll_ms: u64) -> ! {
     use struktura::monitor::HybridMonitor;
-    use struktura::autopilot::{AutoPilot, Event};
-    use struktura::monitor::classify_alarm;
+    use struktura::autopilot::AutoPilot;
 
     let initial = std::fs::read_to_string(path).unwrap_or_else(|e| {
         eprintln!("cannot read {}: {}", path, e);
@@ -3276,14 +3275,14 @@ fn run_guard_watch(path: &str, baseline_n: usize, json: bool, poll_ms: u64) -> !
     // Build column mask + initial rows
     let mut col_mask: Vec<bool> = Vec::new();
     let mut rows: Vec<Vec<f64>> = Vec::new();
-    let mut header_lines = 0usize;
+    let mut _header_lines = 0usize;
     for line in initial.lines() {
         let line = line.trim();
-        if line.is_empty() || line.starts_with('#') { header_lines += 1; continue; }
+        if line.is_empty() || line.starts_with('#') { _header_lines += 1; continue; }
         if col_mask.is_empty() {
             let fields: Vec<&str> = line.split(delim).map(|s| s.trim().trim_matches('"')).collect();
             col_mask = fields.iter().map(|s| s.parse::<f64>().is_ok()).collect();
-            if col_mask.iter().all(|&m| !m) { header_lines += 1; col_mask.clear(); continue; }
+            if col_mask.iter().all(|&m| !m) { _header_lines += 1; col_mask.clear(); continue; }
         }
         if let Some(v) = parse_row(line, &col_mask) { rows.push(v); }
     }
@@ -3356,7 +3355,6 @@ fn run_guard_watch(path: &str, baseline_n: usize, json: bool, poll_ms: u64) -> !
 
 fn emit_event(t: usize, ev: &struktura::autopilot::Event, json: bool) {
     use struktura::autopilot::Event;
-    use struktura::monitor::classify_alarm;
     match ev {
         Event::Alarm { report, class, .. } => {
             if json {
@@ -3544,7 +3542,7 @@ fn run_guard(content: &str, baseline_n: usize, json: bool) -> i32 {
 }
 
 fn cmd_when(args: &[String]) {
-    use struktura::changepoint::{find_changepoints, Changepoint};
+    use struktura::changepoint::find_changepoints;
 
     if args.len() < 3 {
         eprintln!("Usage: struktura when <file.csv> [--max N]");
