@@ -3184,14 +3184,20 @@ fn cmd_guard(args: &[String]) {
     let mut file_path = String::new();
     let mut baseline_n = 0usize;
     let mut json = false;
+    let mut watch = false;
+    let mut watch_ms = 1000u64;
     let mut i = 2;
     while i < args.len() {
         match args[i].as_str() {
             "--baseline" if i + 1 < args.len() => { baseline_n = args[i + 1].parse().unwrap_or(0); i += 2; }
             "--json" => { json = true; i += 1; }
+            "--watch" | "-w" => { watch = true; i += 1; }
+            "--interval" if i + 1 < args.len() => { watch_ms = args[i + 1].parse().unwrap_or(1000); i += 2; }
             "--help" | "-h" => {
-                println!("struktura guard <file.csv> [--baseline N] [--json]");
+                println!("struktura guard <file.csv> [--baseline N] [--json] [--watch]");
                 println!("  Monitor any CSV for anomalies. Exit: 0=healthy 1=fault 2=error");
+                println!("  --watch        Follow the file (like tail -f), monitor new rows live");
+                println!("  --interval MS  Poll interval for --watch (default 1000ms)");
                 process::exit(0);
             }
             s if !s.starts_with('-') && file_path.is_empty() => { file_path = s.to_string(); i += 1; }
@@ -3209,8 +3215,148 @@ fn cmd_guard(args: &[String]) {
             process::exit(2);
         })
     };
+    if watch && !file_path.is_empty() && file_path != "-" {
+        run_guard_watch(&file_path, baseline_n, json, watch_ms);
+    }
     let exit = run_guard(&content, baseline_n, json);
     process::exit(exit);
+}
+
+/// Watch mode: calibrate on the file's current content, then tail it for
+/// new rows — like `tail -f` but with anomaly detection. Ctrl-C to stop.
+fn run_guard_watch(path: &str, baseline_n: usize, json: bool, poll_ms: u64) -> ! {
+    use struktura::monitor::HybridMonitor;
+    use struktura::autopilot::{AutoPilot, Event};
+    use struktura::monitor::classify_alarm;
+
+    let initial = std::fs::read_to_string(path).unwrap_or_else(|e| {
+        eprintln!("cannot read {}: {}", path, e);
+        process::exit(2);
+    });
+
+    let delim = if initial.lines().next().unwrap_or("").contains('\t') { '\t' }
+                else if initial.lines().next().unwrap_or("").contains(';') { ';' }
+                else { ',' };
+
+    let parse_row = |line: &str, mask: &[bool]| -> Option<Vec<f64>> {
+        let fields: Vec<&str> = line.split(delim).map(|s| s.trim().trim_matches('"')).collect();
+        let vals: Vec<f64> = fields.iter().zip(mask.iter())
+            .filter(|(_, &m)| m)
+            .filter_map(|(s, _)| s.parse().ok())
+            .collect();
+        if vals.is_empty() { None } else { Some(vals) }
+    };
+
+    // Build column mask + initial rows
+    let mut col_mask: Vec<bool> = Vec::new();
+    let mut rows: Vec<Vec<f64>> = Vec::new();
+    let mut header_lines = 0usize;
+    for line in initial.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') { header_lines += 1; continue; }
+        if col_mask.is_empty() {
+            let fields: Vec<&str> = line.split(delim).map(|s| s.trim().trim_matches('"')).collect();
+            col_mask = fields.iter().map(|s| s.parse::<f64>().is_ok()).collect();
+            if col_mask.iter().all(|&m| !m) { header_lines += 1; col_mask.clear(); continue; }
+        }
+        if let Some(v) = parse_row(line, &col_mask) { rows.push(v); }
+    }
+    if rows.is_empty() { eprintln!("no numeric rows"); process::exit(2); }
+    let ncols = rows[0].len();
+    let calib_n = if baseline_n > 0 { baseline_n.min(rows.len()) } else { rows.len().min(rows.len()) };
+
+    let channels: Vec<Vec<f64>> = (0..ncols)
+        .map(|ch| rows.iter().map(|r| r.get(ch).copied().unwrap_or(0.0)).collect())
+        .collect();
+    let calib: Vec<Vec<f64>> = channels.iter().map(|c| c[..calib_n].to_vec()).collect();
+    let mon = match HybridMonitor::calibrate(&calib) {
+        Some(m) => m,
+        None => { eprintln!("calibration failed (need >= 192 samples)"); process::exit(2); }
+    };
+
+    let mut ap = AutoPilot::new(mon);
+    let valid: Vec<bool> = vec![true; ncols];
+    let mut sample = vec![0.0f64; ncols];
+
+    let mut last_alarm: Vec<(usize, u8)> = Vec::new();
+    const ALARM_COOLDOWN: usize = 50;
+    let mut emit_dedup = |t: usize, ev: &struktura::autopilot::Event, json: bool| {
+        if let struktura::autopilot::Event::Alarm { report, .. } = ev {
+            let leg_id = report.leg as u8;
+            let dup = last_alarm.iter().any(|&(lt, ll)| ll == leg_id && t.saturating_sub(lt) < ALARM_COOLDOWN);
+            last_alarm.retain(|&(lt, _)| t.saturating_sub(lt) < ALARM_COOLDOWN);
+            last_alarm.push((t, leg_id));
+            if dup { return; }
+        }
+        emit_event(t, ev, json);
+    };
+
+    // Feed existing rows past calibration through the monitor first
+    for t in calib_n..rows.len() {
+        for ch in 0..ncols { sample[ch] = rows[t].get(ch).copied().unwrap_or(0.0); }
+        for ev in ap.push(&sample, &valid) {
+            emit_dedup(t, &ev, json);
+        }
+    }
+    let mut lines_seen = initial.lines().count();
+
+    if !json {
+        eprintln!("struktura guard --watch: {} ch, calibrated on {} rows, tailing {} (poll {}ms, Ctrl-C to stop)",
+            ncols, calib_n, path, poll_ms);
+    }
+
+    // Tail loop
+    let mut t = rows.len();
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(poll_ms));
+        let content = match std::fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let new_lines: Vec<&str> = content.lines().skip(lines_seen).collect();
+        if new_lines.is_empty() { continue; }
+        lines_seen += new_lines.len();
+        for line in new_lines {
+            if let Some(vals) = parse_row(line, &col_mask) {
+                for ch in 0..ncols { sample[ch] = vals.get(ch).copied().unwrap_or(0.0); }
+                for ev in ap.push(&sample, &valid) {
+                    emit_dedup(t, &ev, json);
+                }
+                t += 1;
+            }
+        }
+    }
+}
+
+fn emit_event(t: usize, ev: &struktura::autopilot::Event, json: bool) {
+    use struktura::autopilot::Event;
+    use struktura::monitor::classify_alarm;
+    match ev {
+        Event::Alarm { report, class, .. } => {
+            if json {
+                println!("{{\"event\":\"alarm\",\"t\":{},\"leg\":\"{:?}\",\"channel\":{},\"class\":\"{}\"}}",
+                    t, report.leg, report.channel, class);
+            } else {
+                eprintln!("  t={:>6}  ALARM  {:?} ch{} ({})", t, report.leg, report.channel, class);
+            }
+        }
+        Event::Quarantined { channel, .. } => {
+            if json { println!("{{\"event\":\"quarantine\",\"t\":{},\"channel\":{}}}", t, channel); }
+            else { eprintln!("  t={:>6}  QUARANTINE ch{}", t, channel); }
+        }
+        Event::AdaptationStarted { .. } => {
+            if json { println!("{{\"event\":\"adapting\",\"t\":{}}}", t); }
+            else { eprintln!("  t={:>6}  ADAPTING", t); }
+        }
+        Event::Recalibrated { .. } => {
+            if json { println!("{{\"event\":\"recalibrated\",\"t\":{}}}", t); }
+            else { eprintln!("  t={:>6}  RECALIBRATED", t); }
+        }
+        Event::RolledBack { .. } => {
+            if json { println!("{{\"event\":\"rollback\",\"t\":{}}}", t); }
+            else { eprintln!("  t={:>6}  ROLLBACK", t); }
+        }
+    }
 }
 
 /// Returns exit code: 0 = healthy, 1 = faults found, 2 = calibration error.
