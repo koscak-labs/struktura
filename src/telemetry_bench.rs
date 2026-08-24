@@ -236,16 +236,32 @@ pub struct FaultDetectResult {
     pub best_channel: usize,
 }
 
+/// Everything the statistical benchmark produced, including the honesty
+/// checks: the Bonferroni-corrected thresholds and the EMPIRICAL family-wise
+/// false-positive rate measured on held-out clean pairs.
+#[derive(Debug, Clone)]
+pub struct BenchmarkReport {
+    pub thresholds: Vec<f64>,
+    pub empirical_fpr: f64,
+    pub results: Vec<FaultDetectResult>,
+}
+
 /// Run the full statistical benchmark.
 ///
-/// For each seed: clean calibration (seed+100) vs faulted test (seed+200),
-/// per-channel α shift. Null = clean-vs-clean shifts. Detection = any channel
-/// shift > that channel's null 95th percentile.
-pub fn run_benchmark(length: usize, n_seeds: u64) -> (Vec<f64>, Vec<FaultDetectResult>) {
-    // Null distribution per channel
+/// Detection = ANY of the 6 channels' |Δα| (calibration vs test) exceeds
+/// that channel's threshold. Because 6 comparisons are made per decision,
+/// per-channel thresholds use the Bonferroni-corrected quantile
+/// (1 - 0.05/6 ≈ 99.17th percentile of the null) so the FAMILY-WISE false
+/// positive rate is ≤ 5%, not per-channel.
+///
+/// The null distribution uses `n_null` clean-vs-clean seed pairs (disjoint
+/// from evaluation seeds). The achieved family-wise FPR is then MEASURED on
+/// a further `n_seeds` held-out clean pairs and reported — no assumed FPR.
+pub fn run_benchmark(length: usize, n_seeds: u64, n_null: u64) -> BenchmarkReport {
+    // Null distribution per channel (seeds disjoint from eval seeds below)
     let mut null_shifts: Vec<Vec<f64>> = vec![Vec::new(); CHANNELS];
-    for seed in 1..=n_seeds {
-        let s = seed * 7919;
+    for seed in 1..=n_null {
+        let s = seed * 104729 + 1_000_000_007;
         let calib = synth_spacecraft(length, s + 100);
         let test = synth_spacecraft(length, s + 200);
         let a_calib = channel_alphas(&calib);
@@ -254,15 +270,47 @@ pub fn run_benchmark(length: usize, n_seeds: u64) -> (Vec<f64>, Vec<FaultDetectR
             null_shifts[ch].push((a_test[ch] - a_calib[ch]).abs());
         }
     }
-    let p95: Vec<f64> = null_shifts
+    // Bonferroni: family alpha 0.05 over 6 channels → per-channel 1 - 0.05/6
+    let q = 1.0 - 0.05 / CHANNELS as f64;
+    let thresholds: Vec<f64> = null_shifts
         .iter()
         .map(|shifts| {
             let mut s = shifts.clone();
             s.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            let idx = ((s.len() as f64 * 0.95) as usize).min(s.len() - 1);
+            let idx = ((s.len() as f64 * q) as usize).min(s.len() - 1);
             s[idx]
         })
         .collect();
+
+    let decide = |a_calib: &[f64], a_test: &[f64]| -> (bool, f64, Option<usize>) {
+        let mut detected = false;
+        let mut max_shift = 0.0f64;
+        let mut hit_channel = None;
+        for ch in 0..CHANNELS {
+            let shift = (a_test[ch] - a_calib[ch]).abs();
+            if shift > max_shift {
+                max_shift = shift;
+            }
+            if shift > thresholds[ch] && hit_channel.is_none() {
+                detected = true;
+                hit_channel = Some(ch);
+            }
+        }
+        (detected, max_shift, hit_channel)
+    };
+
+    // Empirical family-wise FPR on held-out clean pairs (eval seed range)
+    let mut false_positives = 0usize;
+    for seed in 1..=n_seeds {
+        let s = seed * 7919;
+        let calib = synth_spacecraft(length, s + 100);
+        let test = synth_spacecraft(length, s + 200);
+        let (fp, _, _) = decide(&channel_alphas(&calib), &channel_alphas(&test));
+        if fp {
+            false_positives += 1;
+        }
+    }
+    let empirical_fpr = false_positives as f64 / n_seeds as f64;
 
     let mut results = Vec::new();
     for fault in FAULT_TYPES.iter() {
@@ -274,22 +322,13 @@ pub fn run_benchmark(length: usize, n_seeds: u64) -> (Vec<f64>, Vec<FaultDetectR
             let calib = synth_spacecraft(length, s + 100);
             let test_clean = synth_spacecraft(length, s + 200);
             let test_faulted = inject_fault(&test_clean, fault, s);
-            let a_calib = channel_alphas(&calib);
-            let a_test = channel_alphas(&test_faulted);
-            let mut detected = false;
-            let mut max_shift = 0.0f64;
-            for ch in 0..CHANNELS {
-                let shift = (a_test[ch] - a_calib[ch]).abs();
-                if shift > max_shift {
-                    max_shift = shift;
-                }
-                if shift > p95[ch] {
-                    detected = true;
-                    channel_hits[ch] += 1;
-                }
-            }
+            let (detected, max_shift, hit) =
+                decide(&channel_alphas(&calib), &channel_alphas(&test_faulted));
             if detected {
                 detections += 1;
+                if let Some(ch) = hit {
+                    channel_hits[ch] += 1;
+                }
             }
             max_shifts.push(max_shift);
         }
@@ -306,7 +345,85 @@ pub fn run_benchmark(length: usize, n_seeds: u64) -> (Vec<f64>, Vec<FaultDetectR
             best_channel,
         });
     }
-    (p95, results)
+    BenchmarkReport { thresholds, empirical_fpr, results }
+}
+
+/// Inject a correlation_change fault with a custom duration fraction.
+/// Same mean/amplitude preservation as the standard injector.
+pub fn inject_correlation_change(
+    clean: &[Vec<f64>],
+    seed: u64,
+    duration_frac: f64,
+) -> Vec<Vec<f64>> {
+    let length = clean[0].len();
+    let start = (length as f64 * 0.58) as usize;
+    let duration = ((length as f64 * duration_frac) as usize).max(8);
+    let stop = (start + duration).min(length);
+    let mut observed: Vec<Vec<f64>> = clean.iter().map(|c| c.clone()).collect();
+    let mut rng = GaussRng::new(seed ^ 0xFA17);
+    let ch = 0;
+    let seg = &clean[ch][start..stop];
+    let mean = seg.iter().sum::<f64>() / seg.len() as f64;
+    let std = channel_std(seg);
+    for i in start..stop {
+        observed[ch][i] = rng.normal(mean, std);
+    }
+    observed
+}
+
+/// Detection-rate curve for correlation_change as fault duration grows.
+/// Returns (duration_frac, detect_rate) pairs using the same Bonferroni
+/// thresholds and disjoint-seed methodology as `run_benchmark`.
+pub fn correlation_resolution_curve(
+    length: usize,
+    n_seeds: u64,
+    n_null: u64,
+    duration_fracs: &[f64],
+) -> Vec<(f64, f64)> {
+    // Same null-threshold construction as run_benchmark
+    let mut null_shifts: Vec<Vec<f64>> = vec![Vec::new(); CHANNELS];
+    for seed in 1..=n_null {
+        let s = seed * 104729 + 1_000_000_007;
+        let calib = synth_spacecraft(length, s + 100);
+        let test = synth_spacecraft(length, s + 200);
+        let a_calib = channel_alphas(&calib);
+        let a_test = channel_alphas(&test);
+        for ch in 0..CHANNELS {
+            null_shifts[ch].push((a_test[ch] - a_calib[ch]).abs());
+        }
+    }
+    let q = 1.0 - 0.05 / CHANNELS as f64;
+    let thresholds: Vec<f64> = null_shifts
+        .iter()
+        .map(|shifts| {
+            let mut s = shifts.clone();
+            s.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let idx = ((s.len() as f64 * q) as usize).min(s.len() - 1);
+            s[idx]
+        })
+        .collect();
+
+    duration_fracs
+        .iter()
+        .map(|&frac| {
+            let mut detections = 0usize;
+            for seed in 1..=n_seeds {
+                let s = seed * 7919;
+                let calib = synth_spacecraft(length, s + 100);
+                let test_clean = synth_spacecraft(length, s + 200);
+                let faulted = inject_correlation_change(&test_clean, s, frac);
+                let a_calib = channel_alphas(&calib);
+                let a_test = channel_alphas(&faulted);
+                let detected = (0..CHANNELS).any(|ch| {
+                    (a_test[ch] - a_calib[ch]).abs() > thresholds[ch]
+                });
+                if detected {
+                    detections += 1;
+                }
+            }
+            (frac, detections as f64 / n_seeds as f64)
+        })
+        .collect()
 }
 
 #[cfg(test)]

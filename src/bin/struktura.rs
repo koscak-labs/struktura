@@ -2085,12 +2085,14 @@ fn cmd_benchmark_telemetry(args: &[String]) {
     use struktura::telemetry_bench::{run_benchmark, CHANNEL_NAMES};
 
     let mut length = 700usize;
-    let mut n_seeds = 20u64;
+    let mut n_seeds = 200u64;
+    let mut n_null = 200u64;
     let mut i = 2;
     while i < args.len() {
         match args[i].as_str() {
             "--length" if i + 1 < args.len() => { length = args[i + 1].parse().unwrap_or(700); i += 2; }
-            "--seeds" if i + 1 < args.len() => { n_seeds = args[i + 1].parse().unwrap_or(20); i += 2; }
+            "--seeds" if i + 1 < args.len() => { n_seeds = args[i + 1].parse().unwrap_or(200); i += 2; }
+            "--null-seeds" if i + 1 < args.len() => { n_null = args[i + 1].parse().unwrap_or(200); i += 2; }
             _ => { i += 1; }
         }
     }
@@ -2098,20 +2100,24 @@ fn cmd_benchmark_telemetry(args: &[String]) {
     println!();
     println!("  \x1b[1mSTRUKTURA COUPLED-TELEMETRY BENCHMARK\x1b[0m");
     println!("  6-channel spacecraft sim (power/thermal/wheel/pointing/payload)");
-    println!("  Fault window: 58%..70% of sequence | {} samples | {} seeds", length, n_seeds);
+    println!("  Fault window: 58%..70% of sequence | {} samples", length);
+    println!("  {} null seeds (threshold calibration) + {} eval seeds (disjoint)", n_null, n_seeds);
     println!("  ================================================================");
     println!();
 
-    let (p95, results) = run_benchmark(length, n_seeds);
+    let report = run_benchmark(length, n_seeds, n_null);
 
-    println!("  Per-channel null 95th percentile |Δα| (clean vs clean):");
-    for (ch, p) in p95.iter().enumerate() {
+    println!("  Per-channel Bonferroni threshold |Δα| (99.17th pct of null, family FPR <= 5%):");
+    for (ch, p) in report.thresholds.iter().enumerate() {
         println!("    {:<16} {:.4}", CHANNEL_NAMES[ch], p);
     }
     println!();
+    println!("  \x1b[1mEmpirical family-wise FPR on {} held-out clean pairs: {:.1}%\x1b[0m",
+        n_seeds, report.empirical_fpr * 100.0);
+    println!();
     println!("  | Fault Type         | Detect Rate | Mean Max |Δα| | Best Channel     |");
     println!("  |--------------------|-------------|---------------|------------------|");
-    for r in &results {
+    for r in &report.results {
         let rate_color = if r.detect_rate >= 0.8 { "\x1b[32m" }
                          else if r.detect_rate >= 0.4 { "\x1b[33m" }
                          else { "\x1b[31m" };
@@ -2123,8 +2129,23 @@ fn cmd_benchmark_telemetry(args: &[String]) {
     }
     println!();
     println!("  Detection = any channel's |Δα| (calibration vs test) exceeds that");
-    println!("  channel's 95th-pct clean-vs-clean shift (per-channel FPR <= 5%).");
+    println!("  channel's Bonferroni-corrected null threshold. A detect rate is only");
+    println!("  meaningful relative to the measured FPR line above.");
     println!("  correlation_change = structural fault the additive taxonomy misses.");
+    println!();
+    // Resolution curve: how long must a structural fault persist to be seen?
+    use struktura::telemetry_bench::correlation_resolution_curve;
+    let fracs = [0.12, 0.20, 0.30, 0.42];
+    let curve = correlation_resolution_curve(length, n_seeds, n_null, &fracs);
+    println!("  \x1b[1mSTRUCTURAL FAULT RESOLUTION CURVE\x1b[0m (correlation_change)");
+    println!("  | Fault duration | Samples | Detect Rate |");
+    println!("  |----------------|---------|-------------|");
+    for (frac, rate) in &curve {
+        let samples = (length as f64 * frac) as usize;
+        let color = if *rate >= 0.8 { "\x1b[32m" } else if *rate >= 0.4 { "\x1b[33m" } else { "\x1b[31m" };
+        println!("  | {:>4.0}% of seq    | {:<7} | {}{:>4.0}%\x1b[0m       |",
+            frac * 100.0, samples, color, rate * 100.0);
+    }
     println!();
     println!("  Algorithm: Detrended Fluctuation Analysis (Peng 1994)");
     println!("  https://crates.io/crates/struktura");
