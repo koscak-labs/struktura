@@ -122,6 +122,8 @@ struct ChannelCalib {
 }
 
 /// Per-channel runtime state (fixed size, mutated every sample).
+/// Every counter is clocked in THAT channel's own ticks, so channels may
+/// arrive at different rates ([`HybridMonitor::push_channel`]).
 #[derive(Debug, Clone)]
 struct ChannelState {
     ring: [f64; WINDOW],
@@ -130,11 +132,18 @@ struct ChannelState {
     run: usize,
     cusum_pos: f64,
     cusum_neg: f64,
+    /// This channel's own sample counter.
+    t: u64,
+    res_hit_times: [u64; RES_HITS],
+    miss_times: [u64; MISS_HITS],
+    dfa_streak: usize,
+    roll_streak: usize,
 }
 
 /// Streaming hybrid monitor over `n_channels` telemetry channels.
 ///
-/// Feed one sample per channel per tick via [`HybridMonitor::push`].
+/// Feed one sample per channel per tick via [`HybridMonitor::push`], or
+/// per-channel at independent rates via [`HybridMonitor::push_channel`].
 /// Returns `Some(Leg)` on the tick an alarm is raised.
 pub struct HybridMonitor {
     calib: Vec<ChannelCalib>,
@@ -142,10 +151,6 @@ pub struct HybridMonitor {
     res_thr: f64,
     dfa_thr: f64,
     cusum_thr: f64,
-    res_hit_times: [u64; RES_HITS],
-    dfa_streak: usize,
-    roll_streak: usize,
-    t: u64,
     scratch: Vec<f64>,
     alarmed: bool,
     /// Per-leg enable mask: [residual, repeated, dfa, level, cusum, miss].
@@ -153,9 +158,6 @@ pub struct HybridMonitor {
     /// (e.g. level-shift on a naturally trending channel) are disabled
     /// at configuration time — standard flight-monitor practice.
     leg_enabled: [bool; 6],
-    /// Timestamps of recent invalid samples (any channel), for the
-    /// missingness leg's `MISS_HITS`-in-`MISS_SPAN` rule.
-    miss_times: [u64; MISS_HITS],
 }
 
 /// Extreme-value (Gumbel) return-level threshold.
@@ -361,6 +363,11 @@ impl HybridMonitor {
                 run: 1,
                 cusum_pos: 0.0,
                 cusum_neg: 0.0,
+                t: 0,
+                res_hit_times: [u64::MAX; RES_HITS],
+                miss_times: [u64::MAX; MISS_HITS],
+                dfa_streak: 0,
+                roll_streak: 0,
             })
             .collect();
 
@@ -370,14 +377,9 @@ impl HybridMonitor {
             res_thr,
             dfa_thr,
             cusum_thr,
-            res_hit_times: [u64::MAX; RES_HITS],
-            dfa_streak: 0,
-            roll_streak: 0,
-            t: 0,
             scratch,
             alarmed: false,
             leg_enabled: [true; 6],
-            miss_times: [u64::MAX; MISS_HITS],
         })
     }
 
@@ -405,22 +407,39 @@ impl HybridMonitor {
     /// `MISS_SPAN` ticks raise [`Leg::Missingness`]. Calibration data is
     /// assumed fully valid.
     pub fn push_with_validity(&mut self, sample: &[f64], valid: &[bool]) -> Option<Leg> {
-        if self.alarmed || sample.len() != self.calib.len() {
+        if sample.len() != self.calib.len() {
             return None;
         }
-        let t = self.t;
-        self.t += 1;
-        let ring_full = t >= WINDOW as u64;
-        let roll_full = t >= ROLL as u64;
+        let mut alarm = None;
+        for (ch, &v) in sample.iter().enumerate() {
+            let is_valid = valid.get(ch).copied().unwrap_or(true);
+            let value = if is_valid { Some(v) } else { None };
+            if let Some(leg) = self.push_channel(ch, value) {
+                alarm = Some(leg);
+            }
+        }
+        alarm
+    }
 
-        // First sample of a stream primes per-channel state without scoring:
-        // `prev` still holds the calibration sequence's last value, and a
-        // fresh stream starts at an unrelated level — scoring across that
-        // boundary poisons the residual and CUSUM legs with one giant
-        // artificial residual.
+    /// Feed one sample for ONE channel — channels may arrive at independent
+    /// rates (multi-rate telemetry). `None` marks a missing/invalid sample
+    /// slot. Every detector counter is clocked in this channel's own ticks.
+    /// Returns `Some(leg)` on the alarm tick; the monitor then latches.
+    pub fn push_channel(&mut self, ch: usize, value: Option<f64>) -> Option<Leg> {
+        if self.alarmed || ch >= self.calib.len() {
+            return None;
+        }
+        let cc = &self.calib[ch];
+        let st = &mut self.state[ch];
+        let t = st.t;
+        st.t += 1;
+
+        // First sample of a stream primes state without scoring: `prev`
+        // still holds the calibration sequence's last value, and a fresh
+        // stream starts at an unrelated level — scoring across that boundary
+        // poisons the residual and CUSUM legs with one giant residual.
         if t == 0 {
-            for (ch, &v) in sample.iter().enumerate() {
-                let st = &mut self.state[ch];
+            if let Some(v) = value {
                 st.prev = v;
                 st.ring[0] = v;
                 st.roll_ring[0] = v;
@@ -428,69 +447,55 @@ impl HybridMonitor {
             return None;
         }
 
-        // Legs 1 + 2 + ring maintenance
-        let mut res_hit = false;
-        let mut repeat_alarm = false;
-        let mut cusum_alarm = false;
-        let mut any_invalid = false;
-        for (ch, &v) in sample.iter().enumerate() {
-            let cc = &self.calib[ch];
-            let st = &mut self.state[ch];
-            let is_valid = valid.get(ch).copied().unwrap_or(true);
-
-            if !is_valid {
-                // Exclude from all value/structure legs; forward-fill the
-                // rings with the last valid value so DFA/rolling windows stay
-                // well-defined, and count the gap for the missingness leg.
-                any_invalid = true;
+        let v = match value {
+            Some(v) => v,
+            None => {
+                // Missing sample: forward-fill rings, count for leg 6.
                 st.ring[(t % WINDOW as u64) as usize] = st.prev;
                 st.roll_ring[(t % ROLL as u64) as usize] = st.prev;
-                continue;
-            }
-
-            let zs = (v - (cc.ar_a + cc.ar_b * st.prev)) / cc.ar_sd;
-            let z = zs.abs();
-            if z > self.res_thr {
-                res_hit = true;
-            }
-
-            st.cusum_pos = (st.cusum_pos + zs - CUSUM_K).max(0.0);
-            st.cusum_neg = (st.cusum_neg - zs - CUSUM_K).max(0.0);
-            if st.cusum_pos.max(st.cusum_neg) > self.cusum_thr {
-                cusum_alarm = true;
-            }
-
-            if v == st.prev {
-                st.run += 1;
-                if cc.repeat_enabled && st.run >= cc.max_run + REPEAT_MARGIN {
-                    repeat_alarm = true;
+                if self.leg_enabled[5] {
+                    for i in 1..MISS_HITS {
+                        st.miss_times[i - 1] = st.miss_times[i];
+                    }
+                    st.miss_times[MISS_HITS - 1] = t;
+                    let oldest = st.miss_times[0];
+                    if oldest != u64::MAX && t - oldest < MISS_SPAN as u64 {
+                        self.alarmed = true;
+                        return Some(Leg::Missingness);
+                    }
                 }
-            } else {
-                st.run = 1;
+                return None;
             }
-            st.prev = v;
+        };
 
-            st.ring[(t % WINDOW as u64) as usize] = v;
-            st.roll_ring[(t % ROLL as u64) as usize] = v;
-        }
-        if any_invalid && self.leg_enabled[5] {
-            for i in 1..MISS_HITS {
-                self.miss_times[i - 1] = self.miss_times[i];
+        // Leg 1: residual + leg 5: CUSUM (both from the same z-score)
+        let zs = (v - (cc.ar_a + cc.ar_b * st.prev)) / cc.ar_sd;
+        st.cusum_pos = (st.cusum_pos + zs - CUSUM_K).max(0.0);
+        st.cusum_neg = (st.cusum_neg - zs - CUSUM_K).max(0.0);
+        let cusum_alarm = st.cusum_pos.max(st.cusum_neg) > self.cusum_thr;
+
+        let res_hit = zs.abs() > self.res_thr;
+
+        // Leg 2: repeated value
+        let mut repeat_alarm = false;
+        if v == st.prev {
+            st.run += 1;
+            if cc.repeat_enabled && st.run >= cc.max_run + REPEAT_MARGIN {
+                repeat_alarm = true;
             }
-            self.miss_times[MISS_HITS - 1] = t;
-            let oldest = self.miss_times[0];
-            if oldest != u64::MAX && t - oldest < MISS_SPAN as u64 {
-                self.alarmed = true;
-                return Some(Leg::Missingness);
-            }
+        } else {
+            st.run = 1;
         }
+        st.prev = v;
+        st.ring[(t % WINDOW as u64) as usize] = v;
+        st.roll_ring[(t % ROLL as u64) as usize] = v;
+
         if res_hit && self.leg_enabled[0] {
-            // shift the fixed-size hit history (RES_HITS entries)
             for i in 1..RES_HITS {
-                self.res_hit_times[i - 1] = self.res_hit_times[i];
+                st.res_hit_times[i - 1] = st.res_hit_times[i];
             }
-            self.res_hit_times[RES_HITS - 1] = t;
-            let oldest = self.res_hit_times[0];
+            st.res_hit_times[RES_HITS - 1] = t;
+            let oldest = st.res_hit_times[0];
             if oldest != u64::MAX && t - oldest < RES_SPAN as u64 {
                 self.alarmed = true;
                 return Some(Leg::Residual);
@@ -505,47 +510,31 @@ impl HybridMonitor {
             return Some(Leg::ResidualCusum);
         }
 
-        // Leg 3: DFA every DFA_STRIDE ticks once the ring is full
-        if self.leg_enabled[2] && ring_full && t % DFA_STRIDE as u64 == 0 {
-            let mut hit = false;
-            for ch in 0..self.calib.len() {
-                let cc = &self.calib[ch];
-                let st = &self.state[ch];
-                // Copy ring into scratch order (oldest..newest). DFA is
-                // invariant to a cyclic rotation ONLY if we linearize; do the
-                // bounded copy (WINDOW elements) into a stack array.
-                let mut lin = [0.0f64; WINDOW];
-                let start = (t + 1) % WINDOW as u64;
-                for (i, slot) in lin.iter_mut().enumerate() {
-                    *slot = st.ring[((start + i as u64) % WINDOW as u64) as usize];
-                }
-                let a = dfa_into(&lin, &mut self.scratch).alpha;
-                if (a - cc.alpha_mean).abs() / cc.alpha_sd > self.dfa_thr {
-                    hit = true;
-                    break;
-                }
+        // Leg 3: DFA every DFA_STRIDE of this channel's ticks, ring full
+        if self.leg_enabled[2] && t >= WINDOW as u64 && t % DFA_STRIDE as u64 == 0 {
+            // Linearize the ring (oldest..newest) — bounded WINDOW copy.
+            let mut lin = [0.0f64; WINDOW];
+            let start = (t + 1) % WINDOW as u64;
+            for (i, slot) in lin.iter_mut().enumerate() {
+                *slot = st.ring[((start + i as u64) % WINDOW as u64) as usize];
             }
-            self.dfa_streak = if hit { self.dfa_streak + DFA_STRIDE } else { 0 };
-            if self.dfa_streak >= DFA_PERSIST {
+            let a = dfa_into(&lin, &mut self.scratch).alpha;
+            let st = &mut self.state[ch];
+            let hit = (a - cc.alpha_mean).abs() / cc.alpha_sd > self.dfa_thr;
+            st.dfa_streak = if hit { st.dfa_streak + DFA_STRIDE } else { 0 };
+            if st.dfa_streak >= DFA_PERSIST {
                 self.alarmed = true;
                 return Some(Leg::Dfa);
             }
         }
 
         // Leg 4: rolling-mean level shift
-        if self.leg_enabled[3] && roll_full {
-            let mut hit = false;
-            for ch in 0..self.calib.len() {
-                let cc = &self.calib[ch];
-                let st = &self.state[ch];
-                let sum: f64 = st.roll_ring.iter().sum();
-                if (sum / ROLL as f64 - cc.mean).abs() > cc.roll_thr {
-                    hit = true;
-                    break;
-                }
-            }
-            self.roll_streak = if hit { self.roll_streak + 1 } else { 0 };
-            if self.roll_streak >= ROLL_PERSIST {
+        if self.leg_enabled[3] && t >= ROLL as u64 {
+            let st = &mut self.state[ch];
+            let sum: f64 = st.roll_ring.iter().sum();
+            let hit = (sum / ROLL as f64 - cc.mean).abs() > cc.roll_thr;
+            st.roll_streak = if hit { st.roll_streak + 1 } else { 0 };
+            if st.roll_streak >= ROLL_PERSIST {
                 self.alarmed = true;
                 return Some(Leg::LevelShift);
             }
@@ -570,13 +559,13 @@ impl HybridMonitor {
 
     pub fn reset(&mut self) {
         self.alarmed = false;
-        self.dfa_streak = 0;
-        self.roll_streak = 0;
-        self.res_hit_times = [u64::MAX; RES_HITS];
-        self.miss_times = [u64::MAX; MISS_HITS];
         for st in self.state.iter_mut() {
             st.cusum_pos = 0.0;
             st.cusum_neg = 0.0;
+            st.dfa_streak = 0;
+            st.roll_streak = 0;
+            st.res_hit_times = [u64::MAX; RES_HITS];
+            st.miss_times = [u64::MAX; MISS_HITS];
         }
     }
 }
@@ -637,6 +626,53 @@ mod tests {
         assert!(run_stream(&mut mon, &faulted).is_none());
         mon.reset();
         assert!(run_stream(&mut mon, &faulted).is_some());
+    }
+
+    #[test]
+    fn multi_rate_channels_detect_stuck() {
+        // Channels pushed at different rates: ch0 every tick, ch1 every 2nd,
+        // ch2 every 4th, others every tick. Stuck fault on ch2 (temp) must
+        // still be caught even though ch2 sees 1/4 the samples.
+        let calib = synth_spacecraft(1400, 7919 + 100);
+        let clean = synth_spacecraft(1400, 7919 + 200);
+        let faulted = inject_fault(&clean, "stuck", 7919);
+        let mut mon = HybridMonitor::calibrate(&calib).expect("calibration");
+        let mut alarm = None;
+        for t in 0..1400usize {
+            for ch in 0..6 {
+                let rate = match ch { 1 => 2, 2 => 4, _ => 1 };
+                if t % rate == 0 {
+                    if let Some(leg) = mon.push_channel(ch, Some(faulted[ch][t])) {
+                        alarm = Some((t, leg));
+                    }
+                }
+            }
+            if alarm.is_some() {
+                break;
+            }
+        }
+        let (t, leg) = alarm.expect("stuck must alarm under multi-rate");
+        assert_eq!(leg, Leg::RepeatedValue);
+        // fault starts at 58% of 1400 = 812
+        assert!(t >= 812, "alarm at {} before fault", t);
+    }
+
+    #[test]
+    fn multi_rate_clean_stays_quiet() {
+        let calib = synth_spacecraft(1400, 31 + 100);
+        let clean = synth_spacecraft(1400, 31 + 200);
+        let mut mon = HybridMonitor::calibrate(&calib).expect("calibration");
+        for t in 0..1400usize {
+            for ch in 0..6 {
+                let rate = match ch { 1 => 2, 2 => 4, _ => 1 };
+                if t % rate == 0 {
+                    assert!(
+                        mon.push_channel(ch, Some(clean[ch][t])).is_none(),
+                        "clean multi-rate alarmed at t={} ch={}", t, ch
+                    );
+                }
+            }
+        }
     }
 
     #[test]
