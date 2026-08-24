@@ -1089,6 +1089,7 @@ mod tests {
     #[test]
     fn anomaly_scores_too_short_returns_empty() {
         assert_eq!(anomaly_scores(&[1.0; 10], 256, 128, 0.05), Vec::<f64>::new());
+        assert_eq!(anomaly_scores(&[1.0; 300], 32, 16, 0.05), Vec::<f64>::new());
     }
 }
 
