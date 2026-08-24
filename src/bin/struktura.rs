@@ -665,6 +665,20 @@ fn cmd_health(args: &[String]) {
     for p in &spectrum.points { print!("{:.2} ", p.h_q); }
     println!();
 
+    // Trend analysis — is α getting worse over time within this signal?
+    if current.len() >= 512 {
+        let trend = struktura::trend::alpha_trend(&current, 256, 64);
+        let dir_str = match trend.direction {
+            struktura::trend::TrendDirection::Improving => "\x1b[32mIMPROVING\x1b[0m",
+            struktura::trend::TrendDirection::Stable => "\x1b[32mSTABLE\x1b[0m",
+            struktura::trend::TrendDirection::Degrading => "\x1b[31mDEGRADING\x1b[0m",
+        };
+        println!();
+        println!("  \x1b[1mTrend (is it getting worse?)\x1b[0m");
+        println!("  α {:.3} → {:.3}  slope={:.6}/sample  {dir_str}",
+            trend.alpha_start, trend.alpha_end, trend.slope);
+    }
+
     if let Some(ref bf) = baseline_file {
         let baseline = read_input(bf);
         let result = struktura::compare(&baseline, &current);

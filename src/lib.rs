@@ -914,5 +914,6 @@ pub mod text;
 pub mod market;
 pub mod rhythm;
 pub mod mfdfa;
+pub mod trend;
 #[cfg(feature = "std")]
 pub mod codegen;
