@@ -188,6 +188,7 @@ fn main() {
         "mission" => cmd_mission(),
         "redblue" => cmd_redblue(&args),
         "evolve" => cmd_evolve(&args),
+        "smap" => cmd_smap(),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -2846,6 +2847,179 @@ fn cmd_evolve(args: &[String]) {
         final_config.res_span, final_config.dfa_persist, final_config.roll_persist,
         final_config.cusum_k, final_config.design_horizon);
     println!("  Zero-clean-alarm law enforced on every acceptance (12 clean seeds).");
+    println!();
+}
+
+fn cmd_smap() {
+    use struktura::monitor::HybridMonitor;
+
+    println!();
+    println!("  \x1b[1mNASA SMAP + MSL/CURIOSITY ANOMALY BENCHMARK\x1b[0m");
+    println!("  Real spacecraft telemetry, JPL-labeled anomalies (telemanom dataset).");
+    println!("  Protocol: calibrate on the nominal train split, stream the test");
+    println!("  split; a labeled sequence is DETECTED if any alarm lands inside it;");
+    println!("  alarms outside every labeled sequence count as false positives.");
+    println!("  ================================================================");
+    println!();
+
+    let labels_path = "data/smap_msl/labeled_anomalies.csv";
+    let labels = match std::fs::read_to_string(labels_path) {
+        Ok(s) => s,
+        Err(e) => { eprintln!("cannot read {}: {}", labels_path, e); process::exit(1); }
+    };
+
+    // (spacecraft, tp, fp, total_sequences, channels_run, channels_skipped)
+    let mut per_sc: Vec<(String, usize, usize, usize, usize, usize)> = vec![
+        ("SMAP".to_string(), 0, 0, 0, 0, 0),
+        ("MSL".to_string(), 0, 0, 0, 0, 0),
+    ];
+    const REFRACTORY: usize = 100;
+
+    for line in labels.lines().skip(1) {
+        // chan_id,spacecraft,"[[s,e],[s,e]]",class,num_values — the sequence
+        // field is quoted and contains commas.
+        let mut parts = line.splitn(2, ',');
+        let chan = match parts.next() { Some(c) => c.trim().to_string(), None => continue };
+        let rest = match parts.next() { Some(r) => r, None => continue };
+        let mut parts2 = rest.splitn(2, ',');
+        let spacecraft = match parts2.next() { Some(s) => s.trim().to_string(), None => continue };
+        let rest2 = match parts2.next() { Some(r) => r, None => continue };
+        // Extract the bracketed sequence list
+        let seq_str: String = {
+            let start = rest2.find('[').unwrap_or(0);
+            let end = rest2.rfind(']').map(|e| e + 1).unwrap_or(rest2.len());
+            rest2[start..end].to_string()
+        };
+        let mut sequences: Vec<(usize, usize)> = Vec::new();
+        {
+            let nums: Vec<usize> = seq_str
+                .split(|c: char| !c.is_ascii_digit())
+                .filter(|s| !s.is_empty())
+                .filter_map(|s| s.parse().ok())
+                .collect();
+            for pair in nums.chunks(2) {
+                if pair.len() == 2 {
+                    sequences.push((pair[0], pair[1]));
+                }
+            }
+        }
+        if sequences.is_empty() { continue; }
+
+        let sc_idx = if spacecraft == "SMAP" { 0 } else { 1 };
+        let train_path = format!("data/smap_msl/train_csv/{}.csv", chan);
+        let test_path = format!("data/smap_msl/test_csv/{}.csv", chan);
+        let (train, test) = match (std::fs::read_to_string(&train_path), std::fs::read_to_string(&test_path)) {
+            (Ok(a), Ok(b)) => (a, b),
+            _ => { per_sc[sc_idx].5 += 1; per_sc[sc_idx].3 += sequences.len(); continue; }
+        };
+        let train_v: Vec<f64> = train.lines().filter_map(|l| l.trim().parse().ok()).collect();
+        let test_v: Vec<f64> = test.lines().filter_map(|l| l.trim().parse().ok()).collect();
+        if train_v.len() < 300 || test_v.is_empty() {
+            per_sc[sc_idx].5 += 1;
+            per_sc[sc_idx].3 += sequences.len();
+            continue;
+        }
+
+        // Trending-channel detection (the Voyager lesson): near-unit-root
+        // AR(1) means the level wanders legitimately — the stationarity
+        // legs (level shift, CUSUM) would flood false alarms.
+        let trending = {
+            let n = train_v.len() - 1;
+            let x = &train_v[..n];
+            let y = &train_v[1..];
+            let mx: f64 = x.iter().sum::<f64>() / n as f64;
+            let my: f64 = y.iter().sum::<f64>() / n as f64;
+            let mut cov = 0.0;
+            let mut var = 0.0;
+            for i in 0..n {
+                cov += (x[i] - mx) * (y[i] - my);
+                var += (x[i] - mx) * (x[i] - mx);
+            }
+            var < 1e-12 || cov / var > 0.98
+        };
+
+        let mut mon = match HybridMonitor::calibrate(&[train_v]) {
+            Some(m) => m,
+            None => { per_sc[sc_idx].5 += 1; per_sc[sc_idx].3 += sequences.len(); continue; }
+        };
+        if trending {
+            use struktura::monitor::Leg;
+            mon.set_leg_enabled(Leg::LevelShift, false);
+            mon.set_leg_enabled(Leg::ResidualCusum, false);
+        }
+
+        // Stream through the AutoPilot: level shifts that stabilize into a
+        // new normal are ADAPTED to (spacecraft mode changes are not
+        // anomalies); only fault-class events count as alarms.
+        use struktura::autopilot::{AutoPilot, Event};
+        use struktura::monitor::Leg;
+        let mut ap = AutoPilot::new(mon);
+        let mut alarms: Vec<usize> = Vec::new();
+        let valid = [true];
+        for (t, &v) in test_v.iter().enumerate() {
+            for ev in ap.push(&[v], &valid) {
+                let is_fault = match &ev {
+                    Event::Alarm { report, class, .. } => {
+                        report.leg != Leg::LevelShift || *class == "drift_confirmed"
+                    }
+                    Event::RolledBack { .. } => true,
+                    _ => false,
+                };
+                if is_fault {
+                    // Refractory dedupe: one event per window
+                    if alarms.last().map_or(true, |&last| t >= last + REFRACTORY) {
+                        alarms.push(t);
+                    }
+                }
+            }
+        }
+
+        let mut hit = vec![false; sequences.len()];
+        let mut fp = 0usize;
+        for &a in &alarms {
+            let mut inside = false;
+            for (i, &(s, e)) in sequences.iter().enumerate() {
+                if a >= s.saturating_sub(0) && a <= e {
+                    hit[i] = true;
+                    inside = true;
+                }
+            }
+            if !inside {
+                fp += 1;
+            }
+        }
+        let tp = hit.iter().filter(|&&h| h).count();
+        per_sc[sc_idx].1 += tp;
+        per_sc[sc_idx].2 += fp;
+        per_sc[sc_idx].3 += sequences.len();
+        per_sc[sc_idx].4 += 1;
+    }
+
+    println!("  | Spacecraft | Channels | Sequences | Detected | FP alarms | Precision | Recall |");
+    println!("  |------------|----------|-----------|----------|-----------|-----------|--------|");
+    let mut tot = (0usize, 0usize, 0usize);
+    for (name, tp, fp, seqs, chans, skipped) in &per_sc {
+        let prec = if tp + fp > 0 { *tp as f64 / (tp + fp) as f64 } else { 0.0 };
+        let rec = if *seqs > 0 { *tp as f64 / *seqs as f64 } else { 0.0 };
+        println!(
+            "  | {:<10} | {:>4} ({}sk) | {:>9} | {:>8} | {:>9} | {:>8.1}% | {:>5.1}% |",
+            name, chans, skipped, seqs, tp, fp, prec * 100.0, rec * 100.0
+        );
+        tot.0 += tp; tot.1 += fp; tot.2 += seqs;
+    }
+    let prec = if tot.0 + tot.1 > 0 { tot.0 as f64 / (tot.0 + tot.1) as f64 } else { 0.0 };
+    let rec = if tot.2 > 0 { tot.0 as f64 / tot.2 as f64 } else { 0.0 };
+    let f1 = if prec + rec > 0.0 { 2.0 * prec * rec / (prec + rec) } else { 0.0 };
+    println!("  |------------|----------|-----------|----------|-----------|-----------|--------|");
+    println!(
+        "  | {:<10} |          | {:>9} | {:>8} | {:>9} | {:>8.1}% | {:>5.1}% |",
+        "TOTAL", tot.2, tot.0, tot.1, prec * 100.0, rec * 100.0
+    );
+    println!();
+    println!("  Overall F1: {:.3}   (JPL telemanom LSTM, same data: P=87.5% R=80.0%)", f1);
+    println!("  Self-calibrated, no training, no GPU, ~4us/sample. Honest note: the");
+    println!("  values are pre-scaled to (-1,1) by JPL and many channels saturate,");
+    println!("  which auto-disables the repeated-value leg on those channels.");
     println!();
 }
 
