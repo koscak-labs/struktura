@@ -2268,8 +2268,13 @@ fn cmd_monitor_perf() {
     println!("  no heap allocation in the push path.");
     println!();
 
-    // Fault-detection verification with the same EVT-calibrated monitor
+    // Fault-detection verification with the same EVT-calibrated monitor,
+    // plus fault-CLASS identification accuracy from alarm provenance.
+    use struktura::monitor::classify_alarm;
     use struktura::telemetry_bench::{inject_fault, inject_fault_validity, FAULT_TYPES};
+    let mut class_correct = [0usize; 7];
+    let mut class_total = [0usize; 7];
+    let mut class_confusion: Vec<(String, String, usize)> = Vec::new();
     let seeds = 20u64;
     let len = 2048usize;
     let fstart = (len as f64 * 0.58) as usize;
@@ -2298,6 +2303,27 @@ fn cmd_monitor_perf() {
                     if t >= fstart && t < fstop + 96 {
                         hits += 1;
                         lat_sum += (t - fstart) as f64;
+                        if let Some(report) = m.last_alarm() {
+                            let fi = FAULT_TYPES.iter().position(|f| f == fault).unwrap();
+                            class_total[fi] += 1;
+                            let predicted = classify_alarm(&report);
+                            // "mixed" is a compound fault: any of its three
+                            // components is a correct identification.
+                            let correct = predicted == *fault
+                                || (*fault == "mixed"
+                                    && matches!(predicted, "packet_loss" | "spike" | "drift"));
+                            if correct {
+                                class_correct[fi] += 1;
+                            } else if let Some(e) = class_confusion.iter_mut().find(
+                                |(a, p, _)| a == fault && p == predicted,
+                            ) {
+                                e.2 += 1;
+                            } else {
+                                class_confusion.push(
+                                    (fault.to_string(), predicted.to_string(), 1),
+                                );
+                            }
+                        }
                     }
                     break;
                 }
@@ -2307,6 +2333,22 @@ fn cmd_monitor_perf() {
         let color = if rate >= 0.8 { "\x1b[32m" } else if rate >= 0.4 { "\x1b[33m" } else { "\x1b[31m" };
         println!("  | {:<18} | {}{:>4.0}%\x1b[0m  | {:>6.0}       |",
             fault, color, rate * 100.0, if hits > 0 { lat_sum / hits as f64 } else { 0.0 });
+    }
+    println!();
+    println!("  \x1b[1mFAULT-CLASS IDENTIFICATION\x1b[0m (from alarm provenance, rule-based)");
+    println!("  | Fault Type         | Correct ID |");
+    println!("  |--------------------|------------|");
+    for (fi, fault) in FAULT_TYPES.iter().enumerate() {
+        if class_total[fi] == 0 { continue; }
+        let acc = class_correct[fi] as f64 / class_total[fi] as f64;
+        let color = if acc >= 0.8 { "\x1b[32m" } else if acc >= 0.4 { "\x1b[33m" } else { "\x1b[31m" };
+        println!("  | {:<18} | {}{:>4.0}%\x1b[0m      |", fault, color, acc * 100.0);
+    }
+    if !class_confusion.is_empty() {
+        println!("  Misclassifications:");
+        for (actual, predicted, count) in &class_confusion {
+            println!("    {} -> {} ({}x)", actual, predicted, count);
+        }
     }
     println!();
 }

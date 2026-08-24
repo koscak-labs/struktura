@@ -102,6 +102,56 @@ pub enum Leg {
 const MISS_HITS: usize = 4;
 const MISS_SPAN: usize = 32;
 
+/// Structured provenance for an alarm: WHY the monitor fired — which leg,
+/// which channel, at what tick, how far past which threshold. This is what
+/// a flight review asks of every alarm.
+#[derive(Debug, Clone, Copy)]
+pub struct AlarmReport {
+    pub leg: Leg,
+    pub channel: usize,
+    /// The alarming channel's own tick at alarm time.
+    pub tick: u64,
+    /// The score that crossed (leg-specific units: z for residual/DFA/CUSUM,
+    /// absolute deviation for level shift, run length for repeated,
+    /// invalid count for missingness).
+    pub observed: f64,
+    /// The calibrated threshold it crossed.
+    pub threshold: f64,
+    /// Residual leg only: ticks between the two exceedances that formed the
+    /// alarm — a step fault shows entry/exit hits far apart, a correlation
+    /// change shows dense hits. 0 for other legs.
+    pub hit_gap: u64,
+}
+
+/// Rule-based fault-class identification from alarm provenance.
+/// Returns the most likely fault class name for a report.
+#[must_use]
+pub fn classify_alarm(r: &AlarmReport) -> &'static str {
+    match r.leg {
+        Leg::Missingness => "packet_loss",
+        Leg::RepeatedValue => "stuck",
+        Leg::Dfa => "drift",
+        Leg::ResidualCusum => "drift",
+        Leg::LevelShift => {
+            // A spike-class fault (large transient, ~6 sigma) drives the
+            // rolling deviation far past a threshold calibrated for
+            // ~1-sigma regime shifts; magnitude separates the two.
+            if r.observed > 2.0 * r.threshold {
+                "spike"
+            } else {
+                "regime_shift"
+            }
+        }
+        Leg::Residual => {
+            if r.hit_gap >= 8 {
+                "spike"
+            } else {
+                "correlation_change"
+            }
+        }
+    }
+}
+
 /// Per-channel calibration statistics (immutable after calibration).
 #[derive(Debug, Clone)]
 struct ChannelCalib {
@@ -153,6 +203,7 @@ pub struct HybridMonitor {
     cusum_thr: f64,
     scratch: Vec<f64>,
     alarmed: bool,
+    last_alarm: Option<AlarmReport>,
     /// Per-leg enable mask: [residual, repeated, dfa, level, cusum, miss].
     /// Legs whose stationarity assumptions a deployment cannot meet
     /// (e.g. level-shift on a naturally trending channel) are disabled
@@ -379,6 +430,7 @@ impl HybridMonitor {
             cusum_thr,
             scratch,
             alarmed: false,
+            last_alarm: None,
             leg_enabled: [true; 6],
         })
     }
@@ -461,6 +513,14 @@ impl HybridMonitor {
                     let oldest = st.miss_times[0];
                     if oldest != u64::MAX && t - oldest < MISS_SPAN as u64 {
                         self.alarmed = true;
+                        self.last_alarm = Some(AlarmReport {
+                            leg: Leg::Missingness,
+                            channel: ch,
+                            tick: t,
+                            observed: MISS_HITS as f64,
+                            threshold: MISS_HITS as f64,
+                            hit_gap: 0,
+                        });
                         return Some(Leg::Missingness);
                     }
                 }
@@ -498,15 +558,40 @@ impl HybridMonitor {
             let oldest = st.res_hit_times[0];
             if oldest != u64::MAX && t - oldest < RES_SPAN as u64 {
                 self.alarmed = true;
+                self.last_alarm = Some(AlarmReport {
+                    leg: Leg::Residual,
+                    channel: ch,
+                    tick: t,
+                    observed: zs.abs(),
+                    threshold: self.res_thr,
+                    hit_gap: t - oldest,
+                });
                 return Some(Leg::Residual);
             }
         }
         if repeat_alarm && self.leg_enabled[1] {
             self.alarmed = true;
+            self.last_alarm = Some(AlarmReport {
+                leg: Leg::RepeatedValue,
+                channel: ch,
+                tick: t,
+                observed: self.state[ch].run as f64,
+                threshold: (cc.max_run + REPEAT_MARGIN) as f64,
+                hit_gap: 0,
+            });
             return Some(Leg::RepeatedValue);
         }
         if cusum_alarm && self.leg_enabled[4] {
+            let st = &self.state[ch];
             self.alarmed = true;
+            self.last_alarm = Some(AlarmReport {
+                leg: Leg::ResidualCusum,
+                channel: ch,
+                tick: t,
+                observed: st.cusum_pos.max(st.cusum_neg),
+                threshold: self.cusum_thr,
+                hit_gap: 0,
+            });
             return Some(Leg::ResidualCusum);
         }
 
@@ -524,6 +609,14 @@ impl HybridMonitor {
             st.dfa_streak = if hit { st.dfa_streak + DFA_STRIDE } else { 0 };
             if st.dfa_streak >= DFA_PERSIST {
                 self.alarmed = true;
+                self.last_alarm = Some(AlarmReport {
+                    leg: Leg::Dfa,
+                    channel: ch,
+                    tick: t,
+                    observed: (a - cc.alpha_mean).abs() / cc.alpha_sd,
+                    threshold: self.dfa_thr,
+                    hit_gap: 0,
+                });
                 return Some(Leg::Dfa);
             }
         }
@@ -536,6 +629,14 @@ impl HybridMonitor {
             st.roll_streak = if hit { st.roll_streak + 1 } else { 0 };
             if st.roll_streak >= ROLL_PERSIST {
                 self.alarmed = true;
+                self.last_alarm = Some(AlarmReport {
+                    leg: Leg::LevelShift,
+                    channel: ch,
+                    tick: t,
+                    observed: (sum / ROLL as f64 - cc.mean).abs(),
+                    threshold: cc.roll_thr,
+                    hit_gap: 0,
+                });
                 return Some(Leg::LevelShift);
             }
         }
@@ -544,6 +645,12 @@ impl HybridMonitor {
     }
 
     /// Clear the alarm latch and detector streaks (ring contents persist).
+    /// Provenance of the most recent alarm, if any.
+    #[must_use]
+    pub fn last_alarm(&self) -> Option<AlarmReport> {
+        self.last_alarm
+    }
+
     /// Enable or disable one detector leg (all enabled by default).
     pub fn set_leg_enabled(&mut self, leg: Leg, on: bool) {
         let idx = match leg {
