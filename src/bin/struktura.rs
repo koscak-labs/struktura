@@ -137,6 +137,9 @@ fn main() {
         println!("    struktura heliopause                      Detect the edge of the solar system");
         println!("    struktura ims                             NASA bearing run-to-failure timeline");
         println!("    struktura spacecraft                      Multi-channel spacecraft health demo");
+        println!("    struktura nasa                            SMAP satellite anomaly (real NASA data, embedded)");
+        println!("    struktura guard <file.csv> [--baseline N]  Stream monitor: calibrate on first N rows, watch the rest");
+        println!("    struktura mission                         24K-sample autonomous gauntlet (no human in the loop)");
         println!("    struktura scan <file_or_-> [--baseline f]  Auto-analyze any signal (pipe with -)");
         println!("    struktura mf <file_or_->                 Multifractal spectrum (multi-scale complexity)");
         println!("    struktura text <file.txt>                  Writing rhythm analysis");
@@ -190,6 +193,8 @@ fn main() {
         "redblue" => cmd_redblue(&args),
         "evolve" => cmd_evolve(&args),
         "smap" => cmd_smap(&args),
+        "nasa" => cmd_nasa(),
+        "guard" => cmd_guard(&args),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -3103,6 +3108,193 @@ fn cmd_smap(args: &[String]) {
     println!("  Self-calibrated, no training, no GPU, ~4us/sample. Honest note: the");
     println!("  values are pre-scaled to (-1,1) by JPL and many channels saturate,");
     println!("  which auto-disables the repeated-value leg on those channels.");
+    println!();
+}
+
+fn cmd_nasa() {
+    use struktura::smap_eval::detect_channel_tuned;
+
+    let train: Vec<f64> = include_str!("../../data/smap_t1_train.csv")
+        .lines().filter_map(|l| l.trim().parse().ok()).collect();
+    let test: Vec<f64> = include_str!("../../data/smap_t1_test.csv")
+        .lines().filter_map(|l| l.trim().parse().ok()).collect();
+
+    println!();
+    println!("  \x1b[1mNASA SMAP SATELLITE — CHANNEL T-1 (thermal telemetry)\x1b[0m");
+    println!("  Real data from NASA's Soil Moisture Active Passive satellite.");
+    println!("  Two labeled anomalies: a point fault + a contextual fault.");
+    println!("  Method: ridge AR(auto) + JPL's telemanom residual math.");
+    println!("  ================================================================");
+    println!();
+
+    let seqs = detect_channel_tuned(&train, &test, 0, 0.5, 0.02, 150);
+
+    // Also run the streaming HybridMonitor for the live-detection angle
+    use struktura::monitor::HybridMonitor;
+    let mut mon = HybridMonitor::calibrate(&[train.clone()]).expect("calibration");
+    // Disable stationarity legs on this channel (SMAP data is quantized and
+    // trends between modes — the same lesson as Voyager).
+    mon.set_leg_enabled(struktura::monitor::Leg::LevelShift, false);
+    mon.set_leg_enabled(struktura::monitor::Leg::ResidualCusum, false);
+    let mut stream_alarms: Vec<(usize, struktura::monitor::Leg)> = Vec::new();
+    for (t, &v) in test.iter().enumerate() {
+        if let Some(leg) = mon.push(&[v]) {
+            stream_alarms.push((t, leg));
+            mon.reset();
+        }
+    }
+
+    let labeled = [(2399usize, 3898usize), (6550, 6585)];
+    let classes = ["point", "contextual"];
+
+    for (i, &(ls, le)) in labeled.iter().enumerate() {
+        let found = seqs.iter().any(|&(s, e)| s <= le && e >= ls);
+        let mark = if found { "\x1b[32m✓ DETECTED\x1b[0m" } else { "\x1b[31m✗ MISSED\x1b[0m" };
+        println!("  Anomaly {}: samples {}..{} ({}) — {}", i + 1, ls, le, classes[i], mark);
+    }
+
+    let fp: Vec<_> = seqs.iter().filter(|&&(s, e)| {
+        !labeled.iter().any(|&(ls, le)| s <= le && e >= ls)
+    }).collect();
+    println!();
+    println!("  Detected sequences: {:?}", seqs);
+    println!("  False positives: {}", fp.len());
+    println!();
+    println!("  Train: {} samples (nominal). Test: {} samples.", train.len(), test.len());
+    println!("  Calibration: closed-form ridge AR, no gradient training, no GPU.");
+    println!();
+    println!("  \x1b[1mStreaming monitor\x1b[0m (7 legs, self-calibrated, 4us/sample):");
+    for (t, leg) in &stream_alarms {
+        let in_anomaly = labeled.iter().any(|&(s, e)| *t >= s && *t <= e);
+        let mark = if in_anomaly { "\x1b[32m(TRUE)\x1b[0m" } else { "\x1b[31m(FP)\x1b[0m" };
+        println!("    t={:>5}  {:?}  {}", t, leg, mark);
+    }
+    let stream_tp = stream_alarms.iter().filter(|(t, _)| {
+        labeled.iter().any(|&(s, e)| *t >= s && *t <= e)
+    }).count();
+    println!("    {} alarms: {} in anomaly windows, {} false positives",
+        stream_alarms.len(), stream_tp, stream_alarms.len() - stream_tp);
+    println!();
+    println!("  Full benchmark (82 channels): struktura smap --ar 0 (needs data/)");
+    println!();
+}
+
+fn cmd_guard(args: &[String]) {
+    use struktura::monitor::HybridMonitor;
+
+    let mut file_path = String::new();
+    let mut baseline_n = 0usize; // 0 = auto (first third)
+    let mut i = 2;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--baseline" if i + 1 < args.len() => {
+                baseline_n = args[i + 1].parse().unwrap_or(0);
+                i += 2;
+            }
+            s if !s.starts_with('-') && file_path.is_empty() => {
+                file_path = s.to_string();
+                i += 1;
+            }
+            _ => { i += 1; }
+        }
+    }
+    if file_path.is_empty() || file_path == "-" {
+        // Read from stdin
+        use std::io::Read;
+        let mut buf = String::new();
+        std::io::stdin().read_to_string(&mut buf).expect("read stdin");
+        run_guard(&buf, baseline_n);
+    } else {
+        let content = std::fs::read_to_string(&file_path).unwrap_or_else(|e| {
+            eprintln!("cannot read {}: {}", file_path, e);
+            process::exit(1);
+        });
+        run_guard(&content, baseline_n);
+    }
+}
+
+fn run_guard(content: &str, baseline_n: usize) {
+    use struktura::monitor::{HybridMonitor, Leg};
+    use struktura::monitor::classify_alarm;
+
+    // Parse multi-column CSV (last column = primary channel, or all columns
+    // as independent channels). Auto-detect width from first row.
+    let rows: Vec<Vec<f64>> = content
+        .lines()
+        .filter_map(|l| {
+            let vals: Vec<f64> = l.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+            if vals.is_empty() { None } else { Some(vals) }
+        })
+        .collect();
+    if rows.is_empty() {
+        eprintln!("no numeric rows");
+        process::exit(1);
+    }
+    let n = rows.len();
+    let ncols = rows[0].len();
+    let calib_n = if baseline_n > 0 { baseline_n.min(n) } else { n / 3 };
+
+    // Transpose to per-channel vectors
+    let channels: Vec<Vec<f64>> = (0..ncols)
+        .map(|ch| rows.iter().map(|r| r.get(ch).copied().unwrap_or(0.0)).collect())
+        .collect();
+
+    let calib: Vec<Vec<f64>> = channels.iter().map(|c| c[..calib_n].to_vec()).collect();
+    let mut mon = match HybridMonitor::calibrate(&calib) {
+        Some(m) => m,
+        None => {
+            eprintln!("calibration failed (need >= 192 samples)");
+            process::exit(1);
+        }
+    };
+
+    println!();
+    println!("  \x1b[1mSTRUKTURA GUARD\x1b[0m — streaming health monitor");
+    println!("  {} samples x {} channels. Calibrated on first {} samples.", n, ncols, calib_n);
+    println!("  ================================================================");
+    println!();
+
+    let mut sample = vec![0.0f64; ncols];
+    // Wrap in AutoPilot: regime changes that stabilize are adapted to,
+    // genuine faults are logged, dead sensors get quarantined — all autonomously.
+    use struktura::autopilot::{AutoPilot, Event};
+    let mut ap = AutoPilot::new(mon);
+    let mut alarm_count = 0usize;
+    let valid: Vec<bool> = vec![true; ncols];
+    for t in calib_n..n {
+        for ch in 0..ncols {
+            sample[ch] = channels[ch][t];
+        }
+        for ev in ap.push(&sample, &valid) {
+            match &ev {
+                Event::Alarm { report, class, .. } => {
+                    alarm_count += 1;
+                    println!(
+                        "  t={:>6}  \x1b[33mALARM\x1b[0m  {:?} on ch{} (class: {})",
+                        t, report.leg, report.channel, class
+                    );
+                }
+                Event::Quarantined { channel, .. } => {
+                    println!("  t={:>6}  \x1b[31mQUARANTINE\x1b[0m  ch{} -> virtual mode", t, channel);
+                }
+                Event::AdaptationStarted { .. } => {
+                    println!("  t={:>6}  \x1b[36mADAPTING\x1b[0m   collecting new-regime window", t);
+                }
+                Event::Recalibrated { .. } => {
+                    println!("  t={:>6}  \x1b[32mRECALIBRATED\x1b[0m guard passed -> new normal", t);
+                }
+                Event::RolledBack { .. } => {
+                    println!("  t={:>6}  \x1b[31mROLLBACK\x1b[0m   adaptation rejected", t);
+                }
+            }
+        }
+    }
+    if alarm_count == 0 {
+        println!("  \x1b[32mNo anomalies detected.\x1b[0m Stream healthy across {} samples.", n - calib_n);
+    }
+    println!();
+    println!("  Alarms: {}. Self-calibrated, autonomous (adapts + quarantines).", alarm_count);
+    println!("  Pipe any CSV: cat data.csv | struktura guard -");
     println!();
 }
 
