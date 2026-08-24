@@ -916,5 +916,6 @@ pub mod rhythm;
 pub mod mfdfa;
 pub mod trend;
 pub mod classify;
+pub mod fingerprint;
 #[cfg(feature = "std")]
 pub mod codegen;

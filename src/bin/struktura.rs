@@ -172,6 +172,7 @@ fn main() {
         "multifractal" | "mf" => cmd_multifractal(&args),
         "health" => cmd_health(&args),
         "batch" => cmd_batch(&args),
+        "fingerprint" | "fp" | "dna" => cmd_fingerprint(&args),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -735,6 +736,48 @@ fn cmd_batch(args: &[String]) {
         println!("  \x1b[32m✓ All signals within baseline tolerance\x1b[0m");
     }
     println!();
+}
+
+fn cmd_fingerprint(args: &[String]) {
+    if args.len() < 3 {
+        eprintln!("Usage: struktura dna <file1> [file2] ...  (aliases: fingerprint, fp)");
+        eprintln!("  Structural DNA — the unique identity of each signal.");
+        process::exit(1);
+    }
+    use struktura::fingerprint::fingerprint;
+
+    println!();
+    println!("  \x1b[1mSTRUCTURAL DNA\x1b[0m");
+    println!("  ====================================================================");
+    println!();
+
+    let fps: Vec<_> = args[2..].iter().map(|f| {
+        let values = read_input(f);
+        let fp = fingerprint(&values);
+        (f.clone(), fp)
+    }).collect();
+
+    for (f, fp) in &fps {
+        println!("  {}", f);
+        println!("    {fp}");
+        println!();
+    }
+
+    if fps.len() >= 2 {
+        println!("  \x1b[1mSimilarity Matrix\x1b[0m");
+        for i in 0..fps.len() {
+            for j in (i+1)..fps.len() {
+                let d = fps[i].1.distance(&fps[j].1);
+                let sim = if d < 0.05 { "\x1b[32mNEAR-IDENTICAL\x1b[0m" }
+                    else if d < 0.2 { "\x1b[33mSIMILAR\x1b[0m" }
+                    else { "\x1b[36mDIFFERENT\x1b[0m" };
+                let short_i: String = fps[i].0.chars().rev().take(20).collect::<String>().chars().rev().collect();
+                let short_j: String = fps[j].0.chars().rev().take(20).collect::<String>().chars().rev().collect();
+                println!("    {} ↔ {}  distance={:.3} {sim}", short_i, short_j, d);
+            }
+        }
+        println!();
+    }
 }
 
 fn cmd_classify(args: &[String]) {
