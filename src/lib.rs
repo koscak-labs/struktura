@@ -180,6 +180,10 @@ impl HealthVerdict {
 /// Returns alpha (the scaling exponent) and R-squared (fit quality).
 /// Requires at least 64 data points.
 ///
+/// **Warning:** Any upstream preprocessing (filtering, detrending, artifact
+/// rejection) changes the signal's correlation structure and shifts alpha.
+/// Baselines calibrated on raw data are invalid after adding preprocessing.
+///
 /// ```
 /// use struktura::dfa;
 /// let noise: Vec<f64> = (0..256).map(|i| (i as f64 * 0.1).sin()).collect();
