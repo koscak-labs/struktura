@@ -1095,6 +1095,50 @@ mod tests {
         assert_eq!(anomaly_scores(&[1.0; 10], 256, 128, 0.05), Vec::<f64>::new());
         assert_eq!(anomaly_scores(&[1.0; 300], 32, 16, 0.05), Vec::<f64>::new());
     }
+
+    #[test]
+    fn anomaly_scores_window_boundary() {
+        let data = white_noise(256, 99);
+        let scores = anomaly_scores(&data, 64, 32, 0.05);
+        assert!(!scores.is_empty(), "window=64 on 256 pts should produce scores");
+        let scores_63 = anomaly_scores(&data, 63, 32, 0.05);
+        assert!(scores_63.is_empty(), "window<64 should return empty");
+    }
+
+    #[test]
+    fn anomaly_scores_baseline_uses_first_third() {
+        let mut signal = white_noise(4096, 7);
+        signal.extend(brownian(4096, 7));
+        let scores = anomaly_scores(&signal, 256, 128, 0.05);
+        let n = scores.len();
+        let first_third_max = scores[..n/3].iter().cloned().fold(0.0f64, f64::max);
+        let last_third_min = scores[2*n/3..].iter().cloned().fold(f64::MAX, f64::min);
+        assert!(last_third_min > first_third_max,
+            "shifted region should score higher than baseline: min={} vs max={}",
+            last_third_min, first_third_max);
+    }
+
+    #[test]
+    fn dfa_box_fit_operator_check() {
+        let data = white_noise(512, 1);
+        let r1 = dfa(&data);
+        let data2 = brownian(512, 1);
+        let r2 = dfa(&data2);
+        assert!(r1.alpha < r2.alpha,
+            "white noise alpha ({}) should be less than brownian ({})", r1.alpha, r2.alpha);
+        assert!(r1.alpha > 0.3 && r1.alpha < 0.7, "white noise alpha out of range: {}", r1.alpha);
+        assert!(r2.alpha > 1.0 && r2.alpha < 2.0, "brownian alpha out of range: {}", r2.alpha);
+    }
+
+    #[test]
+    fn analyze_kurtosis_and_p99_computed() {
+        let data = white_noise(1024, 42);
+        let law = analyze(&data);
+        assert!(law.kurtosis > 0.0, "kurtosis should be positive");
+        assert!(law.p99 > law.mean, "p99 should exceed mean for noise");
+        assert!(law.std_dev > 0.0, "std_dev should be positive for noise");
+        assert!(law.max >= law.p99, "max should be >= p99");
+    }
 }
 
 impl fmt::Display for LawQuality {
