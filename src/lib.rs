@@ -41,6 +41,16 @@ fn sqrt(x: f64) -> f64 { libm::sqrt(x) }
 #[cfg(feature = "std")]
 fn sqrt(x: f64) -> f64 { x.sqrt() }
 
+#[cfg(not(feature = "std"))]
+fn powf(x: f64, y: f64) -> f64 { libm::pow(x, y) }
+#[cfg(feature = "std")]
+fn powf(x: f64, y: f64) -> f64 { x.powf(y) }
+
+#[cfg(not(feature = "std"))]
+fn powi(x: f64, n: i32) -> f64 { libm::pow(x, n as f64) }
+#[cfg(feature = "std")]
+fn powi(x: f64, n: i32) -> f64 { x.powi(n) }
+
 /// Result of a DFA or ACR computation.
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -157,44 +167,76 @@ pub fn dfa(values: &[f64]) -> DfaResult {
     if n < 64 {
         return DfaResult { alpha: 0.5, r_squared: 0.0 };
     }
+    let mut buf = Vec::with_capacity(n);
+    dfa_into(values, &mut buf)
+}
+
+/// DFA with a caller-provided buffer, avoiding allocation.
+///
+/// `buf` is resized to `values.len()` and used for the cumulative sum.
+/// On embedded systems, pre-allocate once and reuse across calls.
+#[must_use]
+pub fn dfa_into(values: &[f64], buf: &mut Vec<f64>) -> DfaResult {
+    let n = values.len();
+    if n < 64 {
+        return DfaResult { alpha: 0.5, r_squared: 0.0 };
+    }
 
     let mean = values.iter().sum::<f64>() / n as f64;
 
-    let mut y = Vec::with_capacity(n);
+    buf.clear();
+    buf.reserve(n);
     let mut cum = 0.0;
     for &v in values {
         cum += v - mean;
-        y.push(cum);
+        buf.push(cum);
     }
 
-    const BOXES: [usize; 8] = [16, 24, 36, 54, 81, 121, 181, 271];
-    let mut log_s = [0.0f64; 8];
-    let mut log_f = [0.0f64; 8];
-    let mut pts = 0usize;
+    // Adaptive box sizes: geometric spacing from max(16, n/50) to n/4.
+    // Gives consistent accuracy across signal lengths — short signals
+    // get tighter boxes, long signals get wider coverage.
+    let s_min = 16usize.max(n / 50);
+    let s_max = n / 4;
+    if s_min >= s_max {
+        return DfaResult { alpha: 0.5, r_squared: 0.0 };
+    }
+    let ratio = powf(s_max as f64 / s_min as f64, 1.0 / 11.0);
 
-    for &s in &BOXES {
-        if s > n / 4 { break; }
+    let mut log_s = [0.0f64; 12];
+    let mut log_f = [0.0f64; 12];
+    let mut pts = 0usize;
+    let mut prev_s = 0usize;
+
+    for step in 0..12 {
+        let s = (s_min as f64 * powi(ratio, step)) as usize;
+        if s == prev_s || s > s_max { continue; }
+        prev_s = s;
+
         let num_segs = n / s;
         if num_segs == 0 { continue; }
+
+        // Precompute sx, sx2, det — they depend only on s, not data.
+        let k = s as f64;
+        let sx = k * (k - 1.0) / 2.0;
+        let sx2 = k * (k - 1.0) * (2.0 * k - 1.0) / 6.0;
+        let det = k * sx2 - sx * sx;
+        if det.abs() < 1e-15 { continue; }
+
         let mut f2_sum = 0.0;
         for seg in 0..num_segs {
             let start = seg * s;
-            let (mut sx, mut sy, mut sxy, mut sx2) = (0.0, 0.0, 0.0, 0.0);
+            let mut sy = 0.0;
+            let mut sxy = 0.0;
             for i in 0..s {
-                let xi = i as f64;
-                sx += xi;
-                sy += y[start + i];
-                sxy += xi * y[start + i];
-                sx2 += xi * xi;
+                let yi = buf[start + i];
+                sy += yi;
+                sxy += i as f64 * yi;
             }
-            let k = s as f64;
-            let det = k * sx2 - sx * sx;
-            if det.abs() < 1e-15 { continue; }
             let a0 = (sx2 * sy - sx * sxy) / det;
             let a1 = (k * sxy - sx * sy) / det;
             let mut resid = 0.0;
             for i in 0..s {
-                let d = y[start + i] - (a0 + a1 * i as f64);
+                let d = buf[start + i] - (a0 + a1 * i as f64);
                 resid += d * d;
             }
             f2_sum += resid / k;
