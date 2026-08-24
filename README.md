@@ -150,6 +150,8 @@ let mut rwa = SpacecraftMonitor::new(Subsystem::ReactionWheel, "RWA_current");
 
 every number from an actual run. reproduce with `struktura demo` / `struktura voyager`.
 
+see [USE_CASES.md](USE_CASES.md) for the full list with citations.
+
 ## 🪐 mars rover anomaly detection (NASA SMAP/MSL)
 
 tested on the real NASA SMAP/MSL telemetry benchmark (55 labeled anomaly channels from Mars rovers + soil moisture satellite). zero training, zero tuning.
