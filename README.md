@@ -236,6 +236,35 @@ $ struktura redblue
 
 it finds its own blind spots and fixes them. no human tuning needed.
 
+## 🎮 full command list
+
+38 commands. here are the highlights:
+
+| command | what it does |
+|---------|-------------|
+| `demo` | bearing fault detection on real CWRU data |
+| `voyager` | Voyager 1 AACS anomaly detection |
+| `smap` | NASA SMAP/MSL Mars rover benchmark |
+| `spacecraft` | multi-channel spacecraft health monitor |
+| `scan <file>` | auto-classify + show trend in one shot |
+| `watch <file>` | live monitoring with auto-refresh |
+| `text <file>` | writing rhythm analysis (human vs AI) |
+| `market <file>` | financial regime detection |
+| `genome <file>` | DNA sequence structure |
+| `rhythm <file>` | event timing (commits, heartbeats) |
+| `fingerprint <file>` | structural DNA of a signal |
+| `redblue` | autonomous fault-coverage evolution |
+| `evolve` | generational policy optimization |
+| `mission` | full autonomous monitoring mission |
+| `guard <file>` | prognosis: when will this cross the threshold? |
+| `when <file>` | time-to-failure estimation |
+| `batch *.csv` | CI/CD: analyze many files, JSON output |
+| `alert <cmd>` | exit-code monitoring for cron/systemd |
+| `self-test` | verify all claims against real data |
+| `nasa` | run all NASA benchmarks |
+
+run `struktura --help` for the full list.
+
 ## ⚠️ gotchas
 
 stuff to know before you rely on this:
