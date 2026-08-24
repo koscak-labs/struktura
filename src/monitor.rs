@@ -90,7 +90,17 @@ pub enum Leg {
     /// works where CUSUM on raw values fails, because residuals carry no
     /// periodic (orbital) structure.
     ResidualCusum,
+    /// Explicit missingness: invalid samples reported via
+    /// [`HybridMonitor::push_with_validity`]. Calibration data is assumed
+    /// fully valid, so sustained missingness is itself a fault (packet
+    /// loss) — value-and-structure detectors are provably blind to
+    /// forward-filled gaps, only an explicit validity signal sees them.
+    Missingness,
 }
+
+/// Invalid samples within the trailing `MISS_SPAN` ticks required to alarm.
+const MISS_HITS: usize = 4;
+const MISS_SPAN: usize = 32;
 
 /// Per-channel calibration statistics (immutable after calibration).
 #[derive(Debug, Clone)]
@@ -138,11 +148,14 @@ pub struct HybridMonitor {
     t: u64,
     scratch: Vec<f64>,
     alarmed: bool,
-    /// Per-leg enable mask: [residual, repeated, dfa, level, cusum].
+    /// Per-leg enable mask: [residual, repeated, dfa, level, cusum, miss].
     /// Legs whose stationarity assumptions a deployment cannot meet
     /// (e.g. level-shift on a naturally trending channel) are disabled
     /// at configuration time — standard flight-monitor practice.
-    leg_enabled: [bool; 5],
+    leg_enabled: [bool; 6],
+    /// Timestamps of recent invalid samples (any channel), for the
+    /// missingness leg's `MISS_HITS`-in-`MISS_SPAN` rule.
+    miss_times: [u64; MISS_HITS],
 }
 
 /// Extreme-value (Gumbel) return-level threshold.
@@ -363,7 +376,8 @@ impl HybridMonitor {
             t: 0,
             scratch,
             alarmed: false,
-            leg_enabled: [true; 5],
+            leg_enabled: [true; 6],
+            miss_times: [u64::MAX; MISS_HITS],
         })
     }
 
@@ -380,6 +394,17 @@ impl HybridMonitor {
     /// `WINDOW` samples (on ticks where `t % DFA_STRIDE == 0` and the ring
     /// is full), plus O(channels) scalar work.
     pub fn push(&mut self, sample: &[f64]) -> Option<Leg> {
+        self.push_with_validity(sample, &[])
+    }
+
+    /// Like [`HybridMonitor::push`], with an explicit per-channel validity
+    /// flag. An empty `valid` slice means all channels valid. An invalid
+    /// channel sample this tick is excluded from every value/structure leg
+    /// (its rings are forward-filled with the last valid value) and counted
+    /// by the missingness leg: `MISS_HITS` invalid samples within
+    /// `MISS_SPAN` ticks raise [`Leg::Missingness`]. Calibration data is
+    /// assumed fully valid.
+    pub fn push_with_validity(&mut self, sample: &[f64], valid: &[bool]) -> Option<Leg> {
         if self.alarmed || sample.len() != self.calib.len() {
             return None;
         }
@@ -407,9 +432,21 @@ impl HybridMonitor {
         let mut res_hit = false;
         let mut repeat_alarm = false;
         let mut cusum_alarm = false;
+        let mut any_invalid = false;
         for (ch, &v) in sample.iter().enumerate() {
             let cc = &self.calib[ch];
             let st = &mut self.state[ch];
+            let is_valid = valid.get(ch).copied().unwrap_or(true);
+
+            if !is_valid {
+                // Exclude from all value/structure legs; forward-fill the
+                // rings with the last valid value so DFA/rolling windows stay
+                // well-defined, and count the gap for the missingness leg.
+                any_invalid = true;
+                st.ring[(t % WINDOW as u64) as usize] = st.prev;
+                st.roll_ring[(t % ROLL as u64) as usize] = st.prev;
+                continue;
+            }
 
             let zs = (v - (cc.ar_a + cc.ar_b * st.prev)) / cc.ar_sd;
             let z = zs.abs();
@@ -435,6 +472,17 @@ impl HybridMonitor {
 
             st.ring[(t % WINDOW as u64) as usize] = v;
             st.roll_ring[(t % ROLL as u64) as usize] = v;
+        }
+        if any_invalid && self.leg_enabled[5] {
+            for i in 1..MISS_HITS {
+                self.miss_times[i - 1] = self.miss_times[i];
+            }
+            self.miss_times[MISS_HITS - 1] = t;
+            let oldest = self.miss_times[0];
+            if oldest != u64::MAX && t - oldest < MISS_SPAN as u64 {
+                self.alarmed = true;
+                return Some(Leg::Missingness);
+            }
         }
         if res_hit && self.leg_enabled[0] {
             // shift the fixed-size hit history (RES_HITS entries)
@@ -515,6 +563,7 @@ impl HybridMonitor {
             Leg::Dfa => 2,
             Leg::LevelShift => 3,
             Leg::ResidualCusum => 4,
+            Leg::Missingness => 5,
         };
         self.leg_enabled[idx] = on;
     }
@@ -524,6 +573,7 @@ impl HybridMonitor {
         self.dfa_streak = 0;
         self.roll_streak = 0;
         self.res_hit_times = [u64::MAX; RES_HITS];
+        self.miss_times = [u64::MAX; MISS_HITS];
         for st in self.state.iter_mut() {
             st.cusum_pos = 0.0;
             st.cusum_neg = 0.0;

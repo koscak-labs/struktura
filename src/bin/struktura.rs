@@ -2239,6 +2239,7 @@ fn cmd_monitor_perf() {
                 Leg::Dfa => leg_counts[2] += 1,
                 Leg::LevelShift => leg_counts[3] += 1,
                 Leg::ResidualCusum => leg_counts[4] += 1,
+                Leg::Missingness => {}
             }
             mon.reset();
         }
@@ -2268,7 +2269,7 @@ fn cmd_monitor_perf() {
     println!();
 
     // Fault-detection verification with the same EVT-calibrated monitor
-    use struktura::telemetry_bench::{inject_fault, FAULT_TYPES};
+    use struktura::telemetry_bench::{inject_fault, inject_fault_validity, FAULT_TYPES};
     let seeds = 20u64;
     let len = 2048usize;
     let fstart = (len as f64 * 0.58) as usize;
@@ -2284,11 +2285,16 @@ fn cmd_monitor_perf() {
             let cal = synth_spacecraft(len, s + 100);
             let clean_test = synth_spacecraft(len, s + 200);
             let faulted = inject_fault(&clean_test, fault, s);
+            let validity = inject_fault_validity(fault, len);
             let mut m = match HybridMonitor::calibrate(&cal) { Some(m) => m, None => continue };
             let mut smp = [0.0f64; 6];
+            let mut vld = [true; 6];
             for t in 0..len {
-                for ch in 0..6 { smp[ch] = faulted[ch][t]; }
-                if m.push(&smp).is_some() {
+                for ch in 0..6 {
+                    smp[ch] = faulted[ch][t];
+                    vld[ch] = validity[ch][t];
+                }
+                if m.push_with_validity(&smp, &vld).is_some() {
                     if t >= fstart && t < fstop + 96 {
                         hits += 1;
                         lat_sum += (t - fstart) as f64;

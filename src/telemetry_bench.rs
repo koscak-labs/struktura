@@ -222,6 +222,36 @@ pub fn inject_fault(clean: &[Vec<f64>], fault: &str, seed: u64) -> Vec<Vec<f64>>
     observed
 }
 
+/// Validity masks matching [`inject_fault`]'s forward-filled gaps: false
+/// where the injected fault replaced a real measurement with a fill
+/// (packet_loss every 2nd sample on ch1; mixed's first third likewise).
+/// All-true for every other fault type.
+pub fn inject_fault_validity(fault: &str, length: usize) -> Vec<Vec<bool>> {
+    let start = (length as f64 * 0.58) as usize;
+    let duration = ((length as f64 * 0.12) as usize).max(8);
+    let stop = (start + duration).min(length);
+    let mut valid = vec![vec![true; length]; CHANNELS];
+    match fault {
+        "packet_loss" => {
+            let mut i = start;
+            while i < stop {
+                valid[1][i] = false;
+                i += 2;
+            }
+        }
+        "mixed" => {
+            let second = start + duration / 3;
+            let mut i = start;
+            while i < second {
+                valid[1][i] = false;
+                i += 2;
+            }
+        }
+        _ => {}
+    }
+    valid
+}
+
 /// Per-channel DFA α for a multi-channel signal.
 pub fn channel_alphas(signal: &[Vec<f64>]) -> Vec<f64> {
     signal.iter().map(|c| dfa(c).alpha).collect()
