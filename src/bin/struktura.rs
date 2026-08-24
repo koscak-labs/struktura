@@ -126,7 +126,7 @@ fn print_law_detail(law: &StructuralLaw) {
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    if args.len() < 2 {
+    if args.len() < 2 || args[1] == "--help" || args[1] == "-h" || args[1] == "help" {
         println!();
         println!("  \x1b[1mstruktura\x1b[0m - detect when a signal's structure changes");
         println!();
