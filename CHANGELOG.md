@@ -2,6 +2,38 @@
 
 All notable changes to Struktura are documented here.
 
+## v1.6.9 (2026-08-24) — Mars Rovers + Autonomous Evolution
+
+- NASA SMAP/MSL Mars rover anomaly benchmark (`struktura smap`) — F1=0.755 zero training
+- RED/BLUE adversarial evolution (`struktura redblue`) — coverage 60% → 92% autonomously
+- Generational policy optimization (`struktura evolve`)
+- Flight-grade streaming hybrid monitor (`monitor.rs`) with multi-rate channels
+- Autonomous mission mode (`struktura mission`) — detect → decide → adapt loop
+- Prognosis module (`struktura when`, `struktura guard`) — time-to-failure estimation
+- Telemetry benchmark: 6 fault types × 20 seeds × null distribution
+- `scan` command: auto-classify + trend in one shot
+- `watch` command: live monitoring with auto-refresh
+- `alert` command: exit-code monitoring for cron/CI/systemd
+- `oneline` command: one-line output for logs/Slack
+- `batch` command: multi-file CI/CD analysis with `--json`
+- `fingerprint` / `dna` command: structural DNA of signals
+- `changepoint` module: structural change detection
+- Mutation-tested: 80 tests covering core DFA, boundaries, operator directions
+- Chrome S logo + social preview banner
+- LICENSE-MIT + LICENSE-APACHE files added
+- Preprocessing warning documented (filtering invalidates baselines)
+
+## v1.5.0 (2026-08-23) — Spacecraft + Multi-Domain
+
+- Voyager 1 AACS anomaly detection from public NASA data
+- Heliopause crossing detection
+- Genome sequence analysis (8 chromosomes, R² > 0.99)
+- Text rhythm analysis (human vs AI writing)
+- Financial market regime detection
+- Cardiac HRV analysis
+- Multi-fractal DFA (`mfdfa` module)
+- Speed benchmark: 85-112x faster than Python nolds
+
 ## v1.3.0 (2026-08-23) — no_std Support
 
 - `#![no_std]` with `extern crate alloc` — runs on embedded flight computers
