@@ -181,6 +181,7 @@ fn main() {
         "oneline" => cmd_oneline(&args),
         "alert" => cmd_alert(&args),
         "benchmark-faults" | "bf" => cmd_benchmark_faults(),
+        "benchmark-telemetry" | "bt" => cmd_benchmark_telemetry(&args),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -2076,6 +2077,56 @@ fn cmd_benchmark_faults() {
     println!();
     println!("  Algorithm: Detrended Fluctuation Analysis (Peng 1994)");
     println!("  Signal: {} samples/seed, fault injected at sample {}", n, fault_at);
+    println!("  https://crates.io/crates/struktura");
+    println!();
+}
+
+fn cmd_benchmark_telemetry(args: &[String]) {
+    use struktura::telemetry_bench::{run_benchmark, CHANNEL_NAMES};
+
+    let mut length = 700usize;
+    let mut n_seeds = 20u64;
+    let mut i = 2;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--length" if i + 1 < args.len() => { length = args[i + 1].parse().unwrap_or(700); i += 2; }
+            "--seeds" if i + 1 < args.len() => { n_seeds = args[i + 1].parse().unwrap_or(20); i += 2; }
+            _ => { i += 1; }
+        }
+    }
+
+    println!();
+    println!("  \x1b[1mSTRUKTURA COUPLED-TELEMETRY BENCHMARK\x1b[0m");
+    println!("  6-channel spacecraft sim (power/thermal/wheel/pointing/payload)");
+    println!("  Fault window: 58%..70% of sequence | {} samples | {} seeds", length, n_seeds);
+    println!("  ================================================================");
+    println!();
+
+    let (p95, results) = run_benchmark(length, n_seeds);
+
+    println!("  Per-channel null 95th percentile |Δα| (clean vs clean):");
+    for (ch, p) in p95.iter().enumerate() {
+        println!("    {:<16} {:.4}", CHANNEL_NAMES[ch], p);
+    }
+    println!();
+    println!("  | Fault Type         | Detect Rate | Mean Max |Δα| | Best Channel     |");
+    println!("  |--------------------|-------------|---------------|------------------|");
+    for r in &results {
+        let rate_color = if r.detect_rate >= 0.8 { "\x1b[32m" }
+                         else if r.detect_rate >= 0.4 { "\x1b[33m" }
+                         else { "\x1b[31m" };
+        println!(
+            "  | {:<18} | {}{:>4.0}%\x1b[0m       | {:.4}        | {:<16} |",
+            r.fault, rate_color, r.detect_rate * 100.0, r.mean_max_shift,
+            CHANNEL_NAMES[r.best_channel]
+        );
+    }
+    println!();
+    println!("  Detection = any channel's |Δα| (calibration vs test) exceeds that");
+    println!("  channel's 95th-pct clean-vs-clean shift (per-channel FPR <= 5%).");
+    println!("  correlation_change = structural fault the additive taxonomy misses.");
+    println!();
+    println!("  Algorithm: Detrended Fluctuation Analysis (Peng 1994)");
     println!("  https://crates.io/crates/struktura");
     println!();
 }
