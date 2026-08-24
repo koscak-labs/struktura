@@ -113,6 +113,7 @@ fn main() {
         println!("    struktura demo                            Run builtin bearing fault demo");
         println!("    struktura voyager                         Voyager 1 AACS anomaly analysis");
         println!("    struktura spacecraft                      Multi-channel spacecraft health demo");
+        println!("    struktura text <file.txt> [file2.txt]     Text structure analysis (sentence rhythm DFA)");
         println!("    struktura check <file.csv>                Analyze a signal");
         println!("    struktura check <file.csv> --baseline N   Compare against baseline");
         println!("    struktura compare <a.csv> <b.csv>         Compare two signals");
@@ -136,6 +137,7 @@ fn main() {
         "generate" => cmd_generate(&args),
         "voyager" => cmd_voyager(),
         "spacecraft" => cmd_spacecraft(),
+        "text" => cmd_text(&args),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -579,6 +581,52 @@ fn cmd_voyager() {
     println!();
     println!("  The magnetic field's fractal structure changed during the anomaly —");
     println!("  detectable from public NASA data, zero training, zero ML.");
+    println!();
+}
+
+fn cmd_text(args: &[String]) {
+    if args.len() < 3 {
+        eprintln!("Usage: struktura text <file.txt> [file2.txt ...]");
+        process::exit(1);
+    }
+    use struktura::text::text_structure;
+
+    println!();
+    println!("  \x1b[1mTEXT STRUCTURE ANALYSIS\x1b[0m");
+    println!("  DFA on sentence-length sequences — measures writing rhythm");
+    println!("  ====================================================================");
+    println!();
+    println!("  Reference: human prose α≈0.7-0.8 | shuffled/mechanical α≈0.5");
+    println!();
+
+    for path in &args[2..] {
+        let text = match std::fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(e) => { eprintln!("  {}: {}", path, e); continue; }
+        };
+        let result = text_structure(&text);
+        let bar = make_bar(result.dfa.alpha);
+        println!("  {} {}", bar, path);
+        println!("  {:30} sentences={}  mean_len={:.0}  α={:.3}  R²={:.4}",
+            "", result.sentence_count, result.mean_sentence_len,
+            result.dfa.alpha, result.dfa.r_squared);
+        if result.sentence_count >= 64 && result.dfa.r_squared > 0.5 {
+            let tag = if result.dfa.alpha > 0.7 {
+                "\x1b[32mSTRONG RHYTHM\x1b[0m (human literary)"
+            } else if result.dfa.alpha > 0.55 {
+                "\x1b[33mMODERATE RHYTHM\x1b[0m"
+            } else {
+                "\x1b[36mUNIFORM/MECHANICAL\x1b[0m"
+            };
+            println!("  {:30} {}", "", tag);
+        } else if result.sentence_count < 64 {
+            println!("  {:30} \x1b[90m(need 200+ sentences for reliable DFA)\x1b[0m", "");
+        }
+        println!();
+    }
+    println!("  ====================================================================");
+    println!("  α > 0.6 = long-range correlations in sentence rhythm (human writing)");
+    println!("  α ≈ 0.5 = random/shuffled/uniform sentence lengths");
     println!();
 }
 
