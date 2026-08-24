@@ -166,6 +166,7 @@ fn main() {
         "heliopause" => cmd_heliopause(),
         "ims" => cmd_ims(),
         "spacecraft" => cmd_spacecraft(),
+        "genome" => cmd_genome(&args),
         "text" => cmd_text(&args),
         "market" => cmd_market(&args),
         "rhythm" => cmd_rhythm(&args),
@@ -962,6 +963,62 @@ fn cmd_classify(args: &[String]) {
     println!();
 }
 
+fn cmd_genome(args: &[String]) {
+    use struktura::genome::genome_structure;
+
+    if args.len() < 3 {
+        eprintln!("Usage: struktura genome <file.fa> [--window 1000] [--profile 4096]");
+        process::exit(1);
+    }
+
+    let file = &args[2];
+    let content = std::fs::read_to_string(file).unwrap_or_else(|e| {
+        eprintln!("Error reading {}: {}", file, e);
+        process::exit(1);
+    });
+
+    let window: usize = args.iter().position(|a| a == "--window")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1000);
+
+    let profile_block: usize = args.iter().position(|a| a == "--profile")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(4096);
+
+    let result = genome_structure(&content, window, profile_block);
+
+    println!();
+    println!("  \x1b[1mGENOME STRUCTURAL ANALYSIS\x1b[0m");
+    println!("  DFA scaling analysis of GC-content across {}", file);
+    println!("  ====================================================================");
+    println!();
+    println!("  Bases:      {}  ({:.1} Mbp)", result.total_bases, result.total_bases as f64 / 1e6);
+    println!("  GC windows: {}  ({}bp each)", result.gc_windows, result.window_size);
+    println!("  GC content: {:.1}%", result.gc_content * 100.0);
+    println!();
+
+    let bar = make_bar(result.overall_dfa.alpha);
+    println!("  {} overall α={:.3}  R²={:.4}", bar, result.overall_dfa.alpha, result.overall_dfa.r_squared);
+    println!();
+
+    if !result.profile.is_empty() {
+        println!("  Structural profile ({:.0}kb blocks):", profile_block as f64 * window as f64 / 1000.0);
+        for r in &result.profile {
+            let b = make_bar(r.alpha);
+            println!("    {:.1}-{:.1}M  {} α={:.3}", r.start_bp as f64/1e6, r.end_bp as f64/1e6, b, r.alpha);
+        }
+        println!();
+    }
+
+    println!("  ====================================================================");
+    println!("  α ≈ 1.0: strong 1/f organization (gene-rich, regulated)");
+    println!("  α ≈ 0.7: moderate (typical heterochromatin)");
+    println!("  α ≈ 0.5: near-random (structural desert)");
+    println!();
+}
+
 fn cmd_ims() {
     use struktura::space::ims_demo;
     let result = ims_demo();
@@ -1156,14 +1213,18 @@ fn cmd_scan(args: &[String]) {
         }
     }
 
+    use struktura::classify::classify;
+
+    let law = analyze(&values);
+    let cls = classify(&values);
+
     if json_mode {
-        let law = analyze(&values);
         let baseline_info = baseline_file.as_ref().map(|bf| {
             let baseline = read_input(bf);
             struktura::compare(&baseline, &values)
         });
-        print!("{{\"alpha\":{:.4},\"r_squared\":{:.4},\"quality\":\"{}\",\"n\":{},\"mean\":{:.4},\"std\":{:.4},\"kurtosis\":{:.2},\"hurst\":{:.3}",
-            law.dfa.alpha, law.dfa.r_squared, law.quality, law.n, law.mean, law.std_dev, law.kurtosis, law.hurst);
+        print!("{{\"alpha\":{:.4},\"r_squared\":{:.4},\"quality\":\"{}\",\"type\":\"{}\",\"n\":{},\"mean\":{:.4},\"std\":{:.4},\"kurtosis\":{:.2},\"hurst\":{:.3}",
+            law.dfa.alpha, law.dfa.r_squared, law.quality, cls.signal_type, law.n, law.mean, law.std_dev, law.kurtosis, law.hurst);
         if let Some(ref result) = baseline_info {
             print!(",\"shift\":{:.4},\"verdict\":\"{}\"", result.shift, result.verdict);
         }
@@ -1176,30 +1237,33 @@ fn cmd_scan(args: &[String]) {
     println!("  ====================================================================");
     println!();
 
-    let law = analyze(&values);
-    let bar = make_bar(law.dfa.alpha);
+    let bar = alpha_bar(law.dfa.alpha, 30);
     let q = quality_str(law.quality);
-    println!("  {} alpha={:.3}  R²={:.4}  [{q}]  n={}", bar, law.dfa.alpha, law.dfa.r_squared, law.n);
-    println!("  {:30} mean={:.2}  std={:.2}  kurtosis={:.2}", "", law.mean, law.std_dev, law.kurtosis);
+    println!("  {} α={:.3}  R²={:.4}  [{q}]  n={}", bar, law.dfa.alpha, law.dfa.r_squared, law.n);
+    println!("  {:30} type: \x1b[1m{}\x1b[0m", "", cls.signal_type);
+    println!("  {:30} mean={:.2}  std={:.2}  kurtosis={:.2}  H={:.3}", "", law.mean, law.std_dev, law.kurtosis, law.hurst);
+
+    if values.len() >= 512 {
+        let trend = struktura::trend::alpha_trend(&values, 256, 64);
+        let dir_str = match trend.direction {
+            struktura::trend::TrendDirection::Improving => "\x1b[32mSTABLE/IMPROVING\x1b[0m",
+            struktura::trend::TrendDirection::Stable => "\x1b[32mSTABLE\x1b[0m",
+            struktura::trend::TrendDirection::Degrading => "\x1b[31mDEGRADING\x1b[0m",
+        };
+        println!("  {:30} trend: α {:.3}→{:.3} {dir_str}", "", trend.alpha_start, trend.alpha_end);
+    }
 
     if let Some(ref bf) = baseline_file {
         let baseline = read_input(bf);
         let result = struktura::compare(&baseline, &values);
-        let v_str = match result.verdict {
-            HealthVerdict::Healthy => "\x1b[32mHEALTHY\x1b[0m",
-            HealthVerdict::Watch => "\x1b[33mWATCH\x1b[0m",
-            HealthVerdict::Warning => "\x1b[31mWARNING\x1b[0m",
-            HealthVerdict::Critical => "\x1b[31;1mCRITICAL\x1b[0m",
-            _ => "UNKNOWN",
-        };
+        let (color, label) = verdict_color(result.verdict);
         println!();
         println!("  vs baseline ({bf}):");
-        println!("  {:30} shift={:+.3}  {v_str}", "", result.shift);
+        println!("  {:30} shift={:+.3}  {}{}\x1b[0m", "", result.shift, color, label);
     }
 
     println!();
     println!("  ====================================================================");
-    println!("  α ≈ 0.5 = random noise | 0.5-1.0 = structured | shift from baseline = degradation");
     println!();
 }
 
