@@ -1220,6 +1220,47 @@ pub mod prognosis;
 pub mod autopilot;
 #[cfg(feature = "std")]
 pub mod redblue;
+#[cfg(feature = "std")]
+pub mod smap_eval;
+
+/// Solve A x = b in place (Gauss–Jordan, partial pivoting). Shared by the
+/// reconstruction and autoregression fitters. Returns false if singular.
+pub(crate) fn solve_ridge(a: &mut [f64], b: &mut [f64], n: usize) -> bool {
+    for col in 0..n {
+        let mut pivot = col;
+        for row in col + 1..n {
+            if a[row * n + col].abs() > a[pivot * n + col].abs() {
+                pivot = row;
+            }
+        }
+        if a[pivot * n + col].abs() < 1e-12 {
+            return false;
+        }
+        if pivot != col {
+            for k in 0..n {
+                a.swap(col * n + k, pivot * n + k);
+            }
+            b.swap(col, pivot);
+        }
+        let d = a[col * n + col];
+        for k in 0..n {
+            a[col * n + k] /= d;
+        }
+        b[col] /= d;
+        for row in 0..n {
+            if row != col {
+                let f = a[row * n + col];
+                if f != 0.0 {
+                    for k in 0..n {
+                        a[row * n + k] -= f * a[col * n + k];
+                    }
+                    b[row] -= f * b[col];
+                }
+            }
+        }
+    }
+    true
+}
 pub mod mfdfa;
 pub mod trend;
 pub mod classify;

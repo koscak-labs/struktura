@@ -188,7 +188,7 @@ fn main() {
         "mission" => cmd_mission(),
         "redblue" => cmd_redblue(&args),
         "evolve" => cmd_evolve(&args),
-        "smap" => cmd_smap(),
+        "smap" => cmd_smap(&args),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -2850,8 +2850,28 @@ fn cmd_evolve(args: &[String]) {
     println!();
 }
 
-fn cmd_smap() {
+fn cmd_smap(args: &[String]) {
     use struktura::monitor::HybridMonitor;
+
+    // --ar [p]: telemanom-protocol batch evaluation with a closed-form
+    // ridge autoregression in place of JPL's LSTM.
+    let mut ar_mode: Option<usize> = None;
+    let mut z_min = 2.5f64;
+    let mut p_prune = 0.13f64;
+    let mut buffer = 50usize;
+    let mut i = 2;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--ar" => {
+                ar_mode = Some(args.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(25));
+                i += 2;
+            }
+            "--zmin" if i + 1 < args.len() => { z_min = args[i + 1].parse().unwrap_or(2.5); i += 2; }
+            "--prune" if i + 1 < args.len() => { p_prune = args[i + 1].parse().unwrap_or(0.13); i += 2; }
+            "--buffer" if i + 1 < args.len() => { buffer = args[i + 1].parse().unwrap_or(50); i += 2; }
+            _ => { i += 1; }
+        }
+    }
 
     println!();
     println!("  \x1b[1mNASA SMAP + MSL/CURIOSITY ANOMALY BENCHMARK\x1b[0m");
@@ -2917,6 +2937,32 @@ fn cmd_smap() {
         if train_v.len() < 300 || test_v.is_empty() {
             per_sc[sc_idx].5 += 1;
             per_sc[sc_idx].3 += sequences.len();
+            continue;
+        }
+
+        if let Some(p) = ar_mode {
+            // Batch telemanom-protocol path: AR(p)-ridge + JPL's residual math.
+            let preds = struktura::smap_eval::detect_channel_tuned(
+                &train_v, &test_v, p, z_min, p_prune, buffer,
+            );
+            let mut hit = vec![false; sequences.len()];
+            let mut fp = 0usize;
+            for &(ps, pe) in &preds {
+                let mut overlaps = false;
+                for (si, &(s, e)) in sequences.iter().enumerate() {
+                    if ps <= e && pe >= s {
+                        hit[si] = true;
+                        overlaps = true;
+                    }
+                }
+                if !overlaps {
+                    fp += 1;
+                }
+            }
+            per_sc[sc_idx].1 += hit.iter().filter(|&&h| h).count();
+            per_sc[sc_idx].2 += fp;
+            per_sc[sc_idx].3 += sequences.len();
+            per_sc[sc_idx].4 += 1;
             continue;
         }
 
