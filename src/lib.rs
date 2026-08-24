@@ -1,3 +1,4 @@
+#![allow(clippy::needless_range_loop, clippy::type_complexity, clippy::large_enum_variant, clippy::useless_vec, clippy::map_clone)]
 //! Predict failure before it happens.
 //!
 //! Struktura detects when the *structure* of a signal changes — before
@@ -69,8 +70,10 @@ fn sin(x: f64) -> f64 { libm::sin(x) }
 fn sin(x: f64) -> f64 { x.sin() }
 
 #[cfg(not(feature = "std"))]
+#[allow(dead_code)]
 fn cos(x: f64) -> f64 { libm::cos(x) }
 #[cfg(feature = "std")]
+#[allow(dead_code)]
 fn cos(x: f64) -> f64 { x.cos() }
 
 /// Result of a DFA or ACR computation.
