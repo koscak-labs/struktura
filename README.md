@@ -1,9 +1,6 @@
 <p align="center">
-  <img src="assets/logo.png" alt="struktura" width="280">
+  <img src="assets/social-preview.png" alt="struktura" width="100%">
 </p>
-
-<h3 align="center">predict failure before it happens 🔥</h3>
-<p align="center">detected voyager 1's anomaly from public data. zero training. 98 lines. 85x faster than python.</p>
 
 <p align="center">
   <a href="https://crates.io/crates/struktura"><img src="https://img.shields.io/crates/v/struktura.svg" alt="Crates.io"></a>
