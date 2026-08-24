@@ -69,6 +69,8 @@
 
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
+#[cfg(not(feature = "std"))]
+use alloc::vec;
 
 use crate::dfa_fast_into as dfa_into;
 
