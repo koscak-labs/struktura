@@ -6,7 +6,10 @@ use struktura::{analyze, health_check, prove_structure, HealthVerdict, LawQualit
 const NORMAL_SAMPLES: &str = include_str!("../../data/normal_sample.csv");
 const FAULT_SAMPLES: &str = include_str!("../../data/fault_sample.csv");
 
-fn read_csv(path: &str) -> Vec<f64> {
+fn read_input(path: &str) -> Vec<f64> {
+    if path == "-" {
+        return read_stdin();
+    }
     if !std::path::Path::new(path).exists() {
         eprintln!("Error: file not found: {}", path);
         process::exit(1);
@@ -18,6 +21,8 @@ fn read_csv(path: &str) -> Vec<f64> {
     parse_values(&content)
 }
 
+fn read_csv(path: &str) -> Vec<f64> { read_input(path) }
+
 fn read_stdin() -> Vec<f64> {
     use std::io::Read;
     let mut buf = String::new();
@@ -26,6 +31,22 @@ fn read_stdin() -> Vec<f64> {
         process::exit(1);
     });
     parse_values(&buf)
+}
+
+fn read_text_input(path: &str) -> String {
+    if path == "-" {
+        use std::io::Read;
+        let mut buf = String::new();
+        std::io::stdin().read_to_string(&mut buf).unwrap_or_else(|e| {
+            eprintln!("Error reading stdin: {}", e);
+            process::exit(1);
+        });
+        return buf;
+    }
+    std::fs::read_to_string(path).unwrap_or_else(|e| {
+        eprintln!("Error reading {}: {}", path, e);
+        process::exit(1);
+    })
 }
 
 fn parse_values(content: &str) -> Vec<f64> {
@@ -113,9 +134,10 @@ fn main() {
         println!("    struktura demo                            Run builtin bearing fault demo");
         println!("    struktura voyager                         Voyager 1 AACS anomaly analysis");
         println!("    struktura spacecraft                      Multi-channel spacecraft health demo");
-        println!("    struktura text <file.txt> [file2.txt]     Text structure analysis (sentence rhythm DFA)");
-        println!("    struktura market <prices.csv>              Financial regime detection (trending/random/reverting)");
-        println!("    struktura rhythm <timestamps.csv>          Event rhythm analysis (bursty/natural/metronomic)");
+        println!("    struktura scan <file_or_-> [--baseline f]  Auto-analyze any signal (pipe with -)");
+        println!("    struktura text <file.txt>                  Writing rhythm analysis");
+        println!("    struktura market <prices.csv>              Financial regime detection");
+        println!("    struktura rhythm <timestamps.csv>          Event rhythm (git/heartbeat/keystrokes)");
         println!("    struktura check <file.csv>                Analyze a signal");
         println!("    struktura check <file.csv> --baseline N   Compare against baseline");
         println!("    struktura compare <a.csv> <b.csv>         Compare two signals");
@@ -142,6 +164,7 @@ fn main() {
         "text" => cmd_text(&args),
         "market" => cmd_market(&args),
         "rhythm" => cmd_rhythm(&args),
+        "scan" => cmd_scan(&args),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -588,6 +611,65 @@ fn cmd_voyager() {
     println!();
 }
 
+fn cmd_scan(args: &[String]) {
+    if args.len() < 3 {
+        eprintln!("Usage: struktura scan <file_or_->  [--baseline <file>]");
+        eprintln!("  Auto-analyzes any signal. Pipe from stdin with -");
+        eprintln!("  Examples:");
+        eprintln!("    struktura scan sensor.csv");
+        eprintln!("    cat data.csv | struktura scan -");
+        eprintln!("    struktura scan current.csv --baseline healthy.csv");
+        process::exit(1);
+    }
+    let values = read_input(&args[2]);
+    if values.is_empty() {
+        eprintln!("No numeric values found in input");
+        process::exit(1);
+    }
+
+    let mut baseline_file: Option<String> = None;
+    let mut i = 3;
+    while i < args.len() {
+        if args[i] == "--baseline" && i + 1 < args.len() {
+            baseline_file = Some(args[i + 1].clone());
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+
+    println!();
+    println!("  \x1b[1mSTRUKTURA SCAN\x1b[0m");
+    println!("  ====================================================================");
+    println!();
+
+    let law = analyze(&values);
+    let bar = make_bar(law.dfa.alpha);
+    let q = quality_str(law.quality);
+    println!("  {} alpha={:.3}  R²={:.4}  [{q}]  n={}", bar, law.dfa.alpha, law.dfa.r_squared, law.n);
+    println!("  {:30} mean={:.2}  std={:.2}  kurtosis={:.2}", "", law.mean, law.std_dev, law.kurtosis);
+
+    if let Some(ref bf) = baseline_file {
+        let baseline = read_input(bf);
+        let result = struktura::compare(&baseline, &values);
+        let v_str = match result.verdict {
+            HealthVerdict::Healthy => "\x1b[32mHEALTHY\x1b[0m",
+            HealthVerdict::Watch => "\x1b[33mWATCH\x1b[0m",
+            HealthVerdict::Warning => "\x1b[31mWARNING\x1b[0m",
+            HealthVerdict::Critical => "\x1b[31;1mCRITICAL\x1b[0m",
+            _ => "UNKNOWN",
+        };
+        println!();
+        println!("  vs baseline ({bf}):");
+        println!("  {:30} shift={:+.3}  {v_str}", "", result.shift);
+    }
+
+    println!();
+    println!("  ====================================================================");
+    println!("  α ≈ 0.5 = random noise | 0.5-1.0 = structured | shift from baseline = degradation");
+    println!();
+}
+
 fn cmd_market(args: &[String]) {
     if args.len() < 3 {
         eprintln!("Usage: struktura market <prices.csv>");
@@ -681,10 +763,7 @@ fn cmd_text(args: &[String]) {
     println!();
 
     for path in &args[2..] {
-        let text = match std::fs::read_to_string(path) {
-            Ok(t) => t,
-            Err(e) => { eprintln!("  {}: {}", path, e); continue; }
-        };
+        let text = read_text_input(path);
         let result = text_structure(&text);
         let bar = make_bar(result.dfa.alpha);
         println!("  {} {}", bar, path);
