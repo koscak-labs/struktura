@@ -913,5 +913,6 @@ pub mod space;
 pub mod text;
 pub mod market;
 pub mod rhythm;
+pub mod mfdfa;
 #[cfg(feature = "std")]
 pub mod codegen;
