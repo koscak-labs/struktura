@@ -1,0 +1,6 @@
+services:
+  struktura:
+    build: .
+    volumes:
+      - ./data:/data
+    command: ["guard", "/data/your_sensor.csv", "--watch", "--json"]

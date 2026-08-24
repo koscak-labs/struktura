@@ -263,7 +263,29 @@ it finds its own blind spots and fixes them. no human tuning needed.
 | `self-test` | verify all claims against real data |
 | `nasa` | run all NASA benchmarks |
 
+| `pipe` | stream DFA from stdin (Prometheus, MQTT, tail) |
+
 run `struktura --help` for the full list.
+
+## 🐳 docker / python / devops
+
+```bash
+# docker — zero install
+docker build -t struktura . && docker run -v ./data:/data struktura guard /data/sensor.csv
+
+# python — 85x faster than nolds
+pip install maturin && maturin develop --features python
+python -c "import struktura; print(struktura.py_dfa([1.0]*256))"
+
+# pipe anything through DFA
+tail -f /var/log/metrics.csv | struktura pipe --json
+curl prometheus:9090/query | struktura pipe --window 128
+
+# cron alert with slack webhook
+*/5 * * * * struktura guard /data/sensor.csv --webhook $SLACK_URL
+```
+
+see `examples/devops_integration.sh` for more.
 
 ## ⚠️ gotchas
 
