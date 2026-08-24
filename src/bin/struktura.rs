@@ -198,6 +198,7 @@ fn main() {
         "nasa" => cmd_nasa(),
         "guard" => cmd_guard(&args),
         "when" => cmd_when(&args),
+        "pipe" => cmd_pipe(&args),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -3212,6 +3213,7 @@ fn cmd_guard(args: &[String]) {
     let mut json = false;
     let mut watch = false;
     let mut watch_ms = 1000u64;
+    let mut webhook_url = String::new();
     let mut i = 2;
     while i < args.len() {
         match args[i].as_str() {
@@ -3219,11 +3221,13 @@ fn cmd_guard(args: &[String]) {
             "--json" => { json = true; i += 1; }
             "--watch" | "-w" => { watch = true; i += 1; }
             "--interval" if i + 1 < args.len() => { watch_ms = args[i + 1].parse().unwrap_or(1000); i += 2; }
+            "--webhook" if i + 1 < args.len() => { webhook_url = args[i + 1].clone(); i += 2; }
             "--help" | "-h" => {
-                println!("struktura guard <file.csv> [--baseline N] [--json] [--watch]");
+                println!("struktura guard <file.csv> [--baseline N] [--json] [--watch] [--webhook URL]");
                 println!("  Monitor any CSV for anomalies. Exit: 0=healthy 1=fault 2=error");
                 println!("  --watch        Follow the file (like tail -f), monitor new rows live");
                 println!("  --interval MS  Poll interval for --watch (default 1000ms)");
+                println!("  --webhook URL  POST anomaly alerts to a Slack/Discord/PagerDuty webhook");
                 process::exit(0);
             }
             s if !s.starts_with('-') && file_path.is_empty() => { file_path = s.to_string(); i += 1; }
@@ -3241,6 +3245,9 @@ fn cmd_guard(args: &[String]) {
             process::exit(2);
         })
     };
+    if !webhook_url.is_empty() {
+        std::env::set_var("STRUKTURA_WEBHOOK", &webhook_url);
+    }
     if watch && !file_path.is_empty() && file_path != "-" {
         run_guard_watch(&file_path, baseline_n, json, watch_ms);
     }
@@ -3618,4 +3625,57 @@ fn generate_ros_package() -> String {
     s.push_str("  <export>\n    <build_type>ament_cmake</build_type>\n  </export>\n");
     s.push_str("</package>\n");
     s
+}
+
+fn cmd_pipe(args: &[String]) {
+    use std::io::{self, BufRead};
+    use struktura::{dfa, DfaResult};
+
+    let window: usize = args.iter().position(|a| a == "--window")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(256);
+    let json = args.iter().any(|a| a == "--json");
+
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!("struktura pipe [--window N] [--json]");
+        println!("  stream DFA from stdin. one number per line. outputs per-window alpha.");
+        println!();
+        println!("  examples:");
+        println!("    curl -s prometheus:9090/metrics | struktura pipe");
+        println!("    tail -f /var/log/latency.csv | struktura pipe --window 128");
+        println!("    mqtt sub sensor/temp | struktura pipe --json");
+        process::exit(0);
+    }
+
+    let stdin = io::stdin();
+    let mut buf: Vec<f64> = Vec::with_capacity(window);
+    let mut baseline_alpha: Option<f64> = None;
+
+    for line in stdin.lock().lines() {
+        let line = match line { Ok(l) => l, Err(_) => break };
+        let val: f64 = match line.trim().parse::<f64>() {
+            Ok(v) if v.is_finite() => v,
+            _ => continue,
+        };
+        buf.push(val);
+        if buf.len() > window { buf.remove(0); }
+        if buf.len() < window { continue; }
+
+        let r = dfa(&buf);
+        let alpha = r.alpha;
+        let r2 = r.r_squared;
+
+        if baseline_alpha.is_none() {
+            baseline_alpha = Some(alpha);
+        }
+        let shift = alpha - baseline_alpha.unwrap();
+        let verdict = struktura::HealthVerdict::from_shift(shift);
+
+        if json {
+            println!("{{\"alpha\":{:.4},\"r2\":{:.4},\"shift\":{:.4},\"verdict\":\"{}\"}}", alpha, r2, shift, verdict);
+        } else {
+            println!("alpha={:.4}  R²={:.4}  shift={:+.4}  {}", alpha, r2, shift, verdict);
+        }
+    }
 }

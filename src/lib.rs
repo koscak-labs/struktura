@@ -1341,6 +1341,10 @@ pub mod autopilot;
 pub mod redblue;
 #[cfg(feature = "std")]
 pub mod smap_eval;
+#[cfg(feature = "wasm")]
+pub mod wasm;
+#[cfg(feature = "python")]
+pub mod python;
 
 /// Solve A x = b in place (Gauss–Jordan, partial pivoting). Shared by the
 /// reconstruction and autoregression fitters. Returns false if singular.

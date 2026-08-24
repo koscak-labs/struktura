@@ -17,12 +17,16 @@ exclude = ["data/genome/", "data/heliopause/", "data/ims/", "data/austen_shuffle
 default = ["std"]
 std = []
 serde = ["dep:serde"]
+wasm = ["dep:wasm-bindgen"]
+python = ["dep:pyo3"]
 
 [lib]
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"], optional = true }
+wasm-bindgen = { version = "0.2", optional = true }
+pyo3 = { version = "0.23", features = ["extension-module"], optional = true }
 libm = "0.2"
 
 [dev-dependencies]
