@@ -112,6 +112,11 @@ pub struct HybridMonitor {
     t: u64,
     scratch: Vec<f64>,
     alarmed: bool,
+    /// Per-leg enable mask: [residual, repeated, dfa, level, cusum].
+    /// Legs whose stationarity assumptions a deployment cannot meet
+    /// (e.g. level-shift on a naturally trending channel) are disabled
+    /// at configuration time — standard flight-monitor practice.
+    leg_enabled: [bool; 5],
 }
 
 /// Extreme-value (Gumbel) return-level threshold.
@@ -332,6 +337,7 @@ impl HybridMonitor {
             t: 0,
             scratch,
             alarmed: false,
+            leg_enabled: [true; 5],
         })
     }
 
@@ -404,7 +410,7 @@ impl HybridMonitor {
             st.ring[(t % WINDOW as u64) as usize] = v;
             st.roll_ring[(t % ROLL as u64) as usize] = v;
         }
-        if res_hit {
+        if res_hit && self.leg_enabled[0] {
             // shift the fixed-size hit history (RES_HITS entries)
             for i in 1..RES_HITS {
                 self.res_hit_times[i - 1] = self.res_hit_times[i];
@@ -416,17 +422,17 @@ impl HybridMonitor {
                 return Some(Leg::Residual);
             }
         }
-        if repeat_alarm {
+        if repeat_alarm && self.leg_enabled[1] {
             self.alarmed = true;
             return Some(Leg::RepeatedValue);
         }
-        if cusum_alarm {
+        if cusum_alarm && self.leg_enabled[4] {
             self.alarmed = true;
             return Some(Leg::ResidualCusum);
         }
 
         // Leg 3: DFA every DFA_STRIDE ticks once the ring is full
-        if ring_full && t % DFA_STRIDE as u64 == 0 {
+        if self.leg_enabled[2] && ring_full && t % DFA_STRIDE as u64 == 0 {
             let mut hit = false;
             for ch in 0..self.calib.len() {
                 let cc = &self.calib[ch];
@@ -453,7 +459,7 @@ impl HybridMonitor {
         }
 
         // Leg 4: rolling-mean level shift
-        if roll_full {
+        if self.leg_enabled[3] && roll_full {
             let mut hit = false;
             for ch in 0..self.calib.len() {
                 let cc = &self.calib[ch];
@@ -475,6 +481,18 @@ impl HybridMonitor {
     }
 
     /// Clear the alarm latch and detector streaks (ring contents persist).
+    /// Enable or disable one detector leg (all enabled by default).
+    pub fn set_leg_enabled(&mut self, leg: Leg, on: bool) {
+        let idx = match leg {
+            Leg::Residual => 0,
+            Leg::RepeatedValue => 1,
+            Leg::Dfa => 2,
+            Leg::LevelShift => 3,
+            Leg::ResidualCusum => 4,
+        };
+        self.leg_enabled[idx] = on;
+    }
+
     pub fn reset(&mut self) {
         self.alarmed = false;
         self.dfa_streak = 0;

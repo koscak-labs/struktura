@@ -183,6 +183,7 @@ fn main() {
         "benchmark-faults" | "bf" => cmd_benchmark_faults(),
         "benchmark-telemetry" | "bt" => cmd_benchmark_telemetry(&args),
         "monitor-perf" => cmd_monitor_perf(),
+        "monitor-real" => cmd_monitor_real(),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -2295,6 +2296,188 @@ fn cmd_monitor_perf() {
         let color = if rate >= 0.8 { "\x1b[32m" } else if rate >= 0.4 { "\x1b[33m" } else { "\x1b[31m" };
         println!("  | {:<18} | {}{:>4.0}%\x1b[0m  | {:>6.0}       |",
             fault, color, rate * 100.0, if hits > 0 { lat_sum / hits as f64 } else { 0.0 });
+    }
+    println!();
+}
+
+fn cmd_monitor_real() {
+    use struktura::monitor::HybridMonitor;
+    use std::path::Path;
+
+    println!();
+    println!("  \x1b[1mMONITOR ON REAL NASA DATA\x1b[0m");
+    println!("  ================================================================");
+
+    // ── Part 1: NASA IMS bearing run-to-failure ──
+    // 984 recordings, 10-minute intervals, 4 bearing channels.
+    // Per-recording RMS per channel = housekeeping-style telemetry stream.
+    // Bearing 1 outer-race failure terminated the test at the last recording.
+    let ims_dir = Path::new("data/ims/extracted/2nd_test/2nd_test");
+    let cache = Path::new("data/ims_monitor_stream.csv");
+
+    let stream: Vec<[f64; 4]> = if cache.exists() {
+        std::fs::read_to_string(cache)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| {
+                let mut it = l.split(',');
+                let mut row = [0.0f64; 4];
+                for slot in row.iter_mut() {
+                    *slot = it.next()?.trim().parse().ok()?;
+                }
+                Some(row)
+            })
+            .collect()
+    } else if ims_dir.exists() {
+        let mut names: Vec<_> = std::fs::read_dir(ims_dir)
+            .expect("read ims dir")
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .collect();
+        names.sort();
+        println!("  Computing per-recording RMS from {} raw recordings...", names.len());
+        let mut rows = Vec::with_capacity(names.len());
+        for p in &names {
+            let content = match std::fs::read_to_string(p) { Ok(c) => c, Err(_) => continue };
+            let mut sum_sq = [0.0f64; 4];
+            let mut n = 0usize;
+            for line in content.lines() {
+                let mut it = line.split_whitespace();
+                let mut vals = [0.0f64; 4];
+                let mut ok = true;
+                for slot in vals.iter_mut() {
+                    match it.next().and_then(|s| s.parse::<f64>().ok()) {
+                        Some(v) => *slot = v,
+                        None => { ok = false; break; }
+                    }
+                }
+                if ok {
+                    for ch in 0..4 { sum_sq[ch] += vals[ch] * vals[ch]; }
+                    n += 1;
+                }
+            }
+            if n > 0 {
+                let mut row = [0.0f64; 4];
+                for ch in 0..4 { row[ch] = (sum_sq[ch] / n as f64).sqrt(); }
+                rows.push(row);
+            }
+        }
+        let out: String = rows
+            .iter()
+            .map(|r| format!("{:.6},{:.6},{:.6},{:.6}\n", r[0], r[1], r[2], r[3]))
+            .collect();
+        let _ = std::fs::write(cache, out);
+        rows
+    } else {
+        Vec::new()
+    };
+
+    if stream.len() >= 400 {
+        let n = stream.len();
+        let calib_n = 300usize;
+        let calib: Vec<Vec<f64>> = (0..4)
+            .map(|ch| stream[..calib_n].iter().map(|r| r[ch]).collect())
+            .collect();
+        // Sanity control: calibrate on 0..200, stream the held-out HEALTHY
+        // segment 200..300. An alarm here would mean the run-to-failure alarm
+        // is bias, not detection.
+        let calib_short: Vec<Vec<f64>> = (0..4)
+            .map(|ch| stream[..200].iter().map(|r| r[ch]).collect())
+            .collect();
+        if let Some(mut mon) = HybridMonitor::calibrate(&calib_short) {
+            let mut fa = None;
+            for (i, row) in stream[200..300].iter().enumerate() {
+                if let Some(leg) = mon.push(row) {
+                    fa = Some((200 + i, leg));
+                    break;
+                }
+            }
+            match fa {
+                Some((idx, leg)) => println!(
+                    "  \x1b[31mCONTROL FAILED: alarm on held-out healthy segment at {} via {:?}\x1b[0m",
+                    idx, leg
+                ),
+                None => println!("  Control PASS: no alarm on held-out healthy recordings 200..300"),
+            }
+        }
+
+        match HybridMonitor::calibrate(&calib) {
+            Some(mut mon) => {
+                let mut alarm: Option<(usize, struktura::monitor::Leg)> = None;
+                for (i, row) in stream[calib_n..].iter().enumerate() {
+                    if let Some(leg) = mon.push(row) {
+                        alarm = Some((calib_n + i, leg));
+                        break;
+                    }
+                }
+                println!();
+                println!("  \x1b[1mIMS bearing run-to-failure\x1b[0m ({} recordings, 10 min apart)", n);
+                println!("  Calibration: recordings 0..{} (healthy)", calib_n);
+                match alarm {
+                    Some((idx, leg)) => {
+                        let lead_recs = n - 1 - idx;
+                        let lead_hours = lead_recs as f64 * 10.0 / 60.0;
+                        println!("  ALARM at recording {} via {:?}", idx, leg);
+                        println!("  Failure at recording {} (test termination)", n - 1);
+                        println!("  \x1b[32mLEAD TIME: {} recordings = {:.1} hours before failure\x1b[0m",
+                            lead_recs, lead_hours);
+                    }
+                    None => println!("  \x1b[31mNo alarm raised — detection failed\x1b[0m"),
+                }
+            }
+            None => println!("  IMS calibration failed (insufficient data)"),
+        }
+    } else {
+        println!("  IMS raw data not found (need data/ims/extracted/2nd_test/2nd_test) — skipped");
+    }
+
+    // ── Part 2: Voyager 1 magnetometer — heliopause crossing ──
+    // Calibration must come from the SAME instrument regime: use the first
+    // half of the pre-crossing cruise data, stream the rest of pre + post.
+    let pre: Vec<f64> = include_str!("../../data/voyager1_helio_pre.csv")
+        .lines().filter_map(|l| l.trim().parse().ok()).collect();
+    let post: Vec<f64> = include_str!("../../data/voyager1_helio_post.csv")
+        .lines().filter_map(|l| l.trim().parse().ok()).collect();
+
+    let calib_n = pre.len() / 2;
+    println!();
+    println!("  \x1b[1mVoyager 1 magnetometer — heliopause crossing\x1b[0m");
+    println!("  Calibration: first {} pre-crossing samples (2011-2012 cruise);", calib_n);
+    println!("  stream: remaining {} pre + {} post-crossing samples",
+        pre.len() - calib_n, post.len());
+    match HybridMonitor::calibrate(&[pre[..calib_n].to_vec()]) {
+        Some(mut mon) => {
+            // Interplanetary field strength trends with solar activity — the
+            // level-shift and CUSUM legs assume level stationarity and are
+            // disabled for this channel (per-deployment leg configuration).
+            use struktura::monitor::Leg;
+            mon.set_leg_enabled(Leg::LevelShift, false);
+            mon.set_leg_enabled(Leg::ResidualCusum, false);
+            println!("  Legs: residual + repeated + DFA (level/CUSUM disabled: trending channel)");
+            let mut alarm_at: Option<(usize, struktura::monitor::Leg)> = None;
+            let total: Vec<f64> = pre[calib_n..].iter().chain(post.iter()).cloned().collect();
+            let pre_rest = pre.len() - calib_n;
+            for (i, &v) in total.iter().enumerate() {
+                if let Some(leg) = mon.push(&[v]) {
+                    alarm_at = Some((i, leg));
+                    break;
+                }
+            }
+            match alarm_at {
+                Some((i, leg)) => {
+                    if i < pre_rest {
+                        println!("  \x1b[31mALARM at sample {} PRE-crossing via {:?} — false alarm\x1b[0m", i, leg);
+                    } else {
+                        println!("  Quiet through {} held-out pre-crossing samples;", pre_rest);
+                        println!("  \x1b[32mALARM {} samples after the heliopause crossing via {:?}\x1b[0m",
+                            i - pre_rest, leg);
+                        println!("  (48s cadence: {:.1} hours into interstellar space)",
+                            (i - pre_rest) as f64 * 48.0 / 3600.0);
+                    }
+                }
+                None => println!("  No alarm across the crossing"),
+            }
+        }
+        None => println!("  Voyager calibration failed"),
     }
     println!();
 }
