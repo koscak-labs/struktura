@@ -177,6 +177,7 @@ fn main() {
         "fingerprint" | "fp" | "dna" => cmd_fingerprint(&args),
         "watch" => cmd_watch(&args),
         "oneline" => cmd_oneline(&args),
+        "alert" => cmd_alert(&args),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -739,6 +740,40 @@ fn cmd_batch(args: &[String]) {
         println!("  \x1b[32m✓ All signals within baseline tolerance\x1b[0m");
     }
     println!();
+}
+
+fn cmd_alert(args: &[String]) {
+    if args.len() < 4 {
+        eprintln!("Usage: struktura alert <current> --baseline <healthy> [--threshold <0.08>]");
+        eprintln!("  Exit code 0 = healthy, 1 = degraded. For cron/systemd/CI.");
+        eprintln!("  Example: struktura alert now.csv --baseline ref.csv || send-slack-alert");
+        process::exit(2);
+    }
+
+    let mut baseline_file = String::new();
+    let mut threshold = 0.08f64;
+    let mut i = 3;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--baseline" if i + 1 < args.len() => { baseline_file = args[i + 1].clone(); i += 2; }
+            "--threshold" if i + 1 < args.len() => { threshold = args[i + 1].parse().unwrap_or(0.08); i += 2; }
+            _ => { i += 1; }
+        }
+    }
+    if baseline_file.is_empty() {
+        eprintln!("Error: --baseline is required");
+        process::exit(2);
+    }
+
+    let current = read_input(&args[2]);
+    let baseline = read_input(&baseline_file);
+    let result = struktura::compare(&baseline, &current);
+
+    let degraded = result.shift.abs() > threshold;
+    eprintln!("struktura: α={:.3} shift={:+.3} {} (threshold={:.3})",
+        result.current_alpha, result.shift, result.verdict, threshold);
+
+    process::exit(if degraded { 1 } else { 0 });
 }
 
 fn cmd_oneline(args: &[String]) {
