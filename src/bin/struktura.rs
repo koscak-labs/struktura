@@ -187,6 +187,7 @@ fn main() {
         "generate-hybrid" => cmd_generate_hybrid(&args),
         "mission" => cmd_mission(),
         "redblue" => cmd_redblue(&args),
+        "evolve" => cmd_evolve(&args),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -2786,6 +2787,65 @@ fn cmd_redblue(args: &[String]) {
         final_config.res_span, final_config.dfa_persist, final_config.roll_persist,
         final_config.cusum_k, final_config.design_horizon);
     println!("  Zero-clean-alarm law verified on every accepted mutation.");
+    println!();
+}
+
+fn cmd_evolve(args: &[String]) {
+    use struktura::redblue::evolve;
+
+    let mut generations = 10usize;
+    let mut probes = 100u64;
+    let mut candidates = 8usize;
+    let mut i = 2;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--generations" if i + 1 < args.len() => { generations = args[i + 1].parse().unwrap_or(10); i += 2; }
+            "--probes" if i + 1 < args.len() => { probes = args[i + 1].parse().unwrap_or(100); i += 2; }
+            "--candidates" if i + 1 < args.len() => { candidates = args[i + 1].parse().unwrap_or(8); i += 2; }
+            _ => { i += 1; }
+        }
+    }
+
+    println!();
+    println!("  \x1b[1mGENERATIONAL EVOLUTION\x1b[0m — parameter mutation + LEG SYNTHESIS");
+    println!("  BLUE may now compose NEW detector legs from a grammar (source x");
+    println!("  statistic x window x persistence), each Gumbel-calibrated, accepted");
+    println!("  only with zero clean alarms. {} generations x {} probes x {} candidates.",
+        generations, probes, candidates);
+    println!("  ================================================================");
+    println!();
+    println!("  | Gen | RED coverage | New misses | Corpus cov. | Legs | Config (persist d/r, span) |");
+    println!("  |-----|--------------|------------|-------------|------|-----------------------------|");
+
+    let (final_config, final_legs, reports) =
+        evolve(generations, probes, candidates, 12, 6, |r| {
+            let c = if r.red_coverage >= 0.9 { "\x1b[32m" }
+                    else if r.red_coverage >= 0.75 { "\x1b[33m" } else { "\x1b[31m" };
+            println!(
+                "  | {:>3} | {}{:>7.1}%\x1b[0m     | {:>10} | {:>9.1}%  | {:>4} | d={} r={} span={}          |",
+                r.generation + 1, c, r.red_coverage * 100.0, r.new_misses,
+                r.corpus_coverage * 100.0, r.legs.len(),
+                r.config.dfa_persist, r.config.roll_persist, r.config.res_span
+            );
+        });
+
+    println!();
+    if let (Some(first), Some(last)) = (reports.first(), reports.last()) {
+        println!("  RED frontier: {:.1}% (gen 1) -> {:.1}% (gen {})",
+            first.red_coverage * 100.0, last.red_coverage * 100.0, reports.len());
+    }
+    println!("  Synthesized legs: {}", final_legs.len());
+    for g in &final_legs {
+        let src = ["raw", "ar1-residual", "first-diff"][g.source as usize % 3];
+        let st = ["mean", "std", "max-abs", "range", "slope"][g.statistic as usize % 5];
+        println!("    {} -> {} over {} samples, persist {}",
+            src, st, [8, 16, 32, 64][g.window as usize % 4],
+            [1, 2, 4, 8][g.persist as usize % 4]);
+    }
+    println!("  Final config: res_span={} dfa_persist={} roll_persist={} cusum_k={:.2} horizon={:.0}",
+        final_config.res_span, final_config.dfa_persist, final_config.roll_persist,
+        final_config.cusum_k, final_config.design_horizon);
+    println!("  Zero-clean-alarm law enforced on every acceptance (12 clean seeds).");
     println!();
 }
 
