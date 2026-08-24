@@ -16,6 +16,10 @@ anomaly detection that actually works. not thresholds. not ML. not vibes.
 
 **[try it in your browser →](https://koscak-labs.github.io/struktura/playground/)** no install needed.
 
+<p align="center">
+  <img src="assets/terminal-demo.svg" alt="struktura voyager demo" width="100%">
+</p>
+
 DFA (Detrended Fluctuation Analysis) gives you one number that tells you if a signal's structure changed. works on literally anything with a time axis. spacecraft, bearings, financial data, heartbeats, DNA, text rhythm. you name it.
 
 ```

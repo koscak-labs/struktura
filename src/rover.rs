@@ -103,7 +103,7 @@ impl RoverSim {
         let mut soc = 0.92f64;
         let mut cpu_temp = -20.0f64; // Mars surface: -60 to +20°C
         let mut motor_temps = [15.0f64; 4];
-        let mut comm = -85.0f64; // nominal signal strength
+        let mut comm: f64;
 
         for t in 0..n {
             let terrain = 0.3 * crate::sin(t as f64 * 0.01) + 0.1 * crate::sin(t as f64 * 0.037);

@@ -3451,7 +3451,7 @@ fn cmd_rover() {
 
     let valid = [true; ROVER_CHANNELS];
     let mut sample = [0.0f64; ROVER_CHANNELS];
-    let mut last_leg = 255u8;
+    let mut _last_leg = 255u8;
     let mut last_t = 0usize;
     let mut alarm_count = 0usize;
     let mut q_count = 0usize;
@@ -3462,7 +3462,7 @@ fn cmd_rover() {
                 Event::Alarm { report, .. } => {
                     let lid = report.leg as u8;
                     if t - last_t < 200 { continue; }
-                    last_leg = lid; last_t = t; alarm_count += 1;
+                    _last_leg = lid; last_t = t; alarm_count += 1;
                     let ch_name = ROVER_CHANNEL_NAMES.get(report.channel).unwrap_or(&"?");
                     println!("  t={:>5}  ⚠ {}: {}", t, ch_name, explain_alarm(report));
                 }
@@ -3758,7 +3758,7 @@ fn generate_ros_package() -> String {
 
 fn cmd_pipe(args: &[String]) {
     use std::io::{self, BufRead};
-    use struktura::{dfa, DfaResult};
+    use struktura::dfa;
 
     let window: usize = args.iter().position(|a| a == "--window")
         .and_then(|i| args.get(i + 1))
