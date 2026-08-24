@@ -1976,8 +1976,8 @@ fn cmd_benchmark_faults() {
     let inject_spike: Injector = |clean, seed, fa| {
         let mut v = clean.to_vec();
         let mut s = seed + 10;
-        for i in fa..v.len() {
-            if i % 50 == 0 { v[i] += lcg_next(&mut s) * 0.5; }
+        for (i, val) in v.iter_mut().enumerate().skip(fa) {
+            if i % 50 == 0 { *val += lcg_next(&mut s) * 0.5; }
         }
         v
     };
@@ -1985,24 +1985,24 @@ fn cmd_benchmark_faults() {
         let mut v = clean.to_vec();
         let stuck_val = v[fa];
         let end = (fa + 200).min(v.len());
-        for i in fa..end { v[i] = stuck_val; }
+        for val in v[fa..end].iter_mut() { *val = stuck_val; }
         v
     };
     let inject_drift: Injector = |clean, _seed, fa| {
         let mut v = clean.to_vec();
-        for i in fa..v.len() { v[i] += (i - fa) as f64 * 0.0001; }
+        for (i, val) in v.iter_mut().enumerate().skip(fa) { *val += (i - fa) as f64 * 0.0001; }
         v
     };
     let inject_regime: Injector = |clean, _seed, fa| {
         let mut v = clean.to_vec();
-        for i in fa..v.len() { v[i] += 0.15; }
+        for val in v.iter_mut().skip(fa) { *val += 0.15; }
         v
     };
     let inject_packet_loss: Injector = |clean, seed, fa| {
         let mut v = clean.to_vec();
         let mut s = seed + 20;
-        for i in fa..v.len() {
-            if lcg_next(&mut s).abs() < 0.1 { v[i] = 0.0; }
+        for val in v.iter_mut().skip(fa) {
+            if lcg_next(&mut s).abs() < 0.1 { *val = 0.0; }
         }
         v
     };

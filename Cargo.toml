@@ -11,7 +11,7 @@ homepage = "https://koscak-labs.github.io/struktura"
 keywords = ["anomaly-detection", "dfa", "time-series", "spacecraft", "health-monitor"]
 categories = ["science", "algorithms", "no-std"]
 readme = "README.md"
-exclude = ["data/genome/", "data/heliopause/", "data/ims/", "data/austen_shuffled.txt", "data/voyager1_2021_healthy.csv", "docs/", "test-ogma-*", "node_modules/", "*.dat", "*.zip"]
+exclude = ["data/genome/", "data/heliopause/", "data/ims/", "data/austen_shuffled.txt", "data/voyager1_2021_healthy.csv", "docs/", "test-ogma-*", "node_modules/", "*.dat", "*.zip", "assets/", "social-preview.*", "PROMOTION_*"]
 
 [features]
 default = ["std"]
