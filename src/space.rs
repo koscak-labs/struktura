@@ -228,6 +228,64 @@ pub fn voyager_demo() -> VoyagerDemoResult {
     }
 }
 
+/// Result of the heliopause crossing demo.
+#[derive(Debug)]
+pub struct HelioDemoResult {
+    pub helio_alpha: f64,
+    pub helio_r2: f64,
+    pub interstellar_alpha: f64,
+    pub interstellar_r2: f64,
+    pub shift: f64,
+    pub crossing_detected: bool,
+    pub verdict: HealthVerdict,
+}
+
+impl fmt::Display for HelioDemoResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Voyager 1 Heliopause Crossing (NASA SPDF 48s averages)\n\
+                    Heliosphere (2012 days 1-200):    α={:.3} R²={:.4}\n\
+                    Interstellar (2012 days 260-331):  α={:.3} R²={:.4}\n\
+                    Structural shift:                  {:.3}\n\
+                    Verdict:                           {}",
+            self.helio_alpha, self.helio_r2,
+            self.interstellar_alpha, self.interstellar_r2,
+            self.shift, self.verdict)
+    }
+}
+
+/// Run DFA on Voyager 1 magnetometer data across the heliopause crossing.
+///
+/// On August 25, 2012 (DOY 238), Voyager 1 crossed from the heliosphere
+/// into interstellar space — the first human-made object to leave the solar
+/// system. DFA detects the structural transition in the magnetic field.
+///
+/// Heliosphere: sun's magnetic field dominates, strong long-range persistence.
+/// Interstellar: galactic magnetic field, different correlation structure.
+pub fn heliopause_demo() -> HelioDemoResult {
+    let helio: Vec<f64> = include_str!("../data/voyager1_helio_pre.csv")
+        .lines().filter_map(|l| l.trim().parse().ok()).collect();
+    let inter: Vec<f64> = include_str!("../data/voyager1_helio_post.csv")
+        .lines().filter_map(|l| l.trim().parse().ok()).collect();
+
+    let law_h = dfa(&helio);
+    let law_i = dfa(&inter);
+    let shift = law_i.alpha - law_h.alpha;
+    let verdict = health_check(
+        &analyze(&inter),
+        law_h.alpha,
+    );
+
+    HelioDemoResult {
+        helio_alpha: law_h.alpha,
+        helio_r2: law_h.r_squared,
+        interstellar_alpha: law_i.alpha,
+        interstellar_r2: law_i.r_squared,
+        shift,
+        crossing_detected: verdict != HealthVerdict::Healthy,
+        verdict,
+    }
+}
+
 /// Generate synthetic reaction wheel telemetry with optional degradation.
 ///
 /// Returns current-draw values. `degradation_start` (0.0-1.0) is the fraction
@@ -374,6 +432,16 @@ mod tests {
         let d = dfa(&degraded);
         assert!((h.alpha - d.alpha).abs() > 0.02,
             "degraded RWA should shift alpha: healthy={:.3} degraded={:.3}", h.alpha, d.alpha);
+    }
+
+    #[test]
+    fn heliopause_demo_detects_crossing() {
+        let result = heliopause_demo();
+        assert!(result.helio_r2 > 0.9, "helio R² too low: {:.4}", result.helio_r2);
+        assert!(result.interstellar_r2 > 0.9, "interstellar R² too low: {:.4}", result.interstellar_r2);
+        assert!(result.helio_alpha > result.interstellar_alpha,
+            "helio α should be higher: {:.3} vs {:.3}", result.helio_alpha, result.interstellar_alpha);
+        assert!(result.crossing_detected, "heliopause crossing not detected");
     }
 
     #[test]

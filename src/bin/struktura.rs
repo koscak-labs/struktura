@@ -133,6 +133,7 @@ fn main() {
         println!("  COMMANDS:");
         println!("    struktura demo                            Run builtin bearing fault demo");
         println!("    struktura voyager                         Voyager 1 AACS anomaly analysis");
+        println!("    struktura heliopause                      Detect the edge of the solar system");
         println!("    struktura spacecraft                      Multi-channel spacecraft health demo");
         println!("    struktura scan <file_or_-> [--baseline f]  Auto-analyze any signal (pipe with -)");
         println!("    struktura mf <file_or_->                 Multifractal spectrum (multi-scale complexity)");
@@ -161,11 +162,13 @@ fn main() {
         "codegen" => cmd_codegen(&args),
         "generate" => cmd_generate(&args),
         "voyager" => cmd_voyager(),
+        "heliopause" => cmd_heliopause(),
         "spacecraft" => cmd_spacecraft(),
         "text" => cmd_text(&args),
         "market" => cmd_market(&args),
         "rhythm" => cmd_rhythm(&args),
         "scan" => cmd_scan(&args),
+        "classify" | "what" => cmd_classify(&args),
         "multifractal" | "mf" => cmd_multifractal(&args),
         "health" => cmd_health(&args),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
@@ -611,6 +614,78 @@ fn cmd_voyager() {
     println!();
     println!("  The magnetic field's fractal structure changed during the anomaly —");
     println!("  detectable from public NASA data, zero training, zero ML.");
+    println!();
+}
+
+fn cmd_heliopause() {
+    use struktura::space::heliopause_demo;
+    let result = heliopause_demo();
+
+    println!();
+    println!("  \x1b[1mVOYAGER 1 HELIOPAUSE CROSSING\x1b[0m");
+    println!("  DFA structural analysis across the boundary of our solar system");
+    println!("  August 25, 2012 — first human-made object to enter interstellar space");
+    println!("  ====================================================================");
+    println!();
+    println!("  Data: NASA SPDF, L.F. Burlaga, VIM 48-second magnetometer averages");
+    println!("  https://spdf.gsfc.nasa.gov/pub/data/voyager/voyager1/");
+    println!();
+
+    let bar_h = make_bar(result.helio_alpha);
+    let bar_i = make_bar(result.interstellar_alpha);
+
+    println!("  {} Heliosphere (days 1-200)     alpha={:.3}  R²={:.4}", bar_h, result.helio_alpha, result.helio_r2);
+    println!("  {} Interstellar (days 260-331)  alpha={:.3}  R²={:.4}", bar_i, result.interstellar_alpha, result.interstellar_r2);
+
+    let v_str = match result.verdict {
+        HealthVerdict::Healthy => "\x1b[32mHEALTHY\x1b[0m",
+        HealthVerdict::Watch => "\x1b[33mWATCH\x1b[0m",
+        HealthVerdict::Warning => "\x1b[31mWARNING\x1b[0m",
+        HealthVerdict::Critical => "\x1b[31;1mCRITICAL\x1b[0m",
+        _ => "UNKNOWN",
+    };
+    println!("  {:30} shift={:+.3}  {}", "", result.shift, v_str);
+
+    println!();
+    println!("  ====================================================================");
+    println!("  Heliosphere:  alpha={:.3}  (sun's magnetic field — strong persistence)", result.helio_alpha);
+    println!("  Interstellar: alpha={:.3}  (galactic field — different structure)", result.interstellar_alpha);
+    println!();
+    println!("  The magnetic field's long-range correlation structure changed");
+    println!("  when Voyager crossed from solar wind into interstellar medium.");
+    println!("  Same 98 lines of C that detect bearing faults.");
+    println!();
+}
+
+fn cmd_classify(args: &[String]) {
+    if args.len() < 3 {
+        eprintln!("Usage: struktura classify <file_or_->  (alias: what)");
+        eprintln!("  What kind of signal is this? White noise? Brownian? 1/f?");
+        process::exit(1);
+    }
+    use struktura::classify::classify;
+
+    let values = read_input(&args[2]);
+    let result = classify(&values);
+
+    println!();
+    println!("  \x1b[1mSIGNAL CLASSIFICATION\x1b[0m");
+    println!("  ====================================================================");
+    println!();
+    let bar = alpha_bar(result.alpha, 30);
+    println!("  {} α={:.3}  R²={:.4}", bar, result.alpha, result.r_squared);
+    println!();
+    println!("  Type: \x1b[1m{}\x1b[0m", result.signal_type);
+    println!("  {}", result.description);
+    println!();
+    println!("  ┌─────────────────────────────────────────────────────┐");
+    println!("  │  α<0.3    0.5    0.6-0.85   0.85-1.15  1.15-1.65  │");
+    println!("  │  anti    white   correlated   1/f      brownian   │");
+    println!("  │  ─────────────────▲─────────────────────────────── │");
+    let pos = ((result.alpha.clamp(0.0, 2.0) / 2.0) * 50.0) as usize;
+    let indicator = format!("  │  {}▲", " ".repeat(pos.min(50)));
+    println!("{}{}│", indicator, " ".repeat(53usize.saturating_sub(indicator.len() - 5)));
+    println!("  └─────────────────────────────────────────────────────┘");
     println!();
 }
 
