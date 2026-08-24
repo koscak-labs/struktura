@@ -1342,6 +1342,7 @@ pub mod redblue;
 #[cfg(feature = "std")]
 pub mod smap_eval;
 pub mod rover;
+pub mod rover_flight;
 #[cfg(feature = "wasm")]
 pub mod wasm;
 #[cfg(feature = "python")]
