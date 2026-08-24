@@ -271,7 +271,51 @@ pub fn detect_channel_tuned(
     };
     let res = pred.residuals(test);
     let span = (test.len() / 30).clamp(10, 300);
-    let sm = ewma(&res, span);
+
+    // DUAL channels: magnitude + local variance of the residual. Some
+    // contextual anomalies produce plausible-magnitude residuals with
+    // CHANGED VARIANCE (the predictor tracks the values but the noise
+    // structure differs). A rolling-variance channel catches these.
+    let var_window = span.max(20);
+    let mut res_var = vec![0.0f64; res.len()];
+    for t in var_window..res.len() {
+        let w = &res[t + 1 - var_window..t + 1];
+        let m = w.iter().sum::<f64>() / var_window as f64;
+        res_var[t] = w.iter().map(|x| (x - m) * (x - m)).sum::<f64>() / var_window as f64;
+    }
+    // Combine: element-wise max of the z-scored magnitude and z-scored
+    // variance channels — whichever is louder wins per timestep.
+    let sm_mag = ewma(&res, span);
+    let sm_var = ewma(&res_var, span);
+    // Calibrate the variance channel from the TRAIN split's residual
+    // statistics — the test anomaly mass must not inflate the baseline.
+    let train_res = pred.residuals(train);
+    let train_sm_var = {
+        let mut rv = vec![0.0f64; train_res.len()];
+        for t in var_window..train_res.len() {
+            let w = &train_res[t + 1 - var_window..t + 1];
+            let m = w.iter().sum::<f64>() / var_window as f64;
+            rv[t] = w.iter().map(|x| (x - m) * (x - m)).sum::<f64>() / var_window as f64;
+        }
+        ewma(&rv, span)
+    };
+    let var_mean = train_sm_var[p..].iter().sum::<f64>() / (train_sm_var.len() - p).max(1) as f64;
+    let var_sd = crate::sqrt(
+        train_sm_var[p..].iter().map(|x| (x - var_mean) * (x - var_mean)).sum::<f64>()
+            / (train_sm_var.len() - p).max(1) as f64,
+    ).max(1e-12);
+
+    let sm = sm_mag
+        .iter()
+        .zip(sm_var.iter())
+        .map(|(&m, &v)| {
+            // The variance channel contributes only when it fires harder
+            // than the magnitude channel already does — a conservative OR
+            // that doesn't add noise when the magnitude channel is quiet.
+            let zv = ((v - var_mean) / var_sd).max(0.0);
+            m + (zv * var_sd * 0.3).max(0.0) // additive boost, scaled
+        })
+        .collect::<Vec<f64>>();
 
     // WINDOWED epsilon (JPL's actual scheme, ~2100-point evaluation
     // windows): a single global epsilon lets the largest anomaly dominate

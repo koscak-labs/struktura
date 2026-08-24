@@ -2858,6 +2858,7 @@ fn cmd_smap(args: &[String]) {
     // ridge autoregression in place of JPL's LSTM.
     let mut ar_mode: Option<usize> = None;
     let mut with_dfa = false;
+    let mut verbose = false;
     let mut class_stats: std::collections::BTreeMap<String, (usize, usize)> =
         std::collections::BTreeMap::new();
     let mut z_min = 2.5f64;
@@ -2874,6 +2875,7 @@ fn cmd_smap(args: &[String]) {
             "--prune" if i + 1 < args.len() => { p_prune = args[i + 1].parse().unwrap_or(0.13); i += 2; }
             "--buffer" if i + 1 < args.len() => { buffer = args[i + 1].parse().unwrap_or(50); i += 2; }
             "--dfa" => { with_dfa = true; i += 1; }
+            "--verbose" | "-v" => { verbose = true; i += 1; }
             _ => { i += 1; }
         }
     }
@@ -2981,7 +2983,13 @@ fn cmd_smap(args: &[String]) {
                 }
                 let _ = si;
             }
-            per_sc[sc_idx].1 += hit.iter().filter(|&&h| h).count();
+            let tp = hit.iter().filter(|&&h| h).count();
+            let missed = sequences.len() - tp;
+            if verbose && missed > 0 {
+                eprintln!("  MISS {}: {} of {} seqs missed, {} preds, {} FP",
+                    chan, missed, sequences.len(), preds.len(), fp);
+            }
+            per_sc[sc_idx].1 += tp;
             per_sc[sc_idx].2 += fp;
             per_sc[sc_idx].3 += sequences.len();
             per_sc[sc_idx].4 += 1;
