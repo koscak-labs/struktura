@@ -1,6 +1,6 @@
 [package]
 name = "struktura"
-version = "1.6.9"
+version = "1.7.0"
 edition = "2021"
 rust-version = "1.70"
 description = "Predict failure before it happens. Detects when a signal's structure changes — before thresholds fire. Spacecraft, finance, text, IoT. 85x faster than Python. no_std."
