@@ -202,6 +202,75 @@ impl RoverMonitor {
     }
 }
 
+// ── C FFI exports ──────────────────────────────────────────────────
+//
+// A single static RoverMonitor lives in BSS (zero-init, no heap).
+// The C wrapper (RoverHealthImpl.c) calls these. The monitor is NOT
+// thread-safe — flight software is single-threaded per rate group.
+
+static mut ROVER_MON: RoverMonitor = RoverMonitor::new();
+
+/// Initialize (reset) the global rover monitor. Call once at boot.
+#[no_mangle]
+pub unsafe extern "C" fn rover_monitor_init() {
+    ROVER_MON = RoverMonitor::new();
+}
+
+/// Set calibration constants for one channel.
+#[no_mangle]
+pub unsafe extern "C" fn rover_monitor_calibrate_channel(
+    ch: u32,
+    ar_a: f64, ar_b: f64, ar_sd: f64,
+    mean: f64, roll_max_dev: f64,
+    max_run: u32, repeat_enabled: i32,
+) {
+    ROVER_MON.calibrate_channel(ch as usize, FCalib {
+        ar_a, ar_b, ar_sd, mean, roll_max_dev, max_run,
+        repeat_enabled: repeat_enabled != 0,
+    });
+}
+
+/// Set the global residual z-threshold.
+#[no_mangle]
+pub unsafe extern "C" fn rover_monitor_set_res_threshold(thr: f64) {
+    ROVER_MON.set_residual_threshold(thr);
+}
+
+/// C-compatible alarm output (matches the struct in RoverHealthImpl.c).
+#[repr(C)]
+pub struct CAlarm {
+    pub leg: u8,
+    pub channel: u8,
+    pub tick: u32,
+}
+
+/// Push one sample vector. Returns 1 if an alarm fired (written to `out`),
+/// 0 otherwise. The monitor latches after an alarm until `rover_monitor_reset`.
+#[no_mangle]
+pub unsafe extern "C" fn rover_monitor_push(
+    sample: *const f64,
+    out: *mut CAlarm,
+) -> i32 {
+    let s = core::slice::from_raw_parts(sample, N_CH);
+    let mut arr = [0.0f64; N_CH];
+    arr.copy_from_slice(s);
+    match ROVER_MON.push(&arr) {
+        Some(alarm) => {
+            (*out).leg = alarm.leg as u8;
+            (*out).channel = alarm.channel;
+            (*out).tick = alarm.tick;
+            1
+        }
+        None => 0,
+    }
+}
+
+/// Clear the alarm latch so the monitor resumes watching.
+#[no_mangle]
+pub unsafe extern "C" fn rover_monitor_reset() {
+    ROVER_MON.reset();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
