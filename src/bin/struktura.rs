@@ -135,6 +135,7 @@ fn main() {
         println!("    struktura voyager                         Voyager 1 AACS anomaly analysis");
         println!("    struktura spacecraft                      Multi-channel spacecraft health demo");
         println!("    struktura scan <file_or_-> [--baseline f]  Auto-analyze any signal (pipe with -)");
+        println!("    struktura mf <file_or_->                 Multifractal spectrum (multi-scale complexity)");
         println!("    struktura text <file.txt>                  Writing rhythm analysis");
         println!("    struktura market <prices.csv>              Financial regime detection");
         println!("    struktura rhythm <timestamps.csv>          Event rhythm (git/heartbeat/keystrokes)");
@@ -165,6 +166,8 @@ fn main() {
         "market" => cmd_market(&args),
         "rhythm" => cmd_rhythm(&args),
         "scan" => cmd_scan(&args),
+        "multifractal" | "mf" => cmd_multifractal(&args),
+        "health" => cmd_health(&args),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -608,6 +611,127 @@ fn cmd_voyager() {
     println!();
     println!("  The magnetic field's fractal structure changed during the anomaly —");
     println!("  detectable from public NASA data, zero training, zero ML.");
+    println!();
+}
+
+fn cmd_health(args: &[String]) {
+    if args.len() < 3 {
+        eprintln!("Usage: struktura health <current> --baseline <healthy>");
+        eprintln!("  Full diagnostic: DFA + MFDFA + statistics + verdict.");
+        process::exit(1);
+    }
+    use struktura::mfdfa::mfdfa;
+
+    let mut baseline_file: Option<String> = None;
+    let mut i = 3;
+    while i < args.len() {
+        if args[i] == "--baseline" && i + 1 < args.len() {
+            baseline_file = Some(args[i + 1].clone());
+            i += 2;
+        } else { i += 1; }
+    }
+
+    let current = read_input(&args[2]);
+    if current.len() < 64 {
+        eprintln!("Need at least 64 data points, got {}", current.len());
+        process::exit(1);
+    }
+
+    let law = analyze(&current);
+    let qs = [-5.0, -3.0, -1.0, 0.0, 1.0, 2.0, 3.0, 5.0];
+    let spectrum = mfdfa(&current, &qs);
+    let proof = struktura::prove_structure(&current);
+
+    println!();
+    println!("  \x1b[1mFULL HEALTH DIAGNOSTIC\x1b[0m");
+    println!("  ====================================================================");
+    println!();
+    println!("  Signal:  {} samples", current.len());
+    println!("  Mean:    {:.4}   Std: {:.4}   Kurtosis: {:.2}", law.mean, law.std_dev, law.kurtosis);
+    println!();
+    println!("  \x1b[1mStructural Analysis (DFA)\x1b[0m");
+    let bar = make_bar(law.dfa.alpha);
+    println!("  {} α={:.3}  R²={:.4}  quality={}", bar, law.dfa.alpha, law.dfa.r_squared, law.quality);
+    println!("  Hurst exponent: {:.3}", law.hurst);
+    println!("  Structure proof: {} (real α={:.3} vs shuffled α={:.3})",
+        if proof.structure_confirmed { "\x1b[32mCONFIRMED\x1b[0m" } else { "\x1b[33mINCONCLUSIVE\x1b[0m" },
+        proof.real_alpha, proof.shuffled_alpha);
+    println!();
+    println!("  \x1b[1mMultifractal Spectrum (MFDFA)\x1b[0m");
+    println!("  h(2)={:.3}  width={:.3}  {}",
+        spectrum.h2, spectrum.width,
+        if spectrum.is_multifractal { "\x1b[35mMULTIFRACTAL\x1b[0m" } else { "monofractal" });
+    print!("  h(q): ");
+    for p in &spectrum.points { print!("{:.2} ", p.h_q); }
+    println!();
+
+    if let Some(ref bf) = baseline_file {
+        let baseline = read_input(bf);
+        let result = struktura::compare(&baseline, &current);
+        let baseline_spectrum = mfdfa(&baseline, &qs);
+        let v_str = match result.verdict {
+            HealthVerdict::Healthy => "\x1b[32mHEALTHY\x1b[0m",
+            HealthVerdict::Watch => "\x1b[33mWATCH\x1b[0m",
+            HealthVerdict::Warning => "\x1b[31mWARNING\x1b[0m",
+            HealthVerdict::Critical => "\x1b[31;1mCRITICAL\x1b[0m",
+            _ => "UNKNOWN",
+        };
+        println!();
+        println!("  \x1b[1mvs Baseline\x1b[0m");
+        println!("  DFA shift:    {:+.3}  {v_str}", result.shift);
+        println!("  MFDFA width:  {:.3} → {:.3} (Δ={:+.3})",
+            baseline_spectrum.width, spectrum.width, spectrum.width - baseline_spectrum.width);
+    }
+
+    println!();
+    println!("  ====================================================================");
+    println!();
+}
+
+fn cmd_multifractal(args: &[String]) {
+    if args.len() < 3 {
+        eprintln!("Usage: struktura multifractal <file_or_->  (alias: mf)");
+        eprintln!("  Reveals multi-scale structure — is the signal simple or complex?");
+        process::exit(1);
+    }
+    use struktura::mfdfa::mfdfa;
+
+    let values = read_input(&args[2]);
+    if values.len() < 64 {
+        eprintln!("Need at least 64 data points, got {}", values.len());
+        process::exit(1);
+    }
+
+    let qs = [-5.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 5.0];
+    let spectrum = mfdfa(&values, &qs);
+
+    println!();
+    println!("  \x1b[1mMULTIFRACTAL SPECTRUM\x1b[0m");
+    println!("  How does structure vary across scales?");
+    println!("  ====================================================================");
+    println!();
+    println!("  h(2) = {:.3}  (equivalent to standard DFA alpha)", spectrum.h2);
+    println!("  Spectral width = {:.3}", spectrum.width);
+    println!();
+
+    // ASCII spectrum visualization
+    println!("  q       h(q)     R²");
+    println!("  ─────────────────────────────────────────");
+    for p in &spectrum.points {
+        let bar_len = ((p.h_q * 40.0).round() as usize).min(40);
+        let bar = "#".repeat(bar_len);
+        let pad = ".".repeat(40 - bar_len);
+        println!("  {:+5.1}   {bar}{pad}  {:.3}  {:.3}", p.q, p.h_q, p.r_squared);
+    }
+    println!();
+
+    let mf_str = if spectrum.is_multifractal {
+        "\x1b[35mMULTIFRACTAL\x1b[0m — different scales have different structure"
+    } else {
+        "\x1b[32mMONOFRACTAL\x1b[0m — uniform structure across all scales"
+    };
+    println!("  Verdict: {mf_str}");
+    println!("  Width {:.3} (wider = more complex multi-scale behavior)", spectrum.width);
     println!();
 }
 
