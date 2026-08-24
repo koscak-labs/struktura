@@ -751,12 +751,13 @@ fn cmd_multifractal(args: &[String]) {
 
 fn cmd_scan(args: &[String]) {
     if args.len() < 3 {
-        eprintln!("Usage: struktura scan <file_or_->  [--baseline <file>]");
+        eprintln!("Usage: struktura scan <file_or_->  [--baseline <file>] [--json]");
         eprintln!("  Auto-analyzes any signal. Pipe from stdin with -");
         eprintln!("  Examples:");
         eprintln!("    struktura scan sensor.csv");
         eprintln!("    cat data.csv | struktura scan -");
         eprintln!("    struktura scan current.csv --baseline healthy.csv");
+        eprintln!("    struktura scan data.csv --json  # machine-readable output");
         process::exit(1);
     }
     let values = read_input(&args[2]);
@@ -766,14 +767,29 @@ fn cmd_scan(args: &[String]) {
     }
 
     let mut baseline_file: Option<String> = None;
+    let mut json_mode = false;
     let mut i = 3;
     while i < args.len() {
-        if args[i] == "--baseline" && i + 1 < args.len() {
-            baseline_file = Some(args[i + 1].clone());
-            i += 2;
-        } else {
-            i += 1;
+        match args[i].as_str() {
+            "--baseline" if i + 1 < args.len() => { baseline_file = Some(args[i + 1].clone()); i += 2; }
+            "--json" => { json_mode = true; i += 1; }
+            _ => { i += 1; }
         }
+    }
+
+    if json_mode {
+        let law = analyze(&values);
+        let baseline_info = baseline_file.as_ref().map(|bf| {
+            let baseline = read_input(bf);
+            struktura::compare(&baseline, &values)
+        });
+        print!("{{\"alpha\":{:.4},\"r_squared\":{:.4},\"quality\":\"{}\",\"n\":{},\"mean\":{:.4},\"std\":{:.4},\"kurtosis\":{:.2},\"hurst\":{:.3}",
+            law.dfa.alpha, law.dfa.r_squared, law.quality, law.n, law.mean, law.std_dev, law.kurtosis, law.hurst);
+        if let Some(ref result) = baseline_info {
+            print!(",\"shift\":{:.4},\"verdict\":\"{}\"", result.shift, result.verdict);
+        }
+        println!("}}");
+        return;
     }
 
     println!();

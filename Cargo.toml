@@ -9,7 +9,7 @@ repository = "https://github.com/koscak-labs/struktura"
 documentation = "https://docs.rs/struktura"
 homepage = "https://koscak-labs.github.io/struktura"
 keywords = ["anomaly-detection", "dfa", "time-series", "spacecraft", "predictive-maintenance"]
-categories = ["science", "algorithms", "no-std::no-alloc", "aerospace"]
+categories = ["science", "algorithms", "no-std"]
 readme = "README.md"
 
 [features]
