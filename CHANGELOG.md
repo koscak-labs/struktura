@@ -2,6 +2,19 @@
 
 All notable changes to Struktura are documented here.
 
+## v1.7.0 (2026-08-24) — Guard Mode + Changepoints + 80 Tests
+
+- `guard` command: pipe any CSV and get live anomaly detection with `--watch` tail mode
+- `when` command: find WHERE and WHEN structure changed (changepoint detection)
+- `nasa` command: zero-setup NASA embedded demo
+- Dual-channel residual detector (magnitude + train-calibrated variance) — F1 0.788
+- `--help` / `-h` / `help` now works (was broken, returned "Unknown command")
+- Doc comments on all major public functions
+- 80 tests (up from 73), mutation-tested coverage gaps closed
+- CHANGELOG, CITATION.cff, CONTRIBUTING.md all current
+- Full 38-command reference table in README
+- Preprocessing warning documented (filtering invalidates baselines)
+
 ## v1.6.9 (2026-08-24) — Mars Rovers + Autonomous Evolution
 
 - NASA SMAP/MSL Mars rover anomaly benchmark (`struktura smap`) — F1=0.755 zero training
