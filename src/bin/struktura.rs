@@ -3131,7 +3131,7 @@ fn cmd_nasa() {
 
     // Also run the streaming HybridMonitor for the live-detection angle
     use struktura::monitor::HybridMonitor;
-    let mut mon = HybridMonitor::calibrate(&[train.clone()]).expect("calibration");
+    let mut mon = HybridMonitor::calibrate(std::slice::from_ref(&train)).expect("calibration");
     // Disable stationarity legs on this channel (SMAP data is quantized and
     // trends between modes — the same lesson as Voyager).
     mon.set_leg_enabled(struktura::monitor::Leg::LevelShift, false);
@@ -3180,8 +3180,6 @@ fn cmd_nasa() {
 }
 
 fn cmd_guard(args: &[String]) {
-    use struktura::monitor::HybridMonitor;
-
     let mut file_path = String::new();
     let mut baseline_n = 0usize; // 0 = auto (first third)
     let mut i = 2;
@@ -3214,8 +3212,7 @@ fn cmd_guard(args: &[String]) {
 }
 
 fn run_guard(content: &str, baseline_n: usize) {
-    use struktura::monitor::{HybridMonitor, Leg};
-    use struktura::monitor::classify_alarm;
+    use struktura::monitor::HybridMonitor;
 
     // Parse multi-column CSV (last column = primary channel, or all columns
     // as independent channels). Auto-detect width from first row.
@@ -3240,7 +3237,7 @@ fn run_guard(content: &str, baseline_n: usize) {
         .collect();
 
     let calib: Vec<Vec<f64>> = channels.iter().map(|c| c[..calib_n].to_vec()).collect();
-    let mut mon = match HybridMonitor::calibrate(&calib) {
+    let mon = match HybridMonitor::calibrate(&calib) {
         Some(m) => m,
         None => {
             eprintln!("calibration failed (need >= 192 samples)");
