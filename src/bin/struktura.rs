@@ -135,6 +135,7 @@ fn main() {
         println!("    struktura guard <file.csv> --baseline 500  Calibrate on first 500 rows");
         println!("    struktura guard <file.csv> --json          Machine-readable output");
         println!("    cat stream.csv | struktura guard -         Pipe from stdin");
+        println!("    struktura when <file.csv>                  Find WHEN something changed (changepoint detection)");
         println!("    struktura check <file.csv>                 One-shot structural analysis");
         println!("    struktura scan <file_or_->                 Auto-classify + trend + health");
         println!();
@@ -196,6 +197,7 @@ fn main() {
         "smap" => cmd_smap(&args),
         "nasa" => cmd_nasa(),
         "guard" => cmd_guard(&args),
+        "when" => cmd_when(&args),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -3539,6 +3541,70 @@ fn run_guard(content: &str, baseline_n: usize, json: bool) -> i32 {
     }
 
     if alarm_count > 0 { 1 } else { 0 }
+}
+
+fn cmd_when(args: &[String]) {
+    use struktura::changepoint::{find_changepoints, Changepoint};
+
+    if args.len() < 3 {
+        eprintln!("Usage: struktura when <file.csv> [--max N]");
+        eprintln!("  Find WHEN something changed in your data.");
+        process::exit(1);
+    }
+    let path = &args[2];
+    let max = args.iter().position(|a| a == "--max")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(5usize);
+    let json = args.iter().any(|a| a == "--json");
+
+    let data = if path == "-" { read_stdin() } else { read_csv(path) };
+    if data.len() < 200 {
+        eprintln!("need >= 200 samples for changepoint detection, got {}", data.len());
+        process::exit(1);
+    }
+
+    let cps = find_changepoints(&data, 128, max);
+
+    if json {
+        print!("[");
+        for (i, cp) in cps.iter().enumerate() {
+            if i > 0 { print!(","); }
+            print!("{{\"at\":{},\"alpha_before\":{:.3},\"alpha_after\":{:.3},\"shift\":{:.3}}}",
+                cp.location, cp.alpha_before, cp.alpha_after, cp.shift);
+        }
+        println!("]");
+        return;
+    }
+
+    println!();
+    if cps.is_empty() {
+        println!("  no structural changes detected in {} samples.", data.len());
+        println!("  the signal's correlation structure is consistent throughout.");
+    } else {
+        println!("  \x1b[1m{} structural change{} found in {} samples:\x1b[0m",
+            cps.len(), if cps.len() == 1 { "" } else { "s" }, data.len());
+        println!();
+        for (i, cp) in cps.iter().enumerate() {
+            let before_interp = interpret_alpha(cp.alpha_before);
+            let after_interp = interpret_alpha(cp.alpha_after);
+            let direction = if cp.shift > 0.0 { "more correlated" } else { "less correlated" };
+            println!("  {}. \x1b[33msample {}\x1b[0m — structure shifted {:+.3}", i + 1, cp.location, cp.shift);
+            println!("     before: α={:.3} ({})", cp.alpha_before, before_interp);
+            println!("     after:  α={:.3} ({})", cp.alpha_after, after_interp);
+            println!("     → the signal became {} after this point", direction);
+            println!();
+        }
+    }
+}
+
+fn interpret_alpha(alpha: f64) -> &'static str {
+    if alpha < 0.4 { "anti-correlated / mean-reverting" }
+    else if alpha < 0.55 { "uncorrelated / random" }
+    else if alpha < 0.75 { "weakly correlated" }
+    else if alpha < 1.05 { "strongly correlated (1/f)" }
+    else if alpha < 1.4 { "highly persistent" }
+    else { "unbounded walk" }
 }
 
 fn generate_ros_package() -> String {
