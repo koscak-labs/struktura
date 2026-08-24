@@ -66,8 +66,35 @@ war stories, not feature lists.
 - **satnogs**: community ground-station network, open telemetry firehose —
   live public demo material.
 
+### Rover track (mdj is building a rover)
+- **MSL half of the NASA benchmark IS rover telemetry** (Curiosity) — the
+  SMAP/MSL results double as rover credibility automatically.
+- **F Prime is THE rover/heli flight software** (Ingenuity flew it);
+  struktura already generates F Prime components — a rover health-monitor
+  component is a natural demo.
+- **mdj's physical rover**: struktura monitoring its real telemetry (motor
+  currents, IMU, wheel vibration — literally our bearing math) over serial/
+  CSV = a hardware demo video. Real hardware converts stars like nothing
+  else. Offer mdj the health-monitor stack for it.
+
 ### Excluded on purpose
 - ArduPilot/PX4: drones-not-space (Phil's rule) + prior pushback scars.
+
+## GitHub growth mechanics (stars + FOLLOWERS, honestly)
+Current baseline: 1 star, 229 crates downloads. HN upvote ≈ 1.4 stars (own memory).
+- Stars land on koscak-labs/struktura; FOLLOWERS land on philphauler —
+  so: personal profile README (DRAFT_PROFILE_README.md ready) + pinned
+  repos + public org membership, so repo traffic converts to follows.
+- Traffic order that compounds: crates publish → TWiR (steady drip) →
+  r/rust (spike) → HN Show HN (biggest; a front-page hour can be 200-800
+  stars) → GitHub Trending (stars-in-window triggers it → free compounding).
+- README must be at maximum punch BEFORE the spike (done: mission log +
+  evolution table + receipts now in the hero).
+- Awesome-list PRs after the spike (they get accepted easier with stars):
+  awesome-rust (science), awesome-embedded-rust (no_std), awesome-space.
+- Repeatable content engine: every future measured result = 1 tweet-length
+  line + 1 repo commit + occasional dev.to post. Consistency beats bursts
+  for followers.
 
 ## Sequencing (Juraj logic)
 1. SMAP/MSL results first — they upgrade EVERY other conversation.

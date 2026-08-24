@@ -42,6 +42,54 @@ $ struktura voyager
 
 real data. real spacecraft. one rust function caught it. 🎯
 
+## 🤖 it flies missions autonomously
+
+`struktura mission` — 24,000 samples, three scripted disasters, zero human calls:
+
+```
+t=  4004  ALARM        RepeatedValue on temp (class: stuck)
+t=  4004  QUARANTINE   temp declared dead -> virtual mode
+t= 10069  ALARM        LevelShift on pointing (class: regime_shift)
+t= 10769  RECALIBRATED guard passed -> new normal accepted
+t= 19173  ALARM        LevelShift on soc (class: drift_confirmed)
+```
+
+dead sensor? quarantined in 4 samples, its reading reconstructed from the
+other channels' physics (R² > 0.9). environment permanently changed? it
+re-learns "normal" through a guarded candidate — and rolls back if the new
+regime is actually a fault trying to sneak in. drift disguised as a regime
+change? refused. every decision above was made by the monitor alone.
+
+## 🧬 it evolved its own detectors
+
+`struktura evolve` — an adversarial RED/BLUE loop: RED invents faults the
+monitor misses, BLUE synthesizes new detector legs from a grammar, accepted
+only with ZERO false alarms on clean data:
+
+| generation | fault coverage | detector legs |
+|---|---|---|
+| 1 | 71% | 2 |
+| 4 | 89% | 5 |
+| 9 | **97%** | 6 |
+
+the machine independently invented variance monitors, residual-trend
+monitors, and derivative-volatility monitors — detector classes nobody
+hand-coded. parameter tuning alone plateaued at 75%; structural synthesis
+broke through.
+
+## 🛡️ the receipts
+
+- **7/7 telemetry fault taxonomy at 100% detection** (packet loss, spike,
+  stuck, drift, regime shift, mixed, correlation change), **0 false alarms
+  across 200,000 clean samples** — thresholds are extreme-value return
+  levels ("false alarms per mission hour"), all self-calibrated
+- **NASA bearing run-to-failure: alarm 105.5 hours before failure** —
+  with a control experiment proving it's not calibration bias
+- **compiles to flight-ready C99**: `struktura generate-hybrid` bakes your
+  calibration into a dependency-free monitor that passes `-Wall -Werror`
+  and detects a stuck sensor in its own self-test
+- every claim above → one command: see [REPRODUCIBILITY.md](REPRODUCIBILITY.md)
+
 ## ⚡ speed (benchmarked, not guessed)
 
 | signal size | struktura (rust) | python nolds | speedup |
