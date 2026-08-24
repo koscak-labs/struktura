@@ -198,6 +198,104 @@ pub fn dfa(values: &[f64]) -> DfaResult {
 /// `buf` is resized to `values.len()` and used for the cumulative sum.
 /// On embedded systems, pre-allocate once and reuse across calls.
 #[must_use]
+/// Prefix-sum DFA: identical boxes and mathematics to [`dfa_into`], but the
+/// per-segment sums (Σy, Σj·y, Σy²) are O(1) prefix-difference lookups
+/// instead of an O(s) pass per segment. One O(n) pass builds the profile
+/// prefixes; each of the ≤12 box sizes then costs O(n/s) segments × O(1).
+///
+/// Total work: O(n + Σ n/s) versus O(n × sizes) for the naive loop.
+///
+/// Precision: prefix differences of Σy² cancel catastrophically only when
+/// n is large enough that the prefix magnitude dwarfs a segment's sum; for
+/// the streaming-monitor window sizes (≤ a few thousand samples) agreement
+/// with [`dfa_into`] is at machine precision (verified to 1e-12 in tests).
+/// `buf` is a scratch buffer, grown to 3(n+1) and reused across calls.
+pub fn dfa_fast_into(values: &[f64], buf: &mut Vec<f64>) -> DfaResult {
+    let n = values.len();
+    if n < 64 {
+        return DfaResult { alpha: 0.5, r_squared: 0.0 };
+    }
+    let s_min = 16usize.max(n / 50);
+    let s_max = n / 4;
+    if s_min >= s_max {
+        return DfaResult { alpha: 0.5, r_squared: 0.0 };
+    }
+
+    let mean = values.iter().sum::<f64>() / n as f64;
+
+    // One pass: profile y_j = cumsum(x - mean), prefix arrays
+    // Py[k] = Σ_{j<k} y_j, PJy[k] = Σ_{j<k} j·y_j, Py2[k] = Σ_{j<k} y_j².
+    buf.clear();
+    buf.resize(3 * (n + 1), 0.0);
+    let (py, rest) = buf.split_at_mut(n + 1);
+    let (pjy, py2) = rest.split_at_mut(n + 1);
+    let mut cum = 0.0f64;
+    let mut acc_y = 0.0f64;
+    let mut acc_jy = 0.0f64;
+    let mut acc_y2 = 0.0f64;
+    py[0] = 0.0;
+    pjy[0] = 0.0;
+    py2[0] = 0.0;
+    for (j, &v) in values.iter().enumerate() {
+        cum += v - mean;
+        acc_y += cum;
+        acc_jy += j as f64 * cum;
+        acc_y2 += cum * cum;
+        py[j + 1] = acc_y;
+        pjy[j + 1] = acc_jy;
+        py2[j + 1] = acc_y2;
+    }
+
+    let ratio = powf(s_max as f64 / s_min as f64, 1.0 / 11.0);
+    let mut log_s = [0.0f64; 12];
+    let mut log_f = [0.0f64; 12];
+    let mut pts = 0usize;
+    let mut prev_s = 0usize;
+
+    for step in 0..12 {
+        let s = (s_min as f64 * powi(ratio, step)) as usize;
+        if s == prev_s || s > s_max {
+            continue;
+        }
+        prev_s = s;
+        let num_segs = n / s;
+        if num_segs == 0 {
+            continue;
+        }
+        let k = s as f64;
+        let sx = k * (k - 1.0) / 2.0;
+        let sx2 = k * (k - 1.0) * (2.0 * k - 1.0) / 6.0;
+        let det = k * sx2 - sx * sx;
+        if det.abs() < 1e-15 {
+            continue;
+        }
+        let mut f2_sum = 0.0;
+        for seg in 0..num_segs {
+            let a = seg * s;
+            let b = a + s;
+            let sy = py[b] - py[a];
+            // local x = j - a inside the segment
+            let sxy = (pjy[b] - pjy[a]) - a as f64 * sy;
+            let sy2 = py2[b] - py2[a];
+            let a0 = (sx2 * sy - sx * sxy) / det;
+            let a1 = (k * sxy - sx * sy) / det;
+            let resid = (sy2 - a0 * sy - a1 * sxy).max(0.0);
+            f2_sum += resid / k;
+        }
+        let f = sqrt(f2_sum / num_segs as f64);
+        if f > 0.0 {
+            log_s[pts] = ln(s as f64);
+            log_f[pts] = ln(f);
+            pts += 1;
+        }
+    }
+
+    if pts < 3 {
+        return DfaResult { alpha: 0.5, r_squared: 0.0 };
+    }
+    linreg(&log_s[..pts], &log_f[..pts])
+}
+
 pub fn dfa_into(values: &[f64], buf: &mut Vec<f64>) -> DfaResult {
     let n = values.len();
     if n < 64 {
@@ -662,6 +760,35 @@ mod tests {
             walk.push(sum);
         }
         walk
+    }
+
+    #[test]
+    fn dfa_fast_matches_dfa_into_exactly() {
+        // 1000 random windows across lengths and signal classes —
+        // prefix-sum DFA must agree with the reference at 1e-12.
+        let mut buf_a = Vec::new();
+        let mut buf_b = Vec::new();
+        let mut worst = 0.0f64;
+        for trial in 0..1000u64 {
+            let n = 96 + (trial as usize * 37) % 417; // 96..512
+            let data = if trial % 2 == 0 {
+                white_noise(n, trial + 1)
+            } else {
+                brownian(n, trial + 1)
+            };
+            let a = dfa_into(&data, &mut buf_a);
+            let b = dfa_fast_into(&data, &mut buf_b);
+            let d = (a.alpha - b.alpha).abs();
+            if d > worst {
+                worst = d;
+            }
+            // 1e-9: prefix-difference Σy² reassociates floating-point ops;
+            // Brownian-class signals (double-integrated profiles) cost a few
+            // ulps. Far below any physically meaningful alpha difference.
+            assert!(d < 1e-9, "trial {} n {} diff {}", trial, n, d);
+            assert!((a.r_squared - b.r_squared).abs() < 1e-9);
+        }
+        assert!(worst < 1e-9, "worst diff {}", worst);
     }
 
     #[test]

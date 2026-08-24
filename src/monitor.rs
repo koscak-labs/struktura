@@ -48,7 +48,7 @@
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
-use crate::dfa_into;
+use crate::dfa_fast_into as dfa_into;
 
 /// DFA ring window length. Must exceed 64 (below that `dfa` cannot form a
 /// valid box-size range) — 96 gives box sizes 16..24.
