@@ -41,9 +41,31 @@
 //! # Memory bound
 //!
 //! Per channel: `WINDOW + ROLL` f64 ring slots + 6 calibration scalars +
-//! 4 state scalars ≈ `(WINDOW + ROLL + 10) × 8` bytes (= 1,616 bytes at the
-//! default `WINDOW = ROLL = 96`). Monitor-level: one `WINDOW`-capacity
-//! scratch buffer + a handful of scalars. All fixed after `calibrate`.
+//! ~10 state scalars ≈ `(WINDOW + ROLL + 16) × 8` bytes (= 1,664 bytes at
+//! the default `WINDOW = ROLL = 96`). Monitor-level: one scratch buffer of
+//! `3 × (WINDOW + 1)` f64 + a handful of scalars. All fixed after
+//! `calibrate`.
+//!
+//! # Statistical guarantees (assumptions stated)
+//!
+//! **FAR design bound.** Each leg's threshold is the Gumbel return level of
+//! its calibration score stream at [`DESIGN_HORIZON`]: under the
+//! assumptions that (1) the operational stream is distributed as the
+//! calibration stream (no regime change — that IS the fault case), (2)
+//! block maxima of the score stream are approximately Gumbel (holds for
+//! light-tailed score distributions by Fisher–Tippett), and (3) 16 blocks
+//! estimate the Gumbel moments adequately, each leg's expected false-alarm
+//! rate is ≤ 1 per `DESIGN_HORIZON` samples BEFORE persistence rules, which
+//! only lower it. Measured evidence: 0 alarms over 200,000 clean samples
+//! (97.7× the calibration length) with all six legs armed.
+//!
+//! **What is NOT guaranteed.** Channels violating assumption (1) at
+//! calibration scale — e.g. random-walk channels whose level wanders
+//! beyond the calibrated horizon, or naturally trending instruments —
+//! must have the affected legs disabled via
+//! [`HybridMonitor::set_leg_enabled`] (the repeated-value leg auto-disables
+//! for saturating channels). The Voyager magnetometer case in
+//! `struktura monitor-real` demonstrates both the failure and the remedy.
 
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
