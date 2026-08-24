@@ -99,6 +99,36 @@ pub const DESIGN_HORIZON: f64 = 1_000_000.0;
 /// k = 1.0 absorbs transfer bias without hiding drift.
 const CUSUM_K: f64 = 1.0;
 
+/// Evolvable detection policy. The defaults are the hand-tuned values;
+/// the RED/BLUE adversarial loop (`redblue` module) searches this space
+/// for configurations with strictly better fault coverage at equal or
+/// better false-alarm behavior.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MonitorConfig {
+    /// Residual/parity exceedance pairing window (samples).
+    pub res_span: u64,
+    /// Consecutive flagged DFA evaluations required to alarm.
+    pub dfa_persist: usize,
+    /// Consecutive rolling-mean exceedances required to alarm.
+    pub roll_persist: usize,
+    /// CUSUM slack per step (residual sigmas).
+    pub cusum_k: f64,
+    /// Threshold design horizon (expected false alarms: 1 per this many).
+    pub design_horizon: f64,
+}
+
+impl Default for MonitorConfig {
+    fn default() -> Self {
+        MonitorConfig {
+            res_span: RES_SPAN as u64,
+            dfa_persist: DFA_PERSIST,
+            roll_persist: ROLL_PERSIST,
+            cusum_k: CUSUM_K,
+            design_horizon: DESIGN_HORIZON,
+        }
+    }
+}
+
 /// Which detector leg raised the alarm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Leg {
@@ -254,6 +284,7 @@ pub struct HybridMonitor {
     /// (e.g. level-shift on a naturally trending channel) are disabled
     /// at configuration time — standard flight-monitor practice.
     leg_enabled: [bool; 7],
+    config: MonitorConfig,
 }
 
 /// Linear reconstruction model: one channel estimated from all others.
@@ -479,6 +510,11 @@ impl HybridMonitor {
     ///
     /// This is the only phase that allocates.
     pub fn calibrate(clean: &[Vec<f64>]) -> Option<HybridMonitor> {
+        Self::calibrate_with(clean, MonitorConfig::default())
+    }
+
+    /// Calibrate with an explicit detection policy (see [`MonitorConfig`]).
+    pub fn calibrate_with(clean: &[Vec<f64>], config: MonitorConfig) -> Option<HybridMonitor> {
         let channels = clean.len();
         if channels == 0 {
             return None;
@@ -520,7 +556,7 @@ impl HybridMonitor {
                     roll_devs.push((sum / ROLL as f64 - mean).abs());
                 }
             }
-            let roll_thr = gumbel_return_level(&roll_devs, DESIGN_HORIZON);
+            let roll_thr = gumbel_return_level(&roll_devs, config.design_horizon);
 
             let mut max_run = 1usize;
             let mut run = 1usize;
@@ -563,7 +599,7 @@ impl HybridMonitor {
             }
             res_scores.push(mz);
         }
-        let res_thr = gumbel_return_level(&res_scores, DESIGN_HORIZON);
+        let res_thr = gumbel_return_level(&res_scores, config.design_horizon);
 
         // Residual-CUSUM threshold: run the two-sided CUSUM (slack k = 0.5)
         // over each channel's SIGNED standardized calibration residuals,
@@ -577,8 +613,8 @@ impl HybridMonitor {
                 for (ch, c) in clean.iter().enumerate() {
                     let cc = &calib[ch];
                     let z = (c[t] - (cc.ar_a + cc.ar_b * c[t - 1])) / cc.ar_sd;
-                    pos[ch] = (pos[ch] + z - CUSUM_K).max(0.0);
-                    neg[ch] = (neg[ch] - z - CUSUM_K).max(0.0);
+                    pos[ch] = (pos[ch] + z - config.cusum_k).max(0.0);
+                    neg[ch] = (neg[ch] - z - config.cusum_k).max(0.0);
                     let m = pos[ch].max(neg[ch]);
                     if m > mc {
                         mc = m;
@@ -587,7 +623,7 @@ impl HybridMonitor {
                 cusum_path.push(mc);
             }
         }
-        let cusum_thr = gumbel_return_level(&cusum_path, DESIGN_HORIZON);
+        let cusum_thr = gumbel_return_level(&cusum_path, config.design_horizon);
 
         // DFA threshold: Gumbel return level of the max-over-channels
         // windowed-alpha z stream (horizon scaled by the stride).
@@ -604,7 +640,7 @@ impl HybridMonitor {
             }
             dfa_scores.push(mz);
         }
-        let dfa_thr = gumbel_return_level(&dfa_scores, DESIGN_HORIZON / DFA_STRIDE as f64);
+        let dfa_thr = gumbel_return_level(&dfa_scores, config.design_horizon / DFA_STRIDE as f64);
 
         // Analytical redundancy: reconstruct each channel from the others,
         // and calibrate the parity leg on the max-over-channels
@@ -627,7 +663,7 @@ impl HybridMonitor {
             }
             parity_scores.push(mz);
         }
-        let parity_thr = gumbel_return_level(&parity_scores, DESIGN_HORIZON);
+        let parity_thr = gumbel_return_level(&parity_scores, config.design_horizon);
 
         let state = clean
             .iter()
@@ -664,6 +700,7 @@ impl HybridMonitor {
                 q
             },
             leg_enabled: [true; 7],
+            config,
         })
     }
 
@@ -784,8 +821,8 @@ impl HybridMonitor {
 
         // Leg 1: residual + leg 5: CUSUM (both from the same z-score)
         let zs = (v - (cc.ar_a + cc.ar_b * st.prev)) / cc.ar_sd;
-        st.cusum_pos = (st.cusum_pos + zs - CUSUM_K).max(0.0);
-        st.cusum_neg = (st.cusum_neg - zs - CUSUM_K).max(0.0);
+        st.cusum_pos = (st.cusum_pos + zs - self.config.cusum_k).max(0.0);
+        st.cusum_neg = (st.cusum_neg - zs - self.config.cusum_k).max(0.0);
         let cusum_alarm = st.cusum_pos.max(st.cusum_neg) > self.cusum_thr;
 
         let res_hit = zs.abs() > self.res_thr;
@@ -810,7 +847,7 @@ impl HybridMonitor {
             }
             st.res_hit_times[RES_HITS - 1] = t;
             let oldest = st.res_hit_times[0];
-            if oldest != u64::MAX && t - oldest < RES_SPAN as u64 {
+            if oldest != u64::MAX && t - oldest < self.config.res_span {
                 self.alarmed = true;
                 self.last_alarm = Some(AlarmReport {
                     leg: Leg::Residual,
@@ -835,7 +872,7 @@ impl HybridMonitor {
                 }
                 st.parity_hit_times[RES_HITS - 1] = t;
                 let oldest = st.parity_hit_times[0];
-                if oldest != u64::MAX && t - oldest < RES_SPAN as u64 {
+                if oldest != u64::MAX && t - oldest < self.config.res_span {
                     self.alarmed = true;
                     self.last_alarm = Some(AlarmReport {
                         leg: Leg::Parity,
@@ -888,7 +925,7 @@ impl HybridMonitor {
             let st = &mut self.state[ch];
             let hit = (a - cc.alpha_mean).abs() / cc.alpha_sd > self.dfa_thr;
             st.dfa_streak = if hit { st.dfa_streak + DFA_STRIDE } else { 0 };
-            if st.dfa_streak >= DFA_PERSIST {
+            if st.dfa_streak >= self.config.dfa_persist {
                 self.alarmed = true;
                 self.last_alarm = Some(AlarmReport {
                     leg: Leg::Dfa,
@@ -908,7 +945,7 @@ impl HybridMonitor {
             let sum: f64 = st.roll_ring.iter().sum();
             let hit = (sum / ROLL as f64 - cc.mean).abs() > cc.roll_thr;
             st.roll_streak = if hit { st.roll_streak + 1 } else { 0 };
-            if st.roll_streak >= ROLL_PERSIST {
+            if st.roll_streak >= self.config.roll_persist {
                 self.alarmed = true;
                 self.last_alarm = Some(AlarmReport {
                     leg: Leg::LevelShift,

@@ -186,6 +186,7 @@ fn main() {
         "monitor-real" => cmd_monitor_real(),
         "generate-hybrid" => cmd_generate_hybrid(&args),
         "mission" => cmd_mission(),
+        "redblue" => cmd_redblue(&args),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -2734,6 +2735,57 @@ fn cmd_mission() {
     println!();
     println!("  Mission complete. Every decision above was made autonomously.");
     println!("  (Reproduce exactly: deterministic seeds. Assertions in autopilot tests.)");
+    println!();
+}
+
+fn cmd_redblue(args: &[String]) {
+    use struktura::redblue::run;
+
+    let mut rounds = 6usize;
+    let mut probes = 120u64;
+    let mut mutations = 10usize;
+    let mut i = 2;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--rounds" if i + 1 < args.len() => { rounds = args[i + 1].parse().unwrap_or(6); i += 2; }
+            "--probes" if i + 1 < args.len() => { probes = args[i + 1].parse().unwrap_or(120); i += 2; }
+            "--mutations" if i + 1 < args.len() => { mutations = args[i + 1].parse().unwrap_or(10); i += 2; }
+            _ => { i += 1; }
+        }
+    }
+
+    println!();
+    println!("  \x1b[1mRED/BLUE ADVERSARIAL SELF-IMPROVEMENT\x1b[0m");
+    println!("  RED probes the continuous fault space for misses; BLUE evolves the");
+    println!("  detection policy against the accumulated miss corpus under a");
+    println!("  ZERO-clean-alarm law. {} rounds x {} probes x {} mutations.", rounds, probes, mutations);
+    println!("  ================================================================");
+    println!();
+    println!("  | Round | RED coverage | New misses | Corpus cov. after BLUE | Evolved? |");
+    println!("  |-------|--------------|------------|------------------------|----------|");
+
+    let (final_config, reports) = run(rounds, probes, mutations, 12, |r| {
+        let cov_color = if r.red_coverage >= 0.9 { "\x1b[32m" }
+                        else if r.red_coverage >= 0.7 { "\x1b[33m" } else { "\x1b[31m" };
+        println!(
+            "  | {:>5} | {}{:>7.1}%\x1b[0m     | {:>10} | {:>17.1}%     | {:>8} |",
+            r.round + 1, cov_color, r.red_coverage * 100.0, r.new_misses,
+            r.corpus_coverage_after * 100.0,
+            if r.improved { "\x1b[32mYES\x1b[0m" } else { "no" }
+        );
+    });
+
+    println!();
+    if let (Some(first), Some(last)) = (reports.first(), reports.last()) {
+        println!(
+            "  RED coverage: {:.1}% (round 1) -> {:.1}% (round {})",
+            first.red_coverage * 100.0, last.red_coverage * 100.0, reports.len()
+        );
+    }
+    println!("  Evolved config: res_span={} dfa_persist={} roll_persist={} cusum_k={:.2} horizon={:.0}",
+        final_config.res_span, final_config.dfa_persist, final_config.roll_persist,
+        final_config.cusum_k, final_config.design_horizon);
+    println!("  Zero-clean-alarm law verified on every accepted mutation.");
     println!();
 }
 

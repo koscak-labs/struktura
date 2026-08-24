@@ -1218,6 +1218,8 @@ pub mod telemetry_bench;
 pub mod monitor;
 pub mod prognosis;
 pub mod autopilot;
+#[cfg(feature = "std")]
+pub mod redblue;
 pub mod mfdfa;
 pub mod trend;
 pub mod classify;
