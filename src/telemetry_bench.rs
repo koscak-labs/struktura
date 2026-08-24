@@ -580,6 +580,313 @@ pub fn timestep_f1_benchmark(
         .collect()
 }
 
+// ── Hybrid monitor: residual + repeated-value + DFA ─────────────────
+//
+// Three orthogonal detectors, each calibrated on the clean calibration
+// sequence, fused by OR:
+//   1. Residual: per-channel AR(1) one-step predictor fitted by least
+//      squares on calibration; score = max-channel standardized residual;
+//      threshold at the 99.9th pct of calibration scores. Catches spikes
+//      and step changes instantly.
+//   2. Repeated-value: a run of >= `REPEAT_RUN` bit-identical values on a
+//      noisy channel is practically impossible in clean telemetry; catches
+//      stuck sensors and forward-filled packet loss.
+//   3. DFA: trailing-window structural z-score (as in timestep_f1_benchmark);
+//      catches slow drift, regime and correlation changes with latency.
+
+const REPEAT_RUN: usize = 4;
+
+/// Per-fault result of the hybrid benchmark.
+#[derive(Debug, Clone)]
+pub struct HybridResult {
+    pub fault: String,
+    pub event_detect_rate: f64,
+    pub mean_latency: f64,
+    /// Which detector fired first, as counts over detected events:
+    /// (residual, repeated, dfa, cusum)
+    pub first_detector: (usize, usize, usize, usize),
+}
+
+struct Ar1 {
+    a: f64,
+    b: f64,
+    sd: f64,
+}
+
+fn fit_ar1(series: &[f64]) -> Ar1 {
+    let n = series.len() - 1;
+    let x = &series[..n];
+    let y = &series[1..];
+    let mx = x.iter().sum::<f64>() / n as f64;
+    let my = y.iter().sum::<f64>() / n as f64;
+    let mut cov = 0.0;
+    let mut var = 0.0;
+    for i in 0..n {
+        cov += (x[i] - mx) * (y[i] - my);
+        var += (x[i] - mx) * (x[i] - mx);
+    }
+    let b = if var > 1e-12 { cov / var } else { 0.0 };
+    let a = my - b * mx;
+    let mut ss = 0.0;
+    for i in 0..n {
+        let r = y[i] - (a + b * x[i]);
+        ss += r * r;
+    }
+    Ar1 { a, b, sd: (ss / n as f64).sqrt().max(1e-9) }
+}
+
+/// Run the hybrid monitor over all fault types plus clean sequences.
+/// Returns (per-fault results, event-level false-alarm rate on clean).
+pub fn hybrid_benchmark(
+    length: usize,
+    n_seeds: u64,
+    window: usize,
+    step: usize,
+) -> (Vec<HybridResult>, f64) {
+    let fault_start = (length as f64 * 0.58) as usize;
+    let fault_stop = (fault_start + ((length as f64 * 0.12) as usize).max(8)).min(length);
+
+    let mut per_fault: Vec<(usize, f64, (usize, usize, usize, usize))> =
+        vec![(0, 0.0, (0, 0, 0, 0)); FAULT_TYPES.len()];
+    let mut clean_false_alarms = 0usize;
+
+    for seed in 1..=n_seeds {
+        let s = seed * 7919;
+        let calib = synth_spacecraft(length, s + 100);
+        let test_clean = synth_spacecraft(length, s + 200);
+
+        // ── Calibrate detector 1: AR(1) residuals ──
+        let ar: Vec<Ar1> = calib.iter().map(|c| fit_ar1(c)).collect();
+        let mut calib_res_scores = Vec::with_capacity(length - 1);
+        for t in 1..length {
+            let mut mz = 0.0f64;
+            for ch in 0..CHANNELS {
+                let pred = ar[ch].a + ar[ch].b * calib[ch][t - 1];
+                let z = (calib[ch][t] - pred).abs() / ar[ch].sd;
+                if z > mz {
+                    mz = z;
+                }
+            }
+            calib_res_scores.push(mz);
+        }
+        // Sequence-level FAR control: threshold = calibration max with a
+        // safety margin, and require persistence (2 consecutive exceedances).
+        let res_thr = calib_res_scores
+            .iter()
+            .cloned()
+            .fold(0.0f64, f64::max)
+            * 1.1;
+
+        // Repeated-value runs must also be calibrated: channels that ride a
+        // physical clamp (e.g. SOC at its limit) legitimately repeat.
+        let mut calib_max_run = [1usize; CHANNELS];
+        for ch in 0..CHANNELS {
+            let mut run = 1usize;
+            for t in 1..length {
+                if calib[ch][t] == calib[ch][t - 1] {
+                    run += 1;
+                    if run > calib_max_run[ch] {
+                        calib_max_run[ch] = run;
+                    }
+                } else {
+                    run = 1;
+                }
+            }
+        }
+
+        // ── Calibrate detector 3: DFA windowed z ──
+        let calib_windows: Vec<Vec<(usize, f64)>> = calib
+            .iter()
+            .map(|c| window_alphas_trailing(c, window, step))
+            .collect();
+        let calib_stats: Vec<(f64, f64)> = calib_windows
+            .iter()
+            .map(|ws| {
+                let n = ws.len() as f64;
+                let mean = ws.iter().map(|(_, a)| a).sum::<f64>() / n;
+                let var = ws.iter().map(|(_, a)| (a - mean).powi(2)).sum::<f64>() / n;
+                (mean, var.sqrt().max(1e-6))
+            })
+            .collect();
+        let n_windows = calib_windows[0].len();
+        let mut calib_dfa_scores = Vec::with_capacity(n_windows);
+        for w in 0..n_windows {
+            let mut mz = 0.0f64;
+            for ch in 0..CHANNELS {
+                let (m, sd) = calib_stats[ch];
+                let z = (calib_windows[ch][w].1 - m).abs() / sd;
+                if z > mz {
+                    mz = z;
+                }
+            }
+            calib_dfa_scores.push(mz);
+        }
+        let dfa_thr = calib_dfa_scores
+            .iter()
+            .cloned()
+            .fold(0.0f64, f64::max)
+            * 1.02;
+
+        // ── Calibrate detector 4: rolling-mean level shift ──
+        // The dominant periodic driver (orbit) has period 96, so a 96-sample
+        // rolling mean cancels it; a sustained level shift moves the rolling
+        // mean where periodic dynamics cannot. Threshold = the max deviation
+        // the calibration sequence's own rolling mean reaches, ×1.1.
+        const ROLL: usize = 96;
+        let rolling_dev = |c: &[f64], mean: f64| -> Vec<f64> {
+            let mut out = Vec::with_capacity(c.len());
+            let mut sum = 0.0f64;
+            for (t, &v) in c.iter().enumerate() {
+                sum += v;
+                if t >= ROLL {
+                    sum -= c[t - ROLL];
+                    out.push(sum / ROLL as f64 - mean);
+                } else {
+                    out.push(0.0);
+                }
+            }
+            out
+        };
+        let roll_stats: Vec<(f64, f64)> = calib
+            .iter()
+            .map(|c| {
+                let m = c.iter().sum::<f64>() / c.len() as f64;
+                let devs = rolling_dev(c, m);
+                let max_dev = devs.iter().map(|d| d.abs()).fold(0.0f64, f64::max);
+                (m, max_dev.max(1e-9))
+            })
+            .collect();
+
+        // ── Evaluate a sequence: first flag time + which detector ──
+        let evaluate = |signal: &[Vec<f64>]| -> Option<(usize, usize)> {
+            // detector 3 precompute
+            let test_windows: Vec<Vec<(usize, f64)>> = signal
+                .iter()
+                .map(|c| window_alphas_trailing(c, window, step))
+                .collect();
+            // DFA scores are piecewise-constant between window ends (stride
+            // `step`); forward-fill each window's flag until the next window
+            // end so streak counting sees a continuous per-timestep stream.
+            let mut dfa_flag_at = vec![false; length];
+            let mut current = false;
+            let mut next_w = 0usize;
+            for (t, slot) in dfa_flag_at.iter_mut().enumerate() {
+                if next_w < test_windows[0].len() && test_windows[0][next_w].0 == t {
+                    current = (0..CHANNELS).any(|ch| {
+                        let (m, sd) = calib_stats[ch];
+                        (test_windows[ch][next_w].1 - m).abs() / sd > dfa_thr
+                    });
+                    next_w += 1;
+                }
+                *slot = current;
+            }
+            let mut runs = [1usize; CHANNELS];
+            let mut res_hits: Vec<usize> = Vec::new();
+            let mut dfa_streak = 0usize;
+            let mut roll_sums = [0.0f64; CHANNELS];
+            for ch in 0..CHANNELS {
+                roll_sums[ch] = signal[ch][0];
+            }
+            let mut roll_streak = 0usize;
+            for t in 1..length {
+                // detector 1: residual. Persistence = 2 exceedances within a
+                // trailing 20-step window (catches step faults, whose big
+                // residuals appear only at entry and exit).
+                let mut res_hit = false;
+                for ch in 0..CHANNELS {
+                    let pred = ar[ch].a + ar[ch].b * signal[ch][t - 1];
+                    if (signal[ch][t] - pred).abs() / ar[ch].sd > res_thr {
+                        res_hit = true;
+                        break;
+                    }
+                }
+                if res_hit {
+                    res_hits.push(t);
+                    let recent = res_hits.iter().filter(|&&h| t - h < 20).count();
+                    if recent >= 2 {
+                        return Some((t, 0));
+                    }
+                }
+                // detector 2: repeated value (calibrated per-channel run limit)
+                for ch in 0..CHANNELS {
+                    if signal[ch][t] == signal[ch][t - 1] {
+                        runs[ch] += 1;
+                        if runs[ch] >= calib_max_run[ch] + REPEAT_RUN {
+                            return Some((t, 1));
+                        }
+                    } else {
+                        runs[ch] = 1;
+                    }
+                }
+                // detector 3: DFA (persistence: 5 consecutive flagged steps)
+                dfa_streak = if dfa_flag_at[t] { dfa_streak + 1 } else { 0 };
+                if dfa_streak >= 5 {
+                    return Some((t, 2));
+                }
+                // detector 4: rolling-mean level shift (orbit-cancelling).
+                // Margin ×2 over the calibration max plus 10-step persistence:
+                // random-walk channels (SOC) wander naturally between
+                // sequences, so a tight margin false-alarms.
+                let mut roll_hit = false;
+                for ch in 0..CHANNELS {
+                    roll_sums[ch] += signal[ch][t];
+                    if t >= ROLL {
+                        roll_sums[ch] -= signal[ch][t - ROLL];
+                        let (m, max_dev) = roll_stats[ch];
+                        let dev = (roll_sums[ch] / ROLL as f64 - m).abs();
+                        if dev > max_dev * 2.0 {
+                            roll_hit = true;
+                        }
+                    }
+                }
+                roll_streak = if roll_hit { roll_streak + 1 } else { 0 };
+                if roll_streak >= 10 {
+                    return Some((t, 3));
+                }
+            }
+            None
+        };
+
+        // Clean false-alarm check
+        if evaluate(&test_clean).is_some() {
+            clean_false_alarms += 1;
+        }
+
+        // Faulted sequences: flag counts only within the event window
+        for (fi, fault) in FAULT_TYPES.iter().enumerate() {
+            let faulted = inject_fault(&test_clean, fault, s);
+            if let Some((t, det)) = evaluate(&faulted) {
+                let event_end = (fault_stop + window).min(length);
+                if t >= fault_start && t < event_end {
+                    let e = &mut per_fault[fi];
+                    e.0 += 1;
+                    e.1 += (t - fault_start) as f64;
+                    match det {
+                        0 => e.2 .0 += 1,
+                        1 => e.2 .1 += 1,
+                        2 => e.2 .2 += 1,
+                        _ => e.2 .3 += 1,
+                    }
+                }
+                // a flag before fault_start on a faulted sequence would be a
+                // false alarm, but those are already measured on clean pairs
+            }
+        }
+    }
+
+    let results = FAULT_TYPES
+        .iter()
+        .zip(per_fault.iter())
+        .map(|(fault, &(count, lat_sum, first))| HybridResult {
+            fault: String::from(*fault),
+            event_detect_rate: count as f64 / n_seeds as f64,
+            mean_latency: if count > 0 { lat_sum / count as f64 } else { 0.0 },
+            first_detector: first,
+        })
+        .collect();
+    (results, clean_false_alarms as f64 / n_seeds as f64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

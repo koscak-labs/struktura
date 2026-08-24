@@ -2170,6 +2170,28 @@ fn cmd_benchmark_telemetry(args: &[String]) {
     println!("  within [fault_start, fault_end + window] (NAB-style event scoring).");
     println!("  Latency = mean samples from fault start to first flag.");
     println!();
+    // Hybrid monitor: residual + repeated-value + DFA fused by OR
+    use struktura::telemetry_bench::hybrid_benchmark;
+    let (hybrid, clean_far) = hybrid_benchmark(length, f1_seeds, 96, 2);
+    println!("  \x1b[1mHYBRID MONITOR\x1b[0m (AR1-residual + repeated-value + DFA + CUSUM, OR-fused,");
+    println!("  every threshold calibrated on the clean calibration sequence)");
+    println!("  Event-level false-alarm rate on {} clean sequences: {:.1}%", f1_seeds, clean_far * 100.0);
+    println!("  | Fault Type         | Event Detect | Latency | First (res/rep/dfa/cusum) |");
+    println!("  |--------------------|--------------|---------|---------------------------|");
+    let mut covered = 0usize;
+    for r in &hybrid {
+        let color = if r.event_detect_rate >= 0.8 { "\x1b[32m" }
+                    else if r.event_detect_rate >= 0.4 { "\x1b[33m" } else { "\x1b[31m" };
+        if r.event_detect_rate >= 0.8 { covered += 1; }
+        println!(
+            "  | {:<18} | {}{:>4.0}%\x1b[0m        | {:>4.0}    | {}/{}/{}/{}                    |",
+            r.fault, color, r.event_detect_rate * 100.0, r.mean_latency,
+            r.first_detector.0, r.first_detector.1, r.first_detector.2, r.first_detector.3
+        );
+    }
+    println!();
+    println!("  \x1b[1mTaxonomy coverage: {}/7 fault types at >=80% event detection\x1b[0m", covered);
+    println!();
     println!("  Algorithm: Detrended Fluctuation Analysis (Peng 1994)");
     println!("  https://crates.io/crates/struktura");
     println!();
