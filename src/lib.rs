@@ -161,6 +161,9 @@ pub enum HealthVerdict {
 }
 
 impl HealthVerdict {
+    /// Classify a DFA alpha shift into a health verdict.
+    ///
+    /// Thresholds: |shift| < 0.03 = Healthy, < 0.08 = Watch, < 0.15 = Warning, else Critical.
     pub fn from_shift(shift: f64) -> Self {
         let s = if shift < 0.0 { -shift } else { shift };
         if s < 0.03 {
@@ -498,17 +501,24 @@ pub fn analyze(values: &[f64]) -> StructuralLaw {
 }
 
 impl StructuralLaw {
+    /// Returns true if the analysis has enough structure to be meaningful (not Abstain or Insufficient).
     pub fn is_healthy(&self) -> bool {
         self.quality != LawQuality::Abstain && self.quality != LawQuality::Insufficient
     }
 }
 
 impl DfaResult {
+    /// Returns true if the log-log fit is strong enough to trust (R² > 0.7).
     pub fn is_reliable(&self) -> bool {
         self.r_squared > 0.7
     }
 }
 
+/// Deterministic Fisher-Yates shuffle of a signal.
+///
+/// Used for control experiments: shuffle destroys sequential structure
+/// while preserving the value distribution. If DFA alpha changes after
+/// shuffling, the original signal had genuine long-range correlations.
 pub fn shuffle(values: &[f64], seed: u64) -> Vec<f64> {
     let mut out = values.to_vec();
     let n = out.len();
