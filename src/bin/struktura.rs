@@ -196,6 +196,7 @@ fn main() {
         "evolve" => cmd_evolve(&args),
         "smap" => cmd_smap(&args),
         "nasa" => cmd_nasa(),
+        "rover" => cmd_rover(),
         "guard" => cmd_guard(&args),
         "when" => cmd_when(&args),
         "pipe" => cmd_pipe(&args),
@@ -3358,6 +3359,69 @@ fn run_guard_watch(path: &str, baseline_n: usize, json: bool, poll_ms: u64) -> !
             }
         }
     }
+}
+
+fn cmd_rover() {
+    use struktura::rover::{RoverSim, RoverFault, ROVER_CHANNELS, ROVER_CHANNEL_NAMES};
+    use struktura::monitor::HybridMonitor;
+    use struktura::autopilot::{AutoPilot, Event};
+    use struktura::monitor::explain_alarm;
+
+    println!();
+    println!("  \x1b[1mROVER HEALTH MONITORING\x1b[0m — autonomous fault handling");
+    println!("  10 channels: 4 wheel motors, suspension, battery (V + SOC),");
+    println!("  thermal (CPU + motors), comms. three scripted faults:");
+    println!("    t=1500  front-left wheel bearing starts wearing");
+    println!("    t=2200  rear-right wheel stalls completely");
+    println!("    t=2600  battery cell degradation");
+    println!("  ================================================================");
+    println!();
+
+    let mut sim = RoverSim::new(42);
+    sim.inject(1500, RoverFault::WheelBearing { wheel: 0, severity: 0.9 });
+    sim.inject(2200, RoverFault::WheelStall { wheel: 3 });
+    sim.inject(2600, RoverFault::BatteryCell { severity: 0.8 });
+    let data = sim.run(3000);
+
+    let calib: Vec<Vec<f64>> = data.iter().map(|c| c[..1000].to_vec()).collect();
+    let mon = HybridMonitor::calibrate(&calib).expect("calibration");
+    let mut ap = AutoPilot::new(mon);
+
+    let valid = [true; ROVER_CHANNELS];
+    let mut sample = [0.0f64; ROVER_CHANNELS];
+    let mut last_leg = 255u8;
+    let mut last_t = 0usize;
+    let mut alarm_count = 0usize;
+    let mut q_count = 0usize;
+    for t in 1000..3000 {
+        for ch in 0..ROVER_CHANNELS { sample[ch] = data[ch][t]; }
+        for ev in ap.push(&sample, &valid) {
+            match &ev {
+                Event::Alarm { report, .. } => {
+                    let lid = report.leg as u8;
+                    if t - last_t < 200 { continue; }
+                    last_leg = lid; last_t = t; alarm_count += 1;
+                    let ch_name = ROVER_CHANNEL_NAMES.get(report.channel).unwrap_or(&"?");
+                    println!("  t={:>5}  ⚠ {}: {}", t, ch_name, explain_alarm(report));
+                }
+                Event::Quarantined { channel, .. } => {
+                    q_count += 1;
+                    let ch_name = ROVER_CHANNEL_NAMES.get(*channel).unwrap_or(&"?");
+                    println!("  t={:>5}  ✗ {} dead — virtual readings active", t, ch_name);
+                }
+                Event::AdaptationStarted { .. } =>
+                    println!("  t={:>5}  ↻ environment change? learning new baseline...", t),
+                Event::Recalibrated { .. } =>
+                    println!("  t={:>5}  ✓ new baseline accepted", t),
+                Event::RolledBack { .. } =>
+                    println!("  t={:>5}  ✗ not environment — fault confirmed", t),
+            }
+        }
+    }
+    println!();
+    println!("  {} anomalies, {} channels quarantined. all decisions autonomous.", alarm_count, q_count);
+    println!("  Spirit's right-front wheel failed sol 779. this catches it early.");
+    println!();
 }
 
 fn emit_event(t: usize, ev: &struktura::autopilot::Event, json: bool) {

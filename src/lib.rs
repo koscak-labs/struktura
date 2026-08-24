@@ -1341,6 +1341,7 @@ pub mod autopilot;
 pub mod redblue;
 #[cfg(feature = "std")]
 pub mod smap_eval;
+pub mod rover;
 #[cfg(feature = "wasm")]
 pub mod wasm;
 #[cfg(feature = "python")]
