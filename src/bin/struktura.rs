@@ -134,6 +134,7 @@ fn main() {
         println!("    struktura demo                            Run builtin bearing fault demo");
         println!("    struktura voyager                         Voyager 1 AACS anomaly analysis");
         println!("    struktura heliopause                      Detect the edge of the solar system");
+        println!("    struktura ims                             NASA bearing run-to-failure timeline");
         println!("    struktura spacecraft                      Multi-channel spacecraft health demo");
         println!("    struktura scan <file_or_-> [--baseline f]  Auto-analyze any signal (pipe with -)");
         println!("    struktura mf <file_or_->                 Multifractal spectrum (multi-scale complexity)");
@@ -163,6 +164,7 @@ fn main() {
         "generate" => cmd_generate(&args),
         "voyager" => cmd_voyager(),
         "heliopause" => cmd_heliopause(),
+        "ims" => cmd_ims(),
         "spacecraft" => cmd_spacecraft(),
         "text" => cmd_text(&args),
         "market" => cmd_market(&args),
@@ -174,6 +176,7 @@ fn main() {
         "batch" => cmd_batch(&args),
         "fingerprint" | "fp" | "dna" => cmd_fingerprint(&args),
         "watch" => cmd_watch(&args),
+        "oneline" => cmd_oneline(&args),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -707,7 +710,7 @@ fn cmd_batch(args: &[String]) {
     println!("  \x1b[1mBATCH ANALYSIS\x1b[0m");
     println!("  ====================================================================");
     println!();
-    println!("  {:<40} {:>7} {:>7} {:>7} {}", "FILE", "α", "R²", "n", "TYPE");
+    println!("  {:<40} {:>7} {:>7} {:>7} TYPE", "FILE", "α", "R²", "n");
     println!("  {}", "─".repeat(80));
 
     let mut any_alert = false;
@@ -718,7 +721,6 @@ fn cmd_batch(args: &[String]) {
         let short_name: String = f.chars().rev().take(38).collect::<String>().chars().rev().collect();
 
         if let Some(ba) = baseline_alpha {
-            let shift = law.dfa.alpha - ba;
             let verdict = health_check(&law, ba);
             let (color, label) = verdict_color(verdict);
             if verdict != HealthVerdict::Healthy { any_alert = true; }
@@ -922,6 +924,37 @@ fn cmd_classify(args: &[String]) {
     let indicator = format!("  │  {}▲", " ".repeat(pos.min(50)));
     println!("{}{}│", indicator, " ".repeat(53usize.saturating_sub(indicator.len() - 5)));
     println!("  └─────────────────────────────────────────────────────┘");
+    println!();
+}
+
+fn cmd_ims() {
+    use struktura::space::ims_demo;
+    let result = ims_demo();
+
+    println!();
+    println!("  \x1b[1mNASA IMS BEARING RUN-TO-FAILURE\x1b[0m");
+    println!("  DFA structural analysis across 984 recordings (7 days)");
+    println!("  Bearing 1 outer race fault — IMS/U. Cincinnati, NASA DASHlink");
+    println!("  ====================================================================");
+    println!();
+
+    println!("  Baseline (recordings 1-900):   α≈{:.3}  (stable, anti-correlated noise)", result.baseline_alpha);
+    println!("  Early warning (recording 970):  α={:.3}  (structure STIFFENS)", result.pre_failure_alpha);
+    println!("  End of life (recording 984):    α={:.3}  (structure COLLAPSES)", result.failure_alpha);
+    println!();
+    println!("  Timeline:");
+    println!("    rec 1-900:  α≈0.17  ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒  stable");
+    println!("    rec 970:    α=0.30  ▒▒▒▒▒▒▒▒▒▒▒▒██                 onset");
+    println!("    rec 974:    α=0.53  ▒▒▒▒▒▒▒▒▒▒▒▒██████████         \x1b[33mSTIFFENING\x1b[0m");
+    println!("    rec 981:    α=0.47  ▒▒▒▒▒▒▒▒▒▒▒▒█████████          \x1b[31mPEAK\x1b[0m");
+    println!("    rec 983:    α=0.18  ▒▒▒▒▒▒                         brief recovery");
+    println!("    rec 984:    α=0.11  ▒▒▒                             \x1b[31;1mCOLLAPSE\x1b[0m");
+    println!();
+    println!("  ====================================================================");
+    println!("  The bearing's structure STIFFENED (correlations appeared) 2+ hours");
+    println!("  before final collapse. DFA detected a regime change — the bearing");
+    println!("  entered a new mechanical state before it destroyed itself.");
+    println!("  Same 98 lines of C. Same function as the heliopause demo.");
     println!();
 }
 
