@@ -1,6 +1,6 @@
 [package]
 name = "struktura"
-version = "1.5.0"
+version = "1.6.9"
 edition = "2021"
 rust-version = "1.70"
 description = "Predict failure before it happens. Detects when a signal's structure changes — before thresholds fire. Spacecraft, finance, text, IoT. 85x faster than Python. no_std."
@@ -8,9 +8,10 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/koscak-labs/struktura"
 documentation = "https://docs.rs/struktura"
 homepage = "https://koscak-labs.github.io/struktura"
-keywords = ["anomaly-detection", "dfa", "time-series", "spacecraft", "predictive-maintenance"]
+keywords = ["anomaly-detection", "dfa", "time-series", "spacecraft", "health-monitor"]
 categories = ["science", "algorithms", "no-std"]
 readme = "README.md"
+exclude = ["data/genome/", "data/heliopause/", "data/ims/", "data/austen_shuffled.txt", "data/voyager1_2021_healthy.csv", "docs/", "test-ogma-*", "node_modules/", "*.dat", "*.zip"]
 
 [features]
 default = ["std"]
