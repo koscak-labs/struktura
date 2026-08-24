@@ -228,6 +228,101 @@ pub fn voyager_demo() -> VoyagerDemoResult {
     }
 }
 
+/// Generate synthetic reaction wheel telemetry with optional degradation.
+///
+/// Returns current-draw values. `degradation_start` (0.0-1.0) is the fraction
+/// through the signal where bearing wear begins. Set to 1.0 for healthy-only.
+pub fn synth_reaction_wheel(n: usize, seed: u64, degradation_start: f64) -> Vec<f64> {
+    let degrade_at = (n as f64 * degradation_start.clamp(0.0, 1.0)) as usize;
+    let mut state = seed;
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let noise = (state >> 33) as f64 / (1u64 << 31) as f64 - 0.5;
+        let base = 2.5 + 0.3 * crate::ln((i as f64 + 1.0).max(1.0)).sin();
+        let degradation = if i >= degrade_at {
+            let progress = (i - degrade_at) as f64 / (n - degrade_at).max(1) as f64;
+            0.8 * progress * progress + 0.5 * progress * noise
+        } else {
+            0.0
+        };
+        out.push(base + noise * 0.1 + degradation);
+    }
+    out
+}
+
+/// Generate synthetic battery voltage cycling with optional cell degradation.
+pub fn synth_battery_voltage(n: usize, seed: u64, degradation_start: f64) -> Vec<f64> {
+    let degrade_at = (n as f64 * degradation_start.clamp(0.0, 1.0)) as usize;
+    let mut state = seed;
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let noise = (state >> 33) as f64 / (1u64 << 31) as f64 - 0.5;
+        let orbit_phase = (i as f64 * 0.0065).sin();
+        let base = 28.2 + 1.5 * orbit_phase;
+        let degradation = if i >= degrade_at {
+            let progress = (i - degrade_at) as f64 / (n - degrade_at).max(1) as f64;
+            -0.8 * progress - 0.3 * progress * orbit_phase.abs()
+        } else {
+            0.0
+        };
+        out.push(base + noise * 0.05 + degradation);
+    }
+    out
+}
+
+/// Generate synthetic thermal sensor data with drift.
+pub fn synth_thermal(n: usize, seed: u64, drift_rate: f64) -> Vec<f64> {
+    let mut state = seed;
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let noise = (state >> 33) as f64 / (1u64 << 31) as f64 - 0.5;
+        let orbit_thermal = 15.0 * (i as f64 * 0.006).sin();
+        let base = 22.0 + orbit_thermal + drift_rate * i as f64;
+        out.push(base + noise * 0.8);
+    }
+    out
+}
+
+/// Run a full spacecraft health demo with synthetic telemetry.
+///
+/// Generates 4 channels (RWA, BAT, THM, MAG), splits each into
+/// healthy baseline and degraded period, runs DFA comparison.
+pub fn spacecraft_demo() -> Vec<TelemetryHealth> {
+    let n = 4096;
+    let channels = [
+        ("RWA_current", Subsystem::ReactionWheel, synth_reaction_wheel(n, 42, 0.6)),
+        ("BAT_voltage", Subsystem::BatteryVoltage, synth_battery_voltage(n, 77, 0.7)),
+        ("THM_panel_A", Subsystem::ThermalSensor, synth_thermal(n, 99, 0.001)),
+        ("MAG_B_total", Subsystem::Magnetometer, {
+            include_str!("../data/voyager1_healthy_4k.csv")
+                .lines().filter_map(|l| l.trim().parse().ok()).collect()
+        }),
+    ];
+
+    let mut results = Vec::new();
+    for (name, subsystem, data) in &channels {
+        let mid = data.len() / 2;
+        let baseline_law = crate::dfa(&data[..mid]);
+        let current_law = crate::analyze(&data[mid..]);
+        let shift = current_law.dfa.alpha - baseline_law.alpha;
+        let verdict = crate::HealthVerdict::from_shift(shift);
+        results.push(TelemetryHealth {
+            subsystem: *subsystem,
+            channel_name: String::from(*name),
+            current_alpha: current_law.dfa.alpha,
+            baseline_alpha: baseline_law.alpha,
+            shift,
+            r_squared: current_law.dfa.r_squared,
+            verdict,
+            samples: data.len(),
+        });
+    }
+    results
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,5 +364,24 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].verdict, HealthVerdict::Healthy);
         assert_ne!(results[1].verdict, HealthVerdict::Healthy);
+    }
+
+    #[test]
+    fn synth_rwa_degradation_shifts_alpha() {
+        let healthy = synth_reaction_wheel(4096, 42, 1.0);
+        let degraded = synth_reaction_wheel(4096, 42, 0.3);
+        let h = dfa(&healthy);
+        let d = dfa(&degraded);
+        assert!((h.alpha - d.alpha).abs() > 0.02,
+            "degraded RWA should shift alpha: healthy={:.3} degraded={:.3}", h.alpha, d.alpha);
+    }
+
+    #[test]
+    fn spacecraft_demo_runs() {
+        let results = spacecraft_demo();
+        assert_eq!(results.len(), 4);
+        for r in &results {
+            assert!(r.r_squared > 0.5, "{} R² too low: {:.4}", r.channel_name, r.r_squared);
+        }
     }
 }

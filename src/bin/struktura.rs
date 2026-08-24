@@ -112,6 +112,7 @@ fn main() {
         println!("  COMMANDS:");
         println!("    struktura demo                            Run builtin bearing fault demo");
         println!("    struktura voyager                         Voyager 1 AACS anomaly analysis");
+        println!("    struktura spacecraft                      Multi-channel spacecraft health demo");
         println!("    struktura check <file.csv>                Analyze a signal");
         println!("    struktura check <file.csv> --baseline N   Compare against baseline");
         println!("    struktura compare <a.csv> <b.csv>         Compare two signals");
@@ -134,6 +135,7 @@ fn main() {
         "codegen" => cmd_codegen(&args),
         "generate" => cmd_generate(&args),
         "voyager" => cmd_voyager(),
+        "spacecraft" => cmd_spacecraft(),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -577,6 +579,39 @@ fn cmd_voyager() {
     println!();
     println!("  The magnetic field's fractal structure changed during the anomaly —");
     println!("  detectable from public NASA data, zero training, zero ML.");
+    println!();
+}
+
+fn cmd_spacecraft() {
+    use struktura::space::spacecraft_demo;
+
+    println!();
+    println!("  \x1b[1mMULTI-CHANNEL SPACECRAFT HEALTH MONITOR\x1b[0m");
+    println!("  DFA structural analysis across 4 telemetry channels");
+    println!("  (RWA/BAT/THM synthetic; MAG = real Voyager 1 data)");
+    println!("  ====================================================================");
+    println!();
+
+    let results = spacecraft_demo();
+    for r in &results {
+        let bar = make_bar(r.current_alpha);
+        let v_str = match r.verdict {
+            HealthVerdict::Healthy => "\x1b[32mHEALTHY\x1b[0m",
+            HealthVerdict::Watch => "\x1b[33mWATCH\x1b[0m",
+            HealthVerdict::Warning => "\x1b[31mWARNING\x1b[0m",
+            HealthVerdict::Critical => "\x1b[31;1mCRITICAL\x1b[0m",
+            _ => "UNKNOWN",
+        };
+        println!("  {} [{}:{}]", bar, r.subsystem, r.channel_name);
+        println!("  {:30} alpha={:.3} baseline={:.3} shift={:+.3} R²={:.4}  {}",
+            "", r.current_alpha, r.baseline_alpha, r.shift, r.r_squared, v_str);
+        println!();
+    }
+
+    println!("  ====================================================================");
+    println!("  Each channel: first half = baseline, second half = current period.");
+    println!("  Structural (DFA) monitoring catches degradation threshold-based");
+    println!("  monitors miss — the mean can look normal while the structure shifts.");
     println!();
 }
 
