@@ -3218,13 +3218,45 @@ fn run_guard(content: &str, baseline_n: usize, json: bool) -> i32 {
     use struktura::monitor::HybridMonitor;
     use struktura::autopilot::{AutoPilot, Event};
 
-    let rows: Vec<Vec<f64>> = content
-        .lines()
-        .filter_map(|l| {
-            let vals: Vec<f64> = l.split(',').filter_map(|s| s.trim().parse().ok()).collect();
-            if vals.is_empty() { None } else { Some(vals) }
-        })
-        .collect();
+    // Smart CSV parsing: skip header rows, auto-detect delimiter (comma,
+    // tab, semicolon, space), skip timestamp/string columns, handle
+    // quoted fields. Real-world CSVs are messy.
+    let delim = if content.lines().next().unwrap_or("").contains('\t') {
+        '\t'
+    } else if content.lines().next().unwrap_or("").contains(';') {
+        ';'
+    } else {
+        ','
+    };
+    let mut rows: Vec<Vec<f64>> = Vec::new();
+    let mut col_mask: Option<Vec<bool>> = None; // which columns are numeric
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields: Vec<&str> = line.split(delim).map(|s| s.trim().trim_matches('"')).collect();
+        if col_mask.is_none() {
+            // First non-empty line: probe which columns parse as f64
+            let mask: Vec<bool> = fields.iter().map(|s| s.parse::<f64>().is_ok()).collect();
+            if mask.iter().all(|&m| !m) {
+                // Entire first row is non-numeric → header row, skip it
+                col_mask = None;
+                continue;
+            }
+            col_mask = Some(mask);
+        }
+        let mask = col_mask.as_ref().unwrap();
+        let vals: Vec<f64> = fields
+            .iter()
+            .zip(mask.iter())
+            .filter(|(_, &m)| m)
+            .filter_map(|(s, _)| s.parse().ok())
+            .collect();
+        if !vals.is_empty() {
+            rows.push(vals);
+        }
+    }
     if rows.is_empty() {
         if json {
             println!("{{\"error\":\"no numeric rows\"}}");
@@ -3264,6 +3296,10 @@ fn run_guard(content: &str, baseline_n: usize, json: bool) -> i32 {
     let mut adapt_count = 0usize;
     let mut quarantine_count = 0usize;
     let valid: Vec<bool> = vec![true; ncols];
+    // Deduplicate sustained faults: suppress same-leg same-channel alarms
+    // for 50 samples after the first. A real fault fires once, not 120x.
+    let mut last_alarm: Vec<(usize, u8)> = Vec::new(); // (last_t, leg_id)
+    const ALARM_COOLDOWN: usize = 50;
 
     for t in calib_n..n {
         for ch in 0..ncols {
@@ -3272,6 +3308,11 @@ fn run_guard(content: &str, baseline_n: usize, json: bool) -> i32 {
         for ev in ap.push(&sample, &valid) {
             match &ev {
                 Event::Alarm { report, class, .. } => {
+                    let leg_id = report.leg as u8;
+                    let dup = last_alarm.iter().any(|&(lt, ll)| ll == leg_id && t - lt < ALARM_COOLDOWN);
+                    last_alarm.retain(|&(lt, _)| t - lt < ALARM_COOLDOWN);
+                    last_alarm.push((t, leg_id));
+                    if dup { continue; }
                     alarm_count += 1;
                     if json {
                         println!("{{\"event\":\"alarm\",\"t\":{},\"leg\":\"{:?}\",\"channel\":{},\"class\":\"{}\",\"observed\":{:.4},\"threshold\":{:.4}}}",
