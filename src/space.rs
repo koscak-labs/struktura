@@ -409,6 +409,32 @@ pub fn synth_thermal(n: usize, seed: u64, drift_rate: f64) -> Vec<f64> {
     out
 }
 
+/// Generate synthetic telemetry with a correlation-structure fault.
+///
+/// First half: clean sinusoidal signal with correlated noise.
+/// Second half (after `fault_start`): same amplitude range but
+/// DESTROYED correlation — noise becomes independent. DFA detects
+/// the structural change; amplitude-based detectors miss it.
+pub fn synth_structural_fault(n: usize, seed: u64, fault_start: f64) -> Vec<f64> {
+    let fault_at = (n as f64 * fault_start.clamp(0.0, 1.0)) as usize;
+    let mut state = seed;
+    let mut out = Vec::with_capacity(n);
+    let mut prev = 0.0f64;
+    for i in 0..n {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let raw = (state >> 33) as f64 / (1u64 << 31) as f64 - 0.5;
+        if i < fault_at {
+            // Strongly correlated AR(1) process — high α (~0.9+)
+            prev = prev * 0.95 + raw * 0.05;
+            out.push(prev);
+        } else {
+            // White noise — low α (~0.5). Same amplitude range, different structure.
+            out.push(raw * 0.05);
+        }
+    }
+    out
+}
+
 /// Run a full spacecraft health demo with synthetic telemetry.
 ///
 /// Generates 4 channels (RWA, BAT, THM, MAG), splits each into

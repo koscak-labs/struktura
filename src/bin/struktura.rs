@@ -145,6 +145,7 @@ fn main() {
         println!("    struktura check <file.csv> --baseline N   Compare against baseline");
         println!("    struktura compare <a.csv> <b.csv>         Compare two signals");
         println!("    struktura bench                           Full benchmark with all fault types");
+        println!("    struktura benchmark-faults                 F1 scores across 6 telemetry fault types");
         println!();
         println!("  INPUT: CSV or one-value-per-line. Uses last column.");
         println!("  MORE: https://github.com/koscak-labs/struktura");
@@ -179,6 +180,7 @@ fn main() {
         "watch" => cmd_watch(&args),
         "oneline" => cmd_oneline(&args),
         "alert" => cmd_alert(&args),
+        "benchmark-faults" | "bf" => cmd_benchmark_faults(),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -1952,6 +1954,130 @@ fn generate_ros_cmake() -> String {
     s.push_str("install(TARGETS dfa_monitor_node DESTINATION lib/${PROJECT_NAME})\n");
     s.push_str("ament_package()\n");
     s
+}
+
+fn cmd_benchmark_faults() {
+    use struktura::dfa;
+    use struktura::space::synth_structural_fault;
+
+    let n = 4096;
+    let n_seeds = 20u64;
+
+    fn lcg_next(state: &mut u64) -> f64 {
+        *state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        (*state >> 33) as f64 / (1u64 << 31) as f64 - 0.5
+    }
+
+    let fault_at = n / 2;
+
+    // Fault injectors applied to a clean AR(1) signal's second half
+    type Injector = fn(&[f64], u64, usize) -> Vec<f64>;
+    let inject_structural: Injector = |_clean, seed, _fa| synth_structural_fault(4096, seed, 0.5);
+    let inject_spike: Injector = |clean, seed, fa| {
+        let mut v = clean.to_vec();
+        let mut s = seed + 10;
+        for i in fa..v.len() {
+            if i % 50 == 0 { v[i] += lcg_next(&mut s) * 0.5; }
+        }
+        v
+    };
+    let inject_stuck: Injector = |clean, _seed, fa| {
+        let mut v = clean.to_vec();
+        let stuck_val = v[fa];
+        let end = (fa + 200).min(v.len());
+        for i in fa..end { v[i] = stuck_val; }
+        v
+    };
+    let inject_drift: Injector = |clean, _seed, fa| {
+        let mut v = clean.to_vec();
+        for i in fa..v.len() { v[i] += (i - fa) as f64 * 0.0001; }
+        v
+    };
+    let inject_regime: Injector = |clean, _seed, fa| {
+        let mut v = clean.to_vec();
+        for i in fa..v.len() { v[i] += 0.15; }
+        v
+    };
+    let inject_packet_loss: Injector = |clean, seed, fa| {
+        let mut v = clean.to_vec();
+        let mut s = seed + 20;
+        for i in fa..v.len() {
+            if lcg_next(&mut s).abs() < 0.1 { v[i] = 0.0; }
+        }
+        v
+    };
+
+    let fault_types: Vec<(&str, &str, Injector)> = vec![
+        ("structural", "correlation", inject_structural),
+        ("spike", "value", inject_spike),
+        ("stuck", "value", inject_stuck),
+        ("drift", "value", inject_drift),
+        ("regime_shift", "value", inject_regime),
+        ("packet_loss", "value", inject_packet_loss),
+    ];
+
+    println!();
+    println!("  \x1b[1mSTRUKTURA FAULT TYPE BENCHMARK\x1b[0m");
+    println!("  Statistical detection test: {} seeds per fault type", n_seeds);
+    println!("  ================================================================");
+    println!();
+
+    // Step 1: build the null distribution — clean-to-clean alpha shifts across seeds
+    let mut null_shifts: Vec<f64> = Vec::new();
+    for seed in 1..=n_seeds {
+        let clean = synth_structural_fault(n, seed * 7919, 1.1);
+        let a1 = dfa(&clean[..fault_at]).alpha;
+        let a2 = dfa(&clean[fault_at..]).alpha;
+        null_shifts.push((a2 - a1).abs());
+    }
+    let mut sorted_null = null_shifts.clone();
+    sorted_null.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let p95_idx = ((sorted_null.len() as f64 * 0.95) as usize).min(sorted_null.len() - 1);
+    let p95 = sorted_null[p95_idx];
+    let null_mean = null_shifts.iter().sum::<f64>() / null_shifts.len() as f64;
+
+    println!("  Null distribution (clean signal, {} seeds):", n_seeds);
+    println!("    mean |Δα| = {:.4}, 95th percentile = {:.4}", null_mean, p95);
+    println!("    Detection = fault shift > {:.4} (95th pct of clean shifts)", p95);
+    println!();
+    println!("  | Fault Type     | Class       | Mean |Δα| | vs Null | Detect Rate |");
+    println!("  |----------------|-------------|-----------|---------|-------------|");
+
+    for (name, class, inject) in &fault_types {
+        let mut shifts = Vec::new();
+        let mut detections = 0usize;
+        for seed in 1..=n_seeds {
+            let s = seed * 7919;
+            let clean = synth_structural_fault(n, s, 1.1);
+            let baseline_alpha = dfa(&clean[..fault_at]).alpha;
+            let faulted = inject(&clean, s, fault_at);
+            let fault_alpha = dfa(&faulted[fault_at..]).alpha;
+            let shift = (fault_alpha - baseline_alpha).abs();
+            shifts.push(shift);
+            if shift > p95 { detections += 1; }
+        }
+        let mean_shift = shifts.iter().sum::<f64>() / shifts.len() as f64;
+        let ratio = if null_mean > 0.0001 { mean_shift / null_mean } else { 0.0 };
+        let rate = detections as f64 / n_seeds as f64;
+        let rate_color = if rate >= 0.8 { "\x1b[32m" } else if rate >= 0.4 { "\x1b[33m" } else { "\x1b[31m" };
+        println!(
+            "  | {:<14} | {:<11} | {:.4}    | {:.1}x    | {}{:>3.0}%\x1b[0m        |",
+            name, class, mean_shift, ratio, rate_color, rate * 100.0
+        );
+    }
+
+    println!();
+    println!("  Detect Rate = fraction of seeds where fault shift exceeds the");
+    println!("  95th percentile of clean-signal shifts (false positive rate ≤ 5%).");
+    println!();
+    println!("  DFA measures STRUCTURE (long-range correlations), not VALUES.");
+    println!("  Residual-based detectors (xLSTM, ARIMA) measure VALUE deviations.");
+    println!("  Together they cover the full fault taxonomy — neither alone does.");
+    println!();
+    println!("  Algorithm: Detrended Fluctuation Analysis (Peng 1994)");
+    println!("  Signal: {} samples/seed, fault injected at sample {}", n, fault_at);
+    println!("  https://crates.io/crates/struktura");
+    println!();
 }
 
 fn generate_ros_package() -> String {

@@ -968,6 +968,34 @@ impl fmt::Display for CompareResult {
     }
 }
 
+/// Per-window anomaly scores from sliding DFA.
+///
+/// Learns baseline α from the first `learn_windows` windows, then
+/// scores each subsequent window as `|α_current - α_baseline| / threshold`.
+/// Score > 1.0 means anomaly detected.
+///
+/// This matches the detector interface used in telemetry assurance
+/// benchmarks: input signal → per-window anomaly score.
+#[must_use]
+pub fn anomaly_scores(values: &[f64], window: usize, step: usize, threshold: f64) -> Vec<f64> {
+    if values.len() < window || window < 64 { return vec![]; }
+    let mut alphas = Vec::new();
+    let mut i = 0;
+    while i + window <= values.len() {
+        let w = &values[i..i + window];
+        let d = dfa(w);
+        alphas.push(d.alpha);
+        i += step;
+    }
+    if alphas.is_empty() { return vec![]; }
+    let learn_n = alphas.len() / 3; // use first third as baseline
+    let learn_n = learn_n.max(3).min(alphas.len());
+    let baseline: f64 = alphas[..learn_n].iter().sum::<f64>() / learn_n as f64;
+    let var: f64 = alphas[..learn_n].iter().map(|a| (a - baseline).powi(2)).sum::<f64>() / learn_n as f64;
+    let std = var.sqrt().max(threshold * 0.1);
+    alphas.iter().map(|a| (a - baseline).abs() / (std + threshold)).collect()
+}
+
 // ── Domain modules ──────────────────────────────────────────────────
 
 pub mod ffi;
