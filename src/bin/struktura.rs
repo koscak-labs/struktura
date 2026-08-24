@@ -173,6 +173,7 @@ fn main() {
         "health" => cmd_health(&args),
         "batch" => cmd_batch(&args),
         "fingerprint" | "fp" | "dna" => cmd_fingerprint(&args),
+        "watch" => cmd_watch(&args),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -736,6 +737,79 @@ fn cmd_batch(args: &[String]) {
         println!("  \x1b[32m✓ All signals within baseline tolerance\x1b[0m");
     }
     println!();
+}
+
+fn cmd_watch(args: &[String]) {
+    if args.len() < 3 {
+        eprintln!("Usage: struktura watch <file.csv> [--interval <secs>] [--baseline <file>]");
+        eprintln!("  Re-analyzes a file every N seconds. Shows live structural changes.");
+        eprintln!("  Ctrl+C to stop.");
+        process::exit(1);
+    }
+
+    let file = &args[2];
+    let mut interval_secs = 5u64;
+    let mut baseline_file: Option<String> = None;
+    let mut i = 3;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--interval" if i + 1 < args.len() => {
+                interval_secs = args[i + 1].parse().unwrap_or(5);
+                i += 2;
+            }
+            "--baseline" if i + 1 < args.len() => {
+                baseline_file = Some(args[i + 1].clone());
+                i += 2;
+            }
+            _ => { i += 1; }
+        }
+    }
+
+    let baseline_alpha = baseline_file.as_ref().map(|f| {
+        let data = read_input(f);
+        analyze(&data).dfa.alpha
+    });
+
+    println!();
+    println!("  \x1b[1mSTRUKTURA WATCH\x1b[0m — monitoring {} every {}s", file, interval_secs);
+    if let Some(ba) = baseline_alpha {
+        println!("  Baseline alpha: {:.3}", ba);
+    }
+    println!("  Press Ctrl+C to stop");
+    println!("  ────────────────────────────────────────────────────────────");
+
+    let mut prev_alpha = 0.0;
+    loop {
+        let values = read_input(file);
+        let law = analyze(&values);
+        let cls = struktura::classify::classify(&values);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let ts = format!("{:02}:{:02}:{:02}",
+            (now / 3600) % 24, (now / 60) % 60, now % 60);
+
+        let bar = alpha_bar(law.dfa.alpha, 20);
+        let delta = if prev_alpha != 0.0 {
+            format!("Δ={:+.4}", law.dfa.alpha - prev_alpha)
+        } else {
+            "Δ=---".to_string()
+        };
+
+        if let Some(ba) = baseline_alpha {
+            let verdict = health_check(&law, ba);
+            let (color, label) = verdict_color(verdict);
+            println!("  [{}] {} α={:.3} R²={:.3} {} {} {}{}\x1b[0m",
+                ts, bar, law.dfa.alpha, law.dfa.r_squared, delta, cls.signal_type, color, label);
+        } else {
+            println!("  [{}] {} α={:.3} R²={:.3} {} {}",
+                ts, bar, law.dfa.alpha, law.dfa.r_squared, delta, cls.signal_type);
+        }
+
+        prev_alpha = law.dfa.alpha;
+        std::thread::sleep(std::time::Duration::from_secs(interval_secs));
+    }
 }
 
 fn cmd_fingerprint(args: &[String]) {
