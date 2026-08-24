@@ -1033,6 +1033,63 @@ mod tests {
         // but has_changed might catch tiny differences
         let _ = has_changed(&data1, &data2); // just verify no panic
     }
+
+    #[test]
+    fn white_noise_alpha_exact() {
+        let data = white_noise(4096, 42);
+        let result = dfa(&data);
+        assert!((result.alpha - 0.5246244706).abs() < 1e-9,
+            "expected alpha=0.5246244706, got {}", result.alpha);
+        assert!((result.r_squared - 0.9853682683).abs() < 1e-9,
+            "expected r_squared=0.9853682683, got {}", result.r_squared);
+    }
+
+    #[test]
+    fn brownian_alpha_exact() {
+        let data = brownian(4096, 42);
+        let result = dfa(&data);
+        assert!((result.alpha - 1.4180278792).abs() < 1e-9,
+            "expected alpha=1.4180278792, got {}", result.alpha);
+        assert!((result.r_squared - 0.9894368223).abs() < 1e-9,
+            "expected r_squared=0.9894368223, got {}", result.r_squared);
+    }
+
+    #[test]
+    fn health_verdict_exact_boundaries() {
+        assert_eq!(HealthVerdict::from_shift(0.029999), HealthVerdict::Healthy);
+        assert_eq!(HealthVerdict::from_shift(0.03), HealthVerdict::Watch);
+        assert_eq!(HealthVerdict::from_shift(0.079999), HealthVerdict::Watch);
+        assert_eq!(HealthVerdict::from_shift(0.08), HealthVerdict::Warning);
+        assert_eq!(HealthVerdict::from_shift(0.149999), HealthVerdict::Warning);
+        assert_eq!(HealthVerdict::from_shift(0.15), HealthVerdict::Critical);
+        assert_eq!(HealthVerdict::from_shift(-0.03), HealthVerdict::Watch);
+        assert_eq!(HealthVerdict::from_shift(-0.08), HealthVerdict::Warning);
+        assert_eq!(HealthVerdict::from_shift(-0.15), HealthVerdict::Critical);
+    }
+
+    #[test]
+    fn anomaly_scores_detects_shift() {
+        let mut signal = white_noise(2048, 5);
+        signal.extend(brownian(2048, 5));
+        let scores = anomaly_scores(&signal, 256, 128, 0.05);
+        assert!(!scores.is_empty(), "should produce per-window scores");
+        let n = scores.len();
+        let baseline_region = &scores[..n / 3];
+        let shifted_region = &scores[2 * n / 3..];
+        assert!(
+            baseline_region.iter().all(|&s| s < 1.0),
+            "baseline scores should stay under 1.0, got {baseline_region:?}"
+        );
+        assert!(
+            shifted_region.iter().all(|&s| s > 1.0),
+            "shifted-region scores should exceed 1.0, got {shifted_region:?}"
+        );
+    }
+
+    #[test]
+    fn anomaly_scores_too_short_returns_empty() {
+        assert_eq!(anomaly_scores(&[1.0; 10], 256, 128, 0.05), Vec::<f64>::new());
+    }
 }
 
 impl fmt::Display for LawQuality {
