@@ -182,6 +182,7 @@ fn main() {
         "alert" => cmd_alert(&args),
         "benchmark-faults" | "bf" => cmd_benchmark_faults(),
         "benchmark-telemetry" | "bt" => cmd_benchmark_telemetry(&args),
+        "monitor-perf" => cmd_monitor_perf(),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -2194,6 +2195,107 @@ fn cmd_benchmark_telemetry(args: &[String]) {
     println!();
     println!("  Algorithm: Detrended Fluctuation Analysis (Peng 1994)");
     println!("  https://crates.io/crates/struktura");
+    println!();
+}
+
+fn cmd_monitor_perf() {
+    use struktura::monitor::HybridMonitor;
+    use struktura::telemetry_bench::synth_spacecraft;
+    use std::time::Instant;
+
+    println!();
+    println!("  \x1b[1mSTREAMING MONITOR PERFORMANCE\x1b[0m (flight-relevant timing)");
+    println!("  6 channels, window 96, DFA stride 2 — release build, this host");
+    println!();
+
+    let calib = synth_spacecraft(2048, 424242);
+    let t0 = Instant::now();
+    let mut mon = HybridMonitor::calibrate(&calib).expect("calibration");
+    let calib_time = t0.elapsed();
+    println!("  Calibration (2048 samples x 6 ch): {:?}", calib_time);
+
+    // Long clean stream for throughput + worst-case measurement
+    let n = 200_000usize;
+    let stream = synth_spacecraft(n, 434343);
+    let mut sample = [0.0f64; 6];
+
+    let mut worst_ns: u128 = 0;
+    let mut total_ns: u128 = 0;
+    let mut alarms = 0usize;
+    let mut leg_counts = [0usize; 5];
+    for t in 0..n {
+        for ch in 0..6 {
+            sample[ch] = stream[ch][t];
+        }
+        let s = Instant::now();
+        if let Some(leg) = mon.push(&sample) {
+            alarms += 1;
+            use struktura::monitor::Leg;
+            match leg {
+                Leg::Residual => leg_counts[0] += 1,
+                Leg::RepeatedValue => leg_counts[1] += 1,
+                Leg::Dfa => leg_counts[2] += 1,
+                Leg::LevelShift => leg_counts[3] += 1,
+                Leg::ResidualCusum => leg_counts[4] += 1,
+            }
+            mon.reset();
+        }
+        let e = s.elapsed().as_nanos();
+        total_ns += e;
+        if e > worst_ns {
+            worst_ns = e;
+        }
+    }
+    let mean_ns = total_ns / n as u128;
+    println!("  Stream: {} samples x 6 channels", n);
+    println!("  Mean per-sample cost:       {:>8} ns", mean_ns);
+    println!("  Worst-case per-sample cost: {:>8} ns  (tick with 6 DFA evals)", worst_ns);
+    println!("  Throughput:                 {:>8.1} Msamples/s", 1000.0 / mean_ns as f64);
+    println!("  Alarms on clean stream:     {:>8}  ({} samples ≈ {:.1}x calib length)",
+        alarms, n, n as f64 / 2048.0);
+    println!("  By leg (res/rep/dfa/level/cusum): {}/{}/{}/{}/{}",
+        leg_counts[0], leg_counts[1], leg_counts[2], leg_counts[3], leg_counts[4]);
+    println!();
+    println!("  Memory: fixed after calibration — per channel {} + {} f64 rings;",
+        struktura::monitor::WINDOW, struktura::monitor::ROLL);
+    println!("  no heap allocation in the push path.");
+    println!();
+
+    // Fault-detection verification with the same EVT-calibrated monitor
+    use struktura::telemetry_bench::{inject_fault, FAULT_TYPES};
+    let seeds = 20u64;
+    let len = 2048usize;
+    let fstart = (len as f64 * 0.58) as usize;
+    let fstop = fstart + ((len as f64 * 0.12) as usize).max(8);
+    println!("  \x1b[1mFAULT DETECTION\x1b[0m (streaming monitor, {} seeds, {}-sample streams)", seeds, len);
+    println!("  | Fault Type         | Detect | Mean Latency |");
+    println!("  |--------------------|--------|--------------|");
+    for fault in FAULT_TYPES.iter() {
+        let mut hits = 0usize;
+        let mut lat_sum = 0.0f64;
+        for seed in 1..=seeds {
+            let s = seed * 7919;
+            let cal = synth_spacecraft(len, s + 100);
+            let clean_test = synth_spacecraft(len, s + 200);
+            let faulted = inject_fault(&clean_test, fault, s);
+            let mut m = match HybridMonitor::calibrate(&cal) { Some(m) => m, None => continue };
+            let mut smp = [0.0f64; 6];
+            for t in 0..len {
+                for ch in 0..6 { smp[ch] = faulted[ch][t]; }
+                if m.push(&smp).is_some() {
+                    if t >= fstart && t < fstop + 96 {
+                        hits += 1;
+                        lat_sum += (t - fstart) as f64;
+                    }
+                    break;
+                }
+            }
+        }
+        let rate = hits as f64 / seeds as f64;
+        let color = if rate >= 0.8 { "\x1b[32m" } else if rate >= 0.4 { "\x1b[33m" } else { "\x1b[31m" };
+        println!("  | {:<18} | {}{:>4.0}%\x1b[0m  | {:>6.0}       |",
+            fault, color, rate * 100.0, if hits > 0 { lat_sum / hits as f64 } else { 0.0 });
+    }
     println!();
 }
 

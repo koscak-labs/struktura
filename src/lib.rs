@@ -237,20 +237,21 @@ pub fn dfa_into(values: &[f64], buf: &mut Vec<f64>) -> DfaResult {
         let mut f2_sum = 0.0;
         for seg in 0..num_segs {
             let start = seg * s;
+            // Single pass: accumulate sy, sxy, sy2, then use the least-squares
+            // identity RSS = Σy² − a0Σy − a1Σxy (cross terms collapse via the
+            // normal equations) instead of a second residual pass.
             let mut sy = 0.0;
             let mut sxy = 0.0;
+            let mut sy2 = 0.0;
             for i in 0..s {
                 let yi = buf[start + i];
                 sy += yi;
                 sxy += i as f64 * yi;
+                sy2 += yi * yi;
             }
             let a0 = (sx2 * sy - sx * sxy) / det;
             let a1 = (k * sxy - sx * sy) / det;
-            let mut resid = 0.0;
-            for i in 0..s {
-                let d = buf[start + i] - (a0 + a1 * i as f64);
-                resid += d * d;
-            }
+            let resid = (sy2 - a0 * sy - a1 * sxy).max(0.0);
             f2_sum += resid / k;
         }
         let f = sqrt(f2_sum / num_segs as f64);
@@ -1005,6 +1006,7 @@ pub mod market;
 pub mod rhythm;
 pub mod genome;
 pub mod telemetry_bench;
+pub mod monitor;
 pub mod mfdfa;
 pub mod trend;
 pub mod classify;
