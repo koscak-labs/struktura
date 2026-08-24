@@ -8,3 +8,4 @@ test-ogma-output/
 test-ogma-expansion.js
 package.json
 package-lock.json
+data/heliopause/

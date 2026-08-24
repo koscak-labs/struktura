@@ -171,6 +171,7 @@ fn main() {
         "classify" | "what" => cmd_classify(&args),
         "multifractal" | "mf" => cmd_multifractal(&args),
         "health" => cmd_health(&args),
+        "batch" => cmd_batch(&args),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -654,6 +655,85 @@ fn cmd_heliopause() {
     println!("  The magnetic field's long-range correlation structure changed");
     println!("  when Voyager crossed from solar wind into interstellar medium.");
     println!("  Same 98 lines of C that detect bearing faults.");
+    println!();
+}
+
+fn cmd_batch(args: &[String]) {
+    if args.len() < 3 {
+        eprintln!("Usage: struktura batch <file1.csv> <file2.csv> ... [--baseline <file>] [--json]");
+        eprintln!("  Analyze multiple signals at once. Perfect for CI/CD monitoring.");
+        process::exit(1);
+    }
+    use struktura::classify::classify;
+
+    let mut files = Vec::new();
+    let mut baseline_file: Option<String> = None;
+    let mut json_mode = false;
+    let mut i = 2;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--baseline" if i + 1 < args.len() => { baseline_file = Some(args[i + 1].clone()); i += 2; }
+            "--json" => { json_mode = true; i += 1; }
+            f => { files.push(f.to_string()); i += 1; }
+        }
+    }
+
+    let baseline = baseline_file.as_ref().map(|f| read_input(f));
+    let baseline_alpha = baseline.as_ref().map(|b| analyze(b).dfa.alpha);
+
+    if json_mode {
+        print!("[");
+        for (idx, f) in files.iter().enumerate() {
+            let values = read_input(f);
+            let law = analyze(&values);
+            let cls = classify(&values);
+            print!("{{\"file\":\"{}\",\"alpha\":{:.4},\"r_squared\":{:.4},\"quality\":\"{}\",\"type\":\"{}\",\"n\":{}",
+                f.replace('\\', "/"), law.dfa.alpha, law.dfa.r_squared, law.quality, cls.signal_type, law.n);
+            if let Some(ba) = baseline_alpha {
+                let shift = law.dfa.alpha - ba;
+                let verdict = health_check(&law, ba);
+                print!(",\"shift\":{:.4},\"verdict\":\"{}\"", shift, verdict);
+            }
+            print!("}}");
+            if idx < files.len() - 1 { print!(","); }
+        }
+        println!("]");
+        return;
+    }
+
+    println!();
+    println!("  \x1b[1mBATCH ANALYSIS\x1b[0m");
+    println!("  ====================================================================");
+    println!();
+    println!("  {:<40} {:>7} {:>7} {:>7} {}", "FILE", "α", "R²", "n", "TYPE");
+    println!("  {}", "─".repeat(80));
+
+    let mut any_alert = false;
+    for f in &files {
+        let values = read_input(f);
+        let law = analyze(&values);
+        let cls = classify(&values);
+        let short_name: String = f.chars().rev().take(38).collect::<String>().chars().rev().collect();
+
+        if let Some(ba) = baseline_alpha {
+            let shift = law.dfa.alpha - ba;
+            let verdict = health_check(&law, ba);
+            let (color, label) = verdict_color(verdict);
+            if verdict != HealthVerdict::Healthy { any_alert = true; }
+            println!("  {:<40} {:>7.3} {:>7.3} {:>7} {}  {}{}\x1b[0m",
+                short_name, law.dfa.alpha, law.dfa.r_squared, law.n, cls.signal_type, color, label);
+        } else {
+            println!("  {:<40} {:>7.3} {:>7.3} {:>7} {}",
+                short_name, law.dfa.alpha, law.dfa.r_squared, law.n, cls.signal_type);
+        }
+    }
+
+    println!();
+    if any_alert {
+        println!("  \x1b[31;1m⚠ STRUCTURAL CHANGES DETECTED — see verdicts above\x1b[0m");
+    } else if baseline_alpha.is_some() {
+        println!("  \x1b[32m✓ All signals within baseline tolerance\x1b[0m");
+    }
     println!();
 }
 
