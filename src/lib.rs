@@ -1145,6 +1145,7 @@ pub mod genome;
 #[cfg(feature = "std")]
 pub mod telemetry_bench;
 pub mod monitor;
+pub mod prognosis;
 pub mod mfdfa;
 pub mod trend;
 pub mod classify;

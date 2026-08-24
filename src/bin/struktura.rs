@@ -2441,6 +2441,52 @@ fn cmd_monitor_real() {
         println!("  IMS raw data not found (need data/ims/extracted/2nd_test/2nd_test) — skipped");
     }
 
+    // ── Part 1b: prognosis validation on the IMS run-to-failure ──
+    // Health metric: bearing-1 RMS. Failure threshold: the RMS level at the
+    // final recording. At each checkpoint, fit the recent trend and predict
+    // the crossing; compare with the actual failure recording (983).
+    if stream.len() >= 900 {
+        use struktura::prognosis::time_to_threshold;
+        let n = stream.len();
+        let b1: Vec<f64> = stream.iter().map(|r| r[0]).collect();
+        // Failure threshold: 4x the healthy-baseline RMS (severity convention;
+        // the final two recordings are post-shutdown and excluded). Actual
+        // failure = first recording crossing that level.
+        let baseline: f64 = b1[..300].iter().sum::<f64>() / 300.0;
+        let failure_level = 4.0 * baseline;
+        let actual_fail = b1[..n - 2]
+            .iter()
+            .position(|&v| v > failure_level)
+            .unwrap_or(n - 3);
+        println!();
+        println!("  \x1b[1mPROGNOSIS VALIDATION\x1b[0m (bearing-1 RMS, threshold {:.3} = 4x baseline,",
+            failure_level);
+        println!("  actual crossing at recording {})", actual_fail);
+        println!("  | Checkpoint | Rec | Prediction              | Actual | Error   |");
+        println!("  |------------|-----|--------------------------|--------|---------|");
+        for (label, frac) in [("50%", 0.50), ("75%", 0.75), ("90%", 0.90)] {
+            let at = (n as f64 * frac) as usize;
+            let hist = &b1[..at];
+            match time_to_threshold(hist, 100, failure_level) {
+                Some(e) => {
+                    let pred = at as f64 + e.eta;
+                    let err = pred - actual_fail as f64;
+                    println!(
+                        "  | {:<10} | {} | rec {:.0} (1σ {:.0}..{:.0})   | {}    | {:+.0} recs |",
+                        label, at, pred, at as f64 + e.eta_low, at as f64 + e.eta_high,
+                        actual_fail, err
+                    );
+                }
+                None => println!(
+                    "  | {:<10} | {} | no resolvable trend      | {}    | --      |",
+                    label, at, actual_fail
+                ),
+            }
+        }
+        println!("  ('no resolvable trend' early in life is the honest output —");
+        println!("   degradation had not begun; a number there would be fiction.)");
+    }
+
     // ── Part 2: Voyager 1 magnetometer — heliopause crossing ──
     // Calibration must come from the SAME instrument regime: use the first
     // half of the pre-crossing cruise data, stream the rest of pre + post.
