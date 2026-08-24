@@ -975,6 +975,7 @@ pub mod space;
 pub mod text;
 pub mod market;
 pub mod rhythm;
+pub mod genome;
 pub mod mfdfa;
 pub mod trend;
 pub mod classify;
