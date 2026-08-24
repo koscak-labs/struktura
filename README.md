@@ -79,12 +79,13 @@ broke through.
 
 ## 🛡️ the receipts
 
-- **7/7 telemetry fault taxonomy at 100% detection** (packet loss, spike,
-  stuck, drift, regime shift, mixed, correlation change), **0 false alarms
-  across 200,000 clean samples** — thresholds are extreme-value return
-  levels ("false alarms per mission hour"), all self-calibrated
-- **NASA bearing run-to-failure: alarm 105.5 hours before failure** —
-  with a control experiment proving it's not calibration bias
+- **7/7 telemetry fault taxonomy detected by the hybrid monitor** (packet
+  loss, spike, stuck, drift, regime shift, mixed, correlation change) —
+  DFA catches structural faults; residual-based legs catch value faults.
+  neither alone covers all 7; the combination does. self-calibrated
+  thresholds, **0 false alarms across 200,000 clean samples**
+- **NASA IMS bearing run-to-failure: structural warning ~2 hours before
+  failure** (recording 970 of 984, α spikes from 0.17 to 0.53)
 - **compiles to flight-ready C99**: `struktura generate-hybrid` bakes your
   calibration into a dependency-free monitor that passes `-Wall -Werror`
   and detects a stuck sensor in its own self-test
@@ -141,7 +142,7 @@ let mut rwa = SpacecraftMonitor::new(Subsystem::ReactionWheel, "RWA_current");
 
 | domain | signal | healthy α | fault α | shift | verdict |
 |--------|--------|-----------|---------|-------|---------|
-| 🔧 **bearings** | CWRU 12kHz vibration | 0.738 | 0.217 | -0.522 | CRITICAL |
+| 🔧 **bearings** | CWRU 12kHz vibration | 0.689 | 0.183 | -0.506 | CRITICAL |
 | 🚀 **spacecraft** | Voyager 1 magnetometer | 0.989 | 0.801 | -0.187 | CRITICAL |
 | 📖 **text** | Austen vs shuffled | 0.749 | 0.572 | -0.177 | detected |
 | 🧬 **genome** | Human chr1 GC% | 0.909 | | | R²=0.991 |
