@@ -2857,6 +2857,9 @@ fn cmd_smap(args: &[String]) {
     // --ar [p]: telemanom-protocol batch evaluation with a closed-form
     // ridge autoregression in place of JPL's LSTM.
     let mut ar_mode: Option<usize> = None;
+    let mut with_dfa = false;
+    let mut class_stats: std::collections::BTreeMap<String, (usize, usize)> =
+        std::collections::BTreeMap::new();
     let mut z_min = 2.5f64;
     let mut p_prune = 0.13f64;
     let mut buffer = 50usize;
@@ -2870,6 +2873,7 @@ fn cmd_smap(args: &[String]) {
             "--zmin" if i + 1 < args.len() => { z_min = args[i + 1].parse().unwrap_or(2.5); i += 2; }
             "--prune" if i + 1 < args.len() => { p_prune = args[i + 1].parse().unwrap_or(0.13); i += 2; }
             "--buffer" if i + 1 < args.len() => { buffer = args[i + 1].parse().unwrap_or(50); i += 2; }
+            "--dfa" => { with_dfa = true; i += 1; }
             _ => { i += 1; }
         }
     }
@@ -2942,10 +2946,19 @@ fn cmd_smap(args: &[String]) {
         }
 
         if let Some(p) = ar_mode {
-            // Batch telemanom-protocol path: AR(p)-ridge + JPL's residual math.
-            let preds = struktura::smap_eval::detect_channel_tuned(
+            // Batch telemanom-protocol path: AR(p)-ridge + JPL's residual
+            // math, optionally unioned with a DFA structural channel.
+            let mut preds = struktura::smap_eval::detect_channel_tuned(
                 &train_v, &test_v, p, z_min, p_prune, buffer,
             );
+            if with_dfa {
+                let dfa_preds = struktura::smap_eval::dfa_sequences(
+                    &train_v, &test_v, 96, z_min, buffer,
+                );
+                preds.extend(dfa_preds);
+            }
+            // anomaly class ("point"/"contextual") is the 2nd-to-last field
+            let class = line.rsplit(',').nth(1).unwrap_or("?").trim().to_string();
             let mut hit = vec![false; sequences.len()];
             let mut fp = 0usize;
             for &(ps, pe) in &preds {
@@ -2959,6 +2972,14 @@ fn cmd_smap(args: &[String]) {
                 if !overlaps {
                     fp += 1;
                 }
+            }
+            for (si, &h) in hit.iter().enumerate() {
+                let entry = class_stats.entry(class.clone()).or_insert((0usize, 0usize));
+                entry.1 += 1;
+                if h {
+                    entry.0 += 1;
+                }
+                let _ = si;
             }
             per_sc[sc_idx].1 += hit.iter().filter(|&&h| h).count();
             per_sc[sc_idx].2 += fp;
@@ -3064,6 +3085,13 @@ fn cmd_smap(args: &[String]) {
     );
     println!();
     println!("  Overall F1: {:.3}   (JPL telemanom LSTM, same data: P=87.5% R=80.0%)", f1);
+    if !class_stats.is_empty() {
+        println!("  Recall by anomaly class:");
+        for (class, (hits, total)) in &class_stats {
+            println!("    {:<12} {:>3}/{:<3} = {:>5.1}%",
+                class, hits, total, *hits as f64 / *total as f64 * 100.0);
+        }
+    }
     println!("  Self-calibrated, no training, no GPU, ~4us/sample. Honest note: the");
     println!("  values are pre-scaled to (-1,1) by JPL and many channels saturate,");
     println!("  which auto-disables the repeated-value leg on those channels.");

@@ -126,6 +126,9 @@ pub fn find_epsilon_from(errors: &[f64], z_min: f64) -> f64 {
             }
             prev_above = above;
         }
+        // JPL's exact regularizer. (A linear sequence penalty was tried to
+        // help multi-anomaly channels: measured 0.739 vs 0.743 — no gain,
+        // reverted. The multi-sequence recall gap lives elsewhere.)
         let score = ((mean - bm) / mean + (sd - bsd) / sd)
             / (n_above as f64 + (seqs * seqs) as f64);
         if score > best_score {
@@ -237,6 +240,31 @@ pub fn detect_channel_tuned(
     p_prune: f64,
     buffer: usize,
 ) -> Vec<(usize, usize)> {
+    // p == 0 selects the AR order PER CHANNEL on a train-only holdout
+    // (fit on the first 80%, score one-step error on the last 20%,
+    // refit the winner on the full train split — the test is never seen).
+    let chosen_p = if p == 0 {
+        let split = train.len() * 4 / 5;
+        let (tr, va) = train.split_at(split);
+        let mut best = (5usize, f64::MAX);
+        for &cand in &[3usize, 5, 10, 25, 50] {
+            if let Some(m) = ArPredictor::fit(tr, cand, 1e-4) {
+                let res = m.residuals(va);
+                let mse: f64 = res[cand.min(res.len())..]
+                    .iter()
+                    .map(|e| e * e)
+                    .sum::<f64>()
+                    / res.len().max(1) as f64;
+                if mse < best.1 {
+                    best = (cand, mse);
+                }
+            }
+        }
+        best.0
+    } else {
+        p
+    };
+    let p = chosen_p;
     let pred = match ArPredictor::fit(train, p, 1e-4) {
         Some(m) => m,
         None => return Vec::new(),
@@ -247,6 +275,51 @@ pub fn detect_channel_tuned(
     let eps = find_epsilon_from(&sm[p..], z_min);
     let seqs = anomaly_sequences(&sm, eps, buffer);
     prune_sequences(&sm, &seqs, p_prune)
+}
+
+/// DFA structural channel for the batch protocol: sliding windowed α over
+/// the test split, z-scored against the train split's windowed-α
+/// statistics, run through the same ε/sequence machinery. Catches
+/// CONTEXTUAL anomalies (the pattern changes while values stay plausible)
+/// that a value predictor's residuals cannot see.
+pub fn dfa_sequences(
+    train: &[f64],
+    test: &[f64],
+    window: usize,
+    z_min: f64,
+    buffer: usize,
+) -> Vec<(usize, usize)> {
+    let stride = 8usize;
+    if train.len() < 3 * window || test.len() < window {
+        return Vec::new();
+    }
+    let mut buf = Vec::new();
+    let alphas_of = |series: &[f64], buf: &mut Vec<f64>| -> Vec<f64> {
+        let mut out = Vec::new();
+        let mut end = window;
+        while end <= series.len() {
+            out.push(crate::dfa_fast_into(&series[end - window..end], buf).alpha);
+            end += stride;
+        }
+        out
+    };
+    let train_a = alphas_of(train, &mut buf);
+    let m = train_a.iter().sum::<f64>() / train_a.len() as f64;
+    let sd = crate::sqrt(
+        train_a.iter().map(|a| (a - m) * (a - m)).sum::<f64>() / train_a.len() as f64,
+    )
+    .max(1e-6);
+    let test_a = alphas_of(test, &mut buf);
+    let z: Vec<f64> = test_a.iter().map(|a| (a - m).abs() / sd).collect();
+    // The structural channel gets its OWN false-positive discipline: a hard
+    // epsilon floor well above the α-scatter (windowed α is noisy on real
+    // channels) and its own pruning pass — without these the union floods.
+    let eps = find_epsilon_from(&z, z_min.max(4.0));
+    let raw = anomaly_sequences(&z, eps, buffer / stride);
+    prune_sequences(&z, &raw, 0.13)
+        .into_iter()
+        .map(|(s, e)| (s * stride, (e * stride + window - 1).min(test.len() - 1)))
+        .collect()
 }
 
 #[cfg(test)]
