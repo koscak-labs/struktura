@@ -319,6 +319,30 @@ fn cmd_check(args: &[String]) {
     println!();
     print_law_detail(&law);
 
+    // Plain-language interpretation
+    let alpha = law.dfa.alpha;
+    let interp = if alpha < 0.4 {
+        "anti-correlated (mean-reverting). successive changes tend to cancel."
+    } else if alpha < 0.55 {
+        "uncorrelated (white noise / random walk increments). no temporal pattern."
+    } else if alpha < 0.75 {
+        "weakly correlated. some persistence but decays fast."
+    } else if alpha < 1.05 {
+        "strongly correlated (1/f noise). long-range memory in the signal."
+    } else if alpha < 1.4 {
+        "highly persistent (fractional Brownian). trends persist across scales."
+    } else {
+        "unbounded persistence (non-stationary random walk or worse)."
+    };
+    println!();
+    println!("  interpretation: alpha = {:.3} -> {}", alpha, interp);
+    if law.kurtosis > 5.0 {
+        println!("  kurtosis = {:.1} -> heavy-tailed / bursty (expect spikes).", law.kurtosis);
+    }
+    if law.dfa.r_squared < 0.85 {
+        println!("  R2 = {:.3} -> scaling law is a weak fit. be cautious.", law.dfa.r_squared);
+    }
+
     if let Some(b) = baseline {
         let verdict = health_check(&law, b);
         let (color, label) = verdict_color(verdict);
