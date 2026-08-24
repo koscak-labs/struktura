@@ -2147,6 +2147,29 @@ fn cmd_benchmark_telemetry(args: &[String]) {
             frac * 100.0, samples, color, rate * 100.0);
     }
     println!();
+    // Per-timestep F1 — metric-compatible with residual-detector benchmarks
+    use struktura::telemetry_bench::timestep_f1_benchmark;
+    let f1_seeds = n_seeds.min(30);
+    let f1 = timestep_f1_benchmark(length, f1_seeds, 96, 2);
+    println!("  \x1b[1mPER-TIMESTEP F1\x1b[0m (trailing DFA window 96, step 2, {} seeds,", f1_seeds);
+    println!("  threshold = 99th pct of calibration scores — residual-detector protocol)");
+    println!("  | Fault Type         | F1 (step) | False Alarm | Event Detect | Latency |");
+    println!("  |--------------------|-----------|-------------|--------------|---------|");
+    for r in &f1 {
+        let color = if r.f1 >= 0.5 { "\x1b[32m" } else if r.f1 >= 0.2 { "\x1b[33m" } else { "\x1b[31m" };
+        let ev_color = if r.event_detect_rate >= 0.8 { "\x1b[32m" }
+                       else if r.event_detect_rate >= 0.4 { "\x1b[33m" } else { "\x1b[31m" };
+        println!(
+            "  | {:<18} | {}{:.3}\x1b[0m     | {:.4}      | {}{:>4.0}%\x1b[0m        | {:>4.0}    |",
+            r.fault, color, r.f1, r.false_alarm_rate,
+            ev_color, r.event_detect_rate * 100.0, r.mean_latency
+        );
+    }
+    println!();
+    println!("  F1 (step) = per-timestep, punishes latency. Event Detect = flag lands");
+    println!("  within [fault_start, fault_end + window] (NAB-style event scoring).");
+    println!("  Latency = mean samples from fault start to first flag.");
+    println!();
     println!("  Algorithm: Detrended Fluctuation Analysis (Peng 1994)");
     println!("  https://crates.io/crates/struktura");
     println!();

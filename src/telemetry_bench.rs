@@ -426,6 +426,160 @@ pub fn correlation_resolution_curve(
         .collect()
 }
 
+/// Per-timestep F1 for one fault type, mirroring the residual-detector
+/// evaluation protocol exactly:
+///
+/// 1. Calibration: sliding trailing-window DFA α per channel on a clean
+///    sequence; per-channel mean/std of α over calibration windows.
+/// 2. Score(t) = max over channels of |α_ch(t) - calib_mean_ch| / calib_std_ch
+///    (trailing window ending at t; scores start at t = window).
+/// 3. Threshold = 99th quantile of the calibration sequence's own scores
+///    (identical rule to residual-detector calibration).
+/// 4. Per-timestep predictions vs the fault-mask ground truth
+///    (fault window = 58%..70% of the sequence) → precision/recall/F1.
+#[derive(Debug, Clone)]
+pub struct TimestepF1 {
+    pub fault: String,
+    pub precision: f64,
+    pub recall: f64,
+    pub f1: f64,
+    pub false_alarm_rate: f64,
+    /// Fraction of seeds where at least one flag lands inside
+    /// [fault_start, fault_stop + window] — event-level detection
+    /// (NAB-style), which credits detections that arrive with latency.
+    pub event_detect_rate: f64,
+    /// Mean samples from fault start to first flag, over detected events.
+    pub mean_latency: f64,
+}
+
+fn window_alphas_trailing(signal: &[f64], window: usize, step: usize) -> Vec<(usize, f64)> {
+    // Returns (end_timestep, alpha) for each trailing window.
+    let mut out = Vec::new();
+    let mut end = window;
+    while end <= signal.len() {
+        let a = dfa(&signal[end - window..end]).alpha;
+        out.push((end - 1, a));
+        end += step;
+    }
+    out
+}
+
+pub fn timestep_f1_benchmark(
+    length: usize,
+    n_seeds: u64,
+    window: usize,
+    step: usize,
+) -> Vec<TimestepF1> {
+    let fault_start = (length as f64 * 0.58) as usize;
+    let fault_stop = (fault_start + ((length as f64 * 0.12) as usize).max(8)).min(length);
+
+    let mut totals: Vec<(usize, usize, usize, usize)> =
+        vec![(0, 0, 0, 0); FAULT_TYPES.len()]; // tp, fp, fn, tn per fault
+    let mut events: Vec<(usize, f64)> = vec![(0, 0.0); FAULT_TYPES.len()]; // detected count, latency sum
+
+    for seed in 1..=n_seeds {
+        let s = seed * 7919;
+        let calib = synth_spacecraft(length, s + 100);
+        let test_clean = synth_spacecraft(length, s + 200);
+
+        // Per-channel calibration statistics over trailing windows
+        let calib_windows: Vec<Vec<(usize, f64)>> = calib
+            .iter()
+            .map(|c| window_alphas_trailing(c, window, step))
+            .collect();
+        let calib_stats: Vec<(f64, f64)> = calib_windows
+            .iter()
+            .map(|ws| {
+                let n = ws.len() as f64;
+                let mean = ws.iter().map(|(_, a)| a).sum::<f64>() / n;
+                let var = ws.iter().map(|(_, a)| (a - mean).powi(2)).sum::<f64>() / n;
+                (mean, var.sqrt().max(1e-6))
+            })
+            .collect();
+
+        // Calibration scores → threshold at 99th quantile (his exact rule)
+        let n_windows = calib_windows[0].len();
+        let mut calib_scores = Vec::with_capacity(n_windows);
+        for w in 0..n_windows {
+            let mut max_z = 0.0f64;
+            for ch in 0..CHANNELS {
+                let (m, sd) = calib_stats[ch];
+                let z = (calib_windows[ch][w].1 - m).abs() / sd;
+                if z > max_z {
+                    max_z = z;
+                }
+            }
+            calib_scores.push(max_z);
+        }
+        let mut sorted = calib_scores.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let idx = ((sorted.len() as f64 * 0.99) as usize).min(sorted.len() - 1);
+        let threshold = sorted[idx];
+
+        for (fi, fault) in FAULT_TYPES.iter().enumerate() {
+            let faulted = inject_fault(&test_clean, fault, s);
+            let test_windows: Vec<Vec<(usize, f64)>> = faulted
+                .iter()
+                .map(|c| window_alphas_trailing(c, window, step))
+                .collect();
+            let nw = test_windows[0].len();
+            let event_window_end = (fault_stop + window).min(length);
+            let mut first_flag: Option<usize> = None;
+            for w in 0..nw {
+                let t = test_windows[0][w].0;
+                let mut max_z = 0.0f64;
+                for ch in 0..CHANNELS {
+                    let (m, sd) = calib_stats[ch];
+                    let z = (test_windows[ch][w].1 - m).abs() / sd;
+                    if z > max_z {
+                        max_z = z;
+                    }
+                }
+                let pred = max_z > threshold;
+                let label = t >= fault_start && t < fault_stop;
+                if pred && first_flag.is_none() && t >= fault_start && t < event_window_end {
+                    first_flag = Some(t);
+                }
+                let e = &mut totals[fi];
+                match (label, pred) {
+                    (true, true) => e.0 += 1,
+                    (false, true) => e.1 += 1,
+                    (true, false) => e.2 += 1,
+                    (false, false) => e.3 += 1,
+                }
+            }
+            if let Some(t) = first_flag {
+                events[fi].0 += 1;
+                events[fi].1 += (t - fault_start) as f64;
+            }
+        }
+    }
+
+    FAULT_TYPES
+        .iter()
+        .zip(totals.iter().zip(events.iter()))
+        .map(|(fault, (&(tp, fp, fn_, tn), &(ev_count, lat_sum)))| {
+            let precision = if tp + fp > 0 { tp as f64 / (tp + fp) as f64 } else { 0.0 };
+            let recall = if tp + fn_ > 0 { tp as f64 / (tp + fn_) as f64 } else { 0.0 };
+            let f1 = if precision + recall > 0.0 {
+                2.0 * precision * recall / (precision + recall)
+            } else {
+                0.0
+            };
+            let far = if fp + tn > 0 { fp as f64 / (fp + tn) as f64 } else { 0.0 };
+            TimestepF1 {
+                fault: String::from(*fault),
+                precision,
+                recall,
+                f1,
+                false_alarm_rate: far,
+                event_detect_rate: ev_count as f64 / n_seeds as f64,
+                mean_latency: if ev_count > 0 { lat_sum / ev_count as f64 } else { 0.0 },
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -488,5 +642,57 @@ mod tests {
             / samples.len() as f64;
         assert!((mean - 5.0).abs() < 0.1, "mean {mean}");
         assert!((var.sqrt() - 2.0).abs() < 0.1, "std {}", var.sqrt());
+    }
+}
+
+#[cfg(test)]
+mod debug_tests {
+    use super::*;
+
+    #[test]
+    fn debug_timestep_scores() {
+        let length = 700;
+        let s = 7919u64;
+        let calib = synth_spacecraft(length, s + 100);
+        let test_clean = synth_spacecraft(length, s + 200);
+        let window = 64;
+        let step = 2;
+
+        let calib_windows: Vec<Vec<(usize, f64)>> = calib.iter()
+            .map(|c| window_alphas_trailing(c, window, step)).collect();
+        let calib_stats: Vec<(f64, f64)> = calib_windows.iter().map(|ws| {
+            let n = ws.len() as f64;
+            let mean = ws.iter().map(|(_, a)| a).sum::<f64>() / n;
+            let var = ws.iter().map(|(_, a)| (a - mean).powi(2)).sum::<f64>() / n;
+            (mean, var.sqrt().max(1e-6))
+        }).collect();
+        for ch in 0..CHANNELS {
+            println!("ch {} calib alpha mean {:.3} sd {:.3}", ch, calib_stats[ch].0, calib_stats[ch].1);
+        }
+        // calib max-z distribution
+        let n_windows = calib_windows[0].len();
+        let mut calib_scores = Vec::new();
+        for w in 0..n_windows {
+            let mut mz = 0.0f64;
+            for ch in 0..CHANNELS {
+                let (m, sd) = calib_stats[ch];
+                let z = (calib_windows[ch][w].1 - m).abs() / sd;
+                if z > mz { mz = z; }
+            }
+            calib_scores.push(mz);
+        }
+        let mut sorted = calib_scores.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        println!("calib max-z: median {:.2} p99 {:.2} max {:.2}",
+            sorted[sorted.len()/2], sorted[(sorted.len() as f64*0.99) as usize], sorted[sorted.len()-1]);
+
+        // drift test z on soc channel in fault zone
+        let faulted = inject_fault(&test_clean, "drift", s);
+        let tw = window_alphas_trailing(&faulted[0], window, step);
+        let (m, sd) = calib_stats[0];
+        let in_fault: Vec<f64> = tw.iter().filter(|(t, _)| *t >= 406 && *t < 490)
+            .map(|(_, a)| (a - m).abs() / sd).collect();
+        let max_in_fault = in_fault.iter().cloned().fold(0.0f64, f64::max);
+        println!("drift soc z in fault window: max {:.2} count {}", max_in_fault, in_fault.len());
     }
 }
