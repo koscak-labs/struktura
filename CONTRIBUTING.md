@@ -14,11 +14,12 @@ cargo run --bin struktura -- demo
 
 ## What we need help with
 
-- **More domains**: got time-series data from a new field? Run `struktura check` on it and share the results.
-- **`no_std` support**: make the core library work without std (needs `libm` for `sqrt`/`ln`).
-- **WASM target**: compile to WebAssembly for browser-based analysis.
-- **Python bindings**: PyO3 wrapper so Python users can `pip install struktura`.
-- **More tests**: edge cases, adversarial inputs, large-N performance benchmarks.
+- **More domains**: got time-series data from a new field? run `struktura check` on it and share the results
+- **WASM playground** (#9): interactive browser demo — drag-drop a CSV, see DFA analysis live
+- **Python bindings** (#3): PyO3 wrapper so Python users can `pip install struktura`
+- **SOTA comparison** (#11): run the SMAP/MSL benchmark through other anomaly detectors and compare honestly
+- **Mutation testing**: we're at ~44% mutation score — help us get to 60%+ (see #6 for the methodology)
+- **More tests**: boundary cases, adversarial inputs, large-N performance, new datasets
 
 ## Guidelines
 
