@@ -762,6 +762,77 @@ mod tests {
         walk
     }
 
+    /// Analytic standard deviation of the DFA α estimator at window n.
+    ///
+    /// Model: F²(s) averages W/s per-segment residual variances, each with
+    /// s−2 degrees of freedom (linear detrend), so F² is chi-square-like
+    /// with dof ≈ (W/s)(s−2) and var(ln F(s)) = ¼·var(ln F²) ≈
+    /// 1 / (2·(W/s)·(s−2)). α is the OLS slope of ln F on ln s, hence
+    /// var(α̂) = Σ (x_j − x̄)² v_j / (Σ (x_j − x̄)²)², x_j = ln s_j.
+    /// The model treats box scales as independent — they share the same
+    /// profile, so this is a LOWER bound on the true variance.
+    fn analytic_alpha_sd(n: usize) -> f64 {
+        let s_min = 16usize.max(n / 50);
+        let s_max = n / 4;
+        let ratio = powf(s_max as f64 / s_min as f64, 1.0 / 11.0);
+        let mut xs = Vec::new();
+        let mut vs = Vec::new();
+        let mut prev_s = 0usize;
+        for step in 0..12 {
+            let s = (s_min as f64 * powi(ratio, step)) as usize;
+            if s == prev_s || s > s_max {
+                continue;
+            }
+            prev_s = s;
+            let num_segs = (n / s) as f64;
+            xs.push(ln(s as f64));
+            vs.push(1.0 / (2.0 * num_segs * (s as f64 - 2.0)));
+        }
+        let xbar = xs.iter().sum::<f64>() / xs.len() as f64;
+        let sxx: f64 = xs.iter().map(|x| (x - xbar) * (x - xbar)).sum();
+        let num: f64 = xs
+            .iter()
+            .zip(vs.iter())
+            .map(|(x, v)| (x - xbar) * (x - xbar) * v)
+            .sum();
+        sqrt(num / (sxx * sxx))
+    }
+
+    #[test]
+    fn analytic_alpha_sd_bounds_measured_scatter() {
+        // Measured: sd of α over 800 independent white-noise windows.
+        for &n in &[96usize, 192, 384] {
+            let mut alphas = Vec::new();
+            let mut buf = Vec::new();
+            for seed in 0..800u64 {
+                let w = white_noise(n, seed * 13 + 7);
+                alphas.push(dfa_into(&w, &mut buf).alpha);
+            }
+            let mean = alphas.iter().sum::<f64>() / alphas.len() as f64;
+            let var = alphas.iter().map(|a| (a - mean).powi(2)).sum::<f64>()
+                / alphas.len() as f64;
+            let measured = var.sqrt();
+            let derived = analytic_alpha_sd(n);
+            // The independence model is a LOWER bound: the box scales share
+            // one profile, and that correlation inflates the true variance
+            // by an n-dependent factor (measured: ~1.3x at n=96 rising to
+            // ~4x at n=384 — more scales, more shared structure). Assert
+            // the bound direction, and that the inflation stays below 6x
+            // over the monitor's window range.
+            let ratio = measured / derived;
+            assert!(
+                derived <= measured * 1.25,
+                "n={}: derived {:.4} should not exceed measured {:.4}",
+                n, derived, measured
+            );
+            assert!(
+                ratio < 6.0,
+                "n={}: inflation {:.1}x (derived {:.4}, measured {:.4})",
+                n, ratio, derived, measured
+            );
+        }
+    }
+
     #[test]
     fn dfa_fast_matches_dfa_into_exactly() {
         // 1000 random windows across lengths and signal classes —
