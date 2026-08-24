@@ -362,7 +362,7 @@ pub fn synth_reaction_wheel(n: usize, seed: u64, degradation_start: f64) -> Vec<
     for i in 0..n {
         state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
         let noise = (state >> 33) as f64 / (1u64 << 31) as f64 - 0.5;
-        let base = 2.5 + 0.3 * crate::ln((i as f64 + 1.0).max(1.0)).sin();
+        let base = 2.5 + 0.3 * crate::sin(crate::ln((i as f64 + 1.0).max(1.0)));
         let degradation = if i >= degrade_at {
             let progress = (i - degrade_at) as f64 / (n - degrade_at).max(1) as f64;
             0.8 * progress * progress + 0.5 * progress * noise
@@ -382,7 +382,7 @@ pub fn synth_battery_voltage(n: usize, seed: u64, degradation_start: f64) -> Vec
     for i in 0..n {
         state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
         let noise = (state >> 33) as f64 / (1u64 << 31) as f64 - 0.5;
-        let orbit_phase = (i as f64 * 0.0065).sin();
+        let orbit_phase = crate::sin(i as f64 * 0.0065);
         let base = 28.2 + 1.5 * orbit_phase;
         let degradation = if i >= degrade_at {
             let progress = (i - degrade_at) as f64 / (n - degrade_at).max(1) as f64;
@@ -402,7 +402,7 @@ pub fn synth_thermal(n: usize, seed: u64, drift_rate: f64) -> Vec<f64> {
     for i in 0..n {
         state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
         let noise = (state >> 33) as f64 / (1u64 << 31) as f64 - 0.5;
-        let orbit_thermal = 15.0 * (i as f64 * 0.006).sin();
+        let orbit_thermal = 15.0 * crate::sin(i as f64 * 0.006);
         let base = 22.0 + orbit_thermal + drift_rate * i as f64;
         out.push(base + noise * 0.8);
     }

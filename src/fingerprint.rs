@@ -43,7 +43,7 @@ impl Fingerprint {
         let dw = (self.mfdfa_width - other.mfdfa_width).abs();
         let dk = ((self.kurtosis - other.kurtosis) / (self.kurtosis.max(other.kurtosis).max(1.0))).abs();
         let dh = (self.hurst - other.hurst).abs();
-        (da * da + dw * dw + dk * dk * 0.1 + dh * dh).sqrt()
+        crate::sqrt(da * da + dw * dw + dk * dk * 0.1 + dh * dh)
     }
 }
 

@@ -2224,6 +2224,7 @@ fn cmd_monitor_perf() {
     let mut total_ns: u128 = 0;
     let mut alarms = 0usize;
     let mut leg_counts = [0usize; 5];
+    let mut lat_ns: Vec<u64> = Vec::with_capacity(n);
     for t in 0..n {
         for ch in 0..6 {
             sample[ch] = stream[ch][t];
@@ -2243,14 +2244,18 @@ fn cmd_monitor_perf() {
         }
         let e = s.elapsed().as_nanos();
         total_ns += e;
+        lat_ns.push(e as u64);
         if e > worst_ns {
             worst_ns = e;
         }
     }
+    lat_ns.sort_unstable();
+    let pct = |p: f64| lat_ns[((lat_ns.len() as f64 * p) as usize).min(lat_ns.len() - 1)];
     let mean_ns = total_ns / n as u128;
     println!("  Stream: {} samples x 6 channels", n);
     println!("  Mean per-sample cost:       {:>8} ns", mean_ns);
-    println!("  Worst-case per-sample cost: {:>8} ns  (tick with 6 DFA evals)", worst_ns);
+    println!("  P50 / P99 / P99.9:          {:>8} / {} / {} ns", pct(0.50), pct(0.99), pct(0.999));
+    println!("  Raw max (includes OS jitter): {:>6} ns", worst_ns);
     println!("  Throughput:                 {:>8.1} Msamples/s", 1000.0 / mean_ns as f64);
     println!("  Alarms on clean stream:     {:>8}  ({} samples ≈ {:.1}x calib length)",
         alarms, n, n as f64 / 2048.0);

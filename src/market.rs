@@ -15,6 +15,8 @@
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 #[cfg(not(feature = "std"))]
+use alloc::vec;
+#[cfg(not(feature = "std"))]
 use alloc::string::String;
 
 use crate::{dfa, analyze, StructuralLaw};

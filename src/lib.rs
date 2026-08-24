@@ -63,6 +63,16 @@ fn powi(x: f64, n: i32) -> f64 { libm::pow(x, n as f64) }
 #[cfg(feature = "std")]
 fn powi(x: f64, n: i32) -> f64 { x.powi(n) }
 
+#[cfg(not(feature = "std"))]
+fn sin(x: f64) -> f64 { libm::sin(x) }
+#[cfg(feature = "std")]
+fn sin(x: f64) -> f64 { x.sin() }
+
+#[cfg(not(feature = "std"))]
+fn cos(x: f64) -> f64 { libm::cos(x) }
+#[cfg(feature = "std")]
+fn cos(x: f64) -> f64 { x.cos() }
+
 /// Result of a DFA or ACR computation.
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -992,8 +1002,8 @@ pub fn anomaly_scores(values: &[f64], window: usize, step: usize, threshold: f64
     let learn_n = alphas.len() / 3; // use first third as baseline
     let learn_n = learn_n.max(3).min(alphas.len());
     let baseline: f64 = alphas[..learn_n].iter().sum::<f64>() / learn_n as f64;
-    let var: f64 = alphas[..learn_n].iter().map(|a| (a - baseline).powi(2)).sum::<f64>() / learn_n as f64;
-    let std = var.sqrt().max(threshold * 0.1);
+    let var: f64 = alphas[..learn_n].iter().map(|a| powi(a - baseline, 2)).sum::<f64>() / learn_n as f64;
+    let std = sqrt(var).max(threshold * 0.1);
     alphas.iter().map(|a| (a - baseline).abs() / (std + threshold)).collect()
 }
 
@@ -1005,6 +1015,7 @@ pub mod text;
 pub mod market;
 pub mod rhythm;
 pub mod genome;
+#[cfg(feature = "std")]
 pub mod telemetry_bench;
 pub mod monitor;
 pub mod mfdfa;
