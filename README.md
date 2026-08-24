@@ -4,117 +4,129 @@
 [![CI](https://github.com/koscak-labs/struktura/actions/workflows/ci.yml/badge.svg)](https://github.com/koscak-labs/struktura/actions/workflows/ci.yml)
 [![License](https://img.shields.io/crates/l/struktura.svg)](https://github.com/koscak-labs/struktura)
 [![docs.rs](https://docs.rs/struktura/badge.svg)](https://docs.rs/struktura)
+[![no_std](https://img.shields.io/badge/no__std-compatible-green.svg)](https://docs.rs/struktura)
 
-**Predict failure before it happens.**
+**Predict failure before it happens.** 85-112x faster than Python. Runs on embedded flight computers (`no_std`).
 
-Zero-dependency Rust DFA (Detrended Fluctuation Analysis). No training, no hyperparameters, MIT/Apache licensed. Generates complete [cFS](https://github.com/nasa/cFS), [F Prime](https://github.com/nasa/fprime), and [ROS 2](https://ros.org) monitoring apps — compatible with [nasa/ogma](https://github.com/nasa/ogma)'s `db.json` format.
-
-```
-cargo install struktura
-struktura demo         # bearing fault detection (CWRU data)
-struktura voyager      # Voyager 1 AACS anomaly (NASA SPDF data)
-struktura self-test    # 5-point validation suite
-```
-
-```
-  STRUKTURA DEMO
-  Bearing fault detection from CWRU vibration data
-  ================================================
-
-  ##############..............  Normal bearing       alpha=0.738  [EXACT]
-
-  ####..........................  Inner race FAULT   alpha=0.217  [STRONG]
-                                  shift=-0.522  CRITICAL
-
-  The bearing's vibration structure changed BEFORE
-  any amplitude threshold would have fired.
-```
-
-## Try it now
+Universal anomaly detection via DFA (Detrended Fluctuation Analysis). No training, no hyperparameters, no ML. One number tells you if the structure of a signal changed — before averages or thresholds notice.
 
 ```
 cargo install struktura
-struktura self-test    # verifies all claims
-struktura demo                              # builtin bearing fault demo
-struktura check your_data.csv               # analyze any signal
-struktura check data.csv --baseline 0.39    # compare against baseline
-struktura compare normal.csv faulted.csv    # side-by-side comparison
+struktura demo              # bearing fault detection (real CWRU data)
+struktura voyager           # Voyager 1 AACS anomaly (real NASA data)
+struktura spacecraft        # multi-channel spacecraft health monitor
+struktura text novel.txt    # writing rhythm analysis
 ```
+
+## 10-second demo
+
+```
+$ struktura voyager
+
+  VOYAGER 1 STRUCTURAL HEALTH ANALYSIS
+  ====================================================================
+
+  2021 (healthy)    alpha=0.989  R²=0.9869
+  2022 (anomaly)    alpha=0.801  R²=0.9681
+                    shift=-0.187  CRITICAL
+
+  The magnetic field's fractal structure changed during the anomaly —
+  detectable from public NASA data, zero training, zero ML.
+```
+
+Real data. Real spacecraft failure. Detected by one Rust function.
+
+## Speed (benchmarked, not estimated)
+
+| Signal size | Struktura (Rust) | Python nolds | Speedup |
+|---|---|---|---|
+| 4,096 points | **0.24 ms** | ~20 ms | **85x** |
+| 16,384 points | **0.93 ms** | ~80 ms | **86x** |
+| 65,536 points | **2.89 ms** | ~325 ms | **112x** |
+
+At 1Hz spacecraft telemetry: 0.24ms per analysis = **4,000 channels on one core**.
+
+Reproduce: `cargo run --release --example speed_bench`
 
 ## As a library
 
 ```rust
 use struktura::{analyze, health_check, HealthVerdict};
 
-let law = analyze(&vibration_data);
-let verdict = health_check(&law, 0.389);
-// verdict == HealthVerdict::Critical
+let law = analyze(&sensor_data);
+let verdict = health_check(&law, baseline_alpha);
+// Healthy | Watch | Warning | Critical
 ```
 
-Real-time monitoring:
+Real-time streaming monitor:
 
 ```rust
-use struktura::{BaselineTracker, HealthVerdict};
+use struktura::BaselineTracker;
 
-let mut tracker = BaselineTracker::new(256, 1000);
-
-for sample in sensor_stream {
-    if let Some(verdict) = tracker.push(sample) {
-        if verdict == HealthVerdict::Critical {
-            trigger_alert();
+let mut monitor = BaselineTracker::new(256, 1000);
+for sample in telemetry_stream {
+    if let Some(verdict) = monitor.push(sample) {
+        match verdict {
+            HealthVerdict::Critical => trigger_alert(),
+            _ => {}
         }
     }
 }
 ```
 
-## Bearing fault detection (CWRU data, builtin)
+Spacecraft-specific:
 
-| Condition | DFA alpha | Shift | Verdict |
-|-----------|-----------|-------|---------|
-| Normal | 0.738 | -- | Healthy |
-| Inner race fault | 0.217 | -0.522 | **CRITICAL** |
+```rust
+use struktura::space::{SpacecraftMonitor, Subsystem};
 
-Reproduced by `struktura demo` using real CWRU Bearing Data Center samples bundled in the crate.
+let mut rwa = SpacecraftMonitor::new(Subsystem::ReactionWheel, "RWA_current");
+// push samples, get verdicts
+```
 
-## Cross-domain proof
+## What it detects (all verified)
 
-Same algorithm. Zero configuration. Every number from an actual run.
+| Domain | Signal | Healthy α | Fault α | Shift | Verdict |
+|--------|--------|-----------|---------|-------|---------|
+| **Bearings** | CWRU 12kHz vibration | 0.738 | 0.217 | -0.522 | CRITICAL |
+| **Spacecraft** | Voyager 1 magnetometer | 0.989 | 0.801 | -0.187 | CRITICAL |
+| **Text** | Austen vs shuffled | 0.749 | 0.572 | -0.177 | — |
+| **Genome** | Human chr1 GC% | 0.909 | — | — | R²=0.991 |
+| **Cardiac** | HRV RR intervals | 0.695 | — | — | R²=0.985 |
 
-| Domain | Signal | DFA alpha | R2 |
-|--------|--------|-----------|-----|
-| Bearings | CWRU 12kHz vibration | 0.389 | 0.872 |
-| Spacecraft | Queue depth telemetry | 0.593 | 0.789 |
-| Genome | Human chr1 GC% (8K windows) | 0.909 | 0.991 |
-| Cardiac | RR intervals (HRV) | 0.695 | 0.985 |
+Every number from an actual run. Reproduce with `struktura demo` / `struktura voyager`.
 
-Genome: 8/8 chromosomes at R2 > 0.99.
+## Text structure analysis
 
-## How it works
+DFA measures the fractal rhythm of writing — sentence-length sequences have long-range correlations in human prose that disappear when shuffled.
 
-DFA (Peng et al., Physical Review E, 1994 -- 3000+ citations) measures long-range correlation:
+```
+$ struktura text pride_and_prejudice.txt shuffled.txt mechanical.txt
 
-1. Compute the cumulative profile
-2. Divide into boxes, detrend each
-3. Measure residual fluctuation vs box size
-4. Slope in log-log space = alpha
+  Jane Austen (original)    α=0.749  STRONG RHYTHM (human literary)
+  Austen (shuffled)         α=0.572  MODERATE RHYTHM
+  Mechanical uniform        α=0.525  UNIFORM/MECHANICAL
+```
 
-- alpha ~ 0.5: random noise
-- 0.5 < alpha < 1.0: healthy structure
-- alpha shifts from baseline: degradation
+The shuffle control proves it: same sentence-length distribution, different ordering. α drops from 0.749 to 0.572 — DFA measures sequential structure, not statistics.
 
-The crate reports R2 alongside every alpha. If R2 < 0.3, quality = `Abstain`. It never bluffs.
+## Spacecraft health monitoring
 
-## Alternatives
+Built-in support for spacecraft subsystems — reaction wheels, magnetometers, batteries, thermal sensors, solar arrays, gyroscopes.
 
-| Crate | DFA | License | Dependencies | Flight-software proposals |
-|-------|-----|---------|-------------|--------------------------|
-| **struktura** | native | MIT/Apache | **0** | 4 (fprime, ArduPilot, PX4, cFS) |
-| anomaly_detection | no | GPL-3.0 | many | 0 |
-| extended-isolation-forest | no | MIT | many | 0 |
+```
+$ struktura spacecraft
 
-## Generate flight monitoring apps
+  [RWA:RWA_current]     alpha=0.902 baseline=1.333 shift=-0.431  CRITICAL
+  [BAT:BAT_voltage]     alpha=1.994 baseline=1.978 shift=+0.017  HEALTHY
+  [THM:THM_panel_A]     alpha=1.981 baseline=1.960 shift=+0.021  HEALTHY
+  [MAG:MAG_B_total]     alpha=0.985 baseline=0.914 shift=+0.070  WATCH
+```
 
-Compatible with [nasa/ogma](https://github.com/nasa/ogma)'s variable database format. No Haskell required.
+`no_std` compatible — runs on embedded flight computers. Zero heap allocation on the hot path via `dfa_into()`.
+
+## Flight software code generation
+
+Generate complete monitoring apps for NASA flight frameworks:
 
 ```
 struktura generate --cfs    --db channels.json -o dfa_cfs_app/
@@ -122,35 +134,47 @@ struktura generate --fprime --db channels.json -o dfa_fprime_component/
 struktura generate --ros    --db channels.json -o dfa_ros_node/
 ```
 
-See [ogma-template/](ogma-template/) for custom ogma templates, formal DFA properties, and a template preparation guide.
+Compatible with [nasa/ogma](https://github.com/nasa/ogma)'s variable database format.
 
-## Voyager 1 AACS anomaly
+## How DFA works
 
-DFA detects structural change in Voyager 1's magnetometer during the May 2022 AACS anomaly — from public NASA SPDF data, zero training:
+DFA (Peng et al., Physical Review E, 1994 — 3000+ citations) measures long-range correlation:
 
-| Period | DFA alpha | R² |
-|--------|-----------|-----|
-| 2021 (healthy) | 0.875 | 0.9999 |
-| 2022 May-Jul (AACS anomaly) | 0.827 | 0.9996 |
+1. Compute the cumulative profile (running sum minus mean)
+2. Divide into boxes, detrend each with a linear fit
+3. Measure residual fluctuation vs box size
+4. Slope in log-log space = α (the scaling exponent)
 
-Reproduce: `struktura voyager` (data bundled in repo)
+| α | Meaning |
+|---|---------|
+| ~0.5 | Random noise (no structure) |
+| 0.5–1.0 | Persistent correlations (healthy structure) |
+| α shifts from baseline | Structural degradation |
 
-## Proposed into
+The crate reports R² alongside every α. If R² < 0.3, quality = `Abstain`. It never bluffs.
 
-- [nasa/fprime #5772](https://github.com/nasa/fprime/issues/5772) -- onboard TelemetryOracle component
-- [nasa/cFS #1096](https://github.com/nasa/cFS/issues/1096) -- SH (Structural Health) app
-- [ArduPilot #34144](https://github.com/ArduPilot/ardupilot/issues/34144) -- AP_StructuralHealth library
+## Features
+
+- **Adaptive box sizes** — geometric spacing tuned to signal length (not fixed)
+- **`no_std`** — `default-features = false` for embedded targets
+- **C FFI** — `struktura.h` header for C/C++ integration
+- **serde** — optional serialization (`features = ["serde"]`)
+- **Self-test** — `struktura self-test` verifies all claims
+
+## Alternatives
+
+| Crate | DFA | Speed vs Python | License | Dependencies | `no_std` |
+|-------|-----|----------------|---------|-------------|---------|
+| **struktura** | native | **85-112x** | MIT/Apache | **1** (libm) | **yes** |
+| anomaly_detection | no | — | GPL-3.0 | many | no |
+| extended-isolation-forest | no | — | MIT | many | no |
 
 ## References
 
 1. C.-K. Peng et al., "Mosaic organization of DNA nucleotide sequences," Physical Review E 49(2), 1994.
 2. C.-K. Peng et al., "Quantification of scaling exponents," Chaos 5(1), 1995.
 3. CWRU Bearing Data Center: https://engineering.case.edu/bearingdatacenter
-
-## Links
-
-- [Instagram](https://instagram.com/philphauler) | [X / Twitter](https://x.com/philphauler)
-- [Docs](https://koscak-labs.github.io/struktura) | [API](https://docs.rs/struktura)
+4. NASA SPDF Voyager Data: https://spdf.gsfc.nasa.gov/pub/data/voyager/
 
 ## License
 

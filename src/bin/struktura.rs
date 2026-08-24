@@ -114,6 +114,8 @@ fn main() {
         println!("    struktura voyager                         Voyager 1 AACS anomaly analysis");
         println!("    struktura spacecraft                      Multi-channel spacecraft health demo");
         println!("    struktura text <file.txt> [file2.txt]     Text structure analysis (sentence rhythm DFA)");
+        println!("    struktura market <prices.csv>              Financial regime detection (trending/random/reverting)");
+        println!("    struktura rhythm <timestamps.csv>          Event rhythm analysis (bursty/natural/metronomic)");
         println!("    struktura check <file.csv>                Analyze a signal");
         println!("    struktura check <file.csv> --baseline N   Compare against baseline");
         println!("    struktura compare <a.csv> <b.csv>         Compare two signals");
@@ -138,6 +140,8 @@ fn main() {
         "voyager" => cmd_voyager(),
         "spacecraft" => cmd_spacecraft(),
         "text" => cmd_text(&args),
+        "market" => cmd_market(&args),
+        "rhythm" => cmd_rhythm(&args),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -581,6 +585,83 @@ fn cmd_voyager() {
     println!();
     println!("  The magnetic field's fractal structure changed during the anomaly —");
     println!("  detectable from public NASA data, zero training, zero ML.");
+    println!();
+}
+
+fn cmd_market(args: &[String]) {
+    if args.len() < 3 {
+        eprintln!("Usage: struktura market <prices.csv>");
+        eprintln!("  CSV with one price per line (close prices). Need 200+ prices.");
+        process::exit(1);
+    }
+    use struktura::market::{returns_from_prices, regime_detect};
+
+    let prices = read_csv(&args[2]);
+    if prices.len() < 64 {
+        eprintln!("Need at least 64 prices, got {}", prices.len());
+        process::exit(1);
+    }
+    let returns = returns_from_prices(&prices);
+    let result = regime_detect(&returns);
+
+    println!();
+    println!("  \x1b[1mMARKET REGIME DETECTION\x1b[0m");
+    println!("  DFA on log-returns — what strategy works NOW");
+    println!("  ====================================================================");
+    println!();
+    let bar = make_bar(result.alpha);
+    let regime_str = match result.regime {
+        struktura::market::MarketRegime::Trending => "\x1b[32mTRENDING\x1b[0m (momentum works)",
+        struktura::market::MarketRegime::RandomWalk => "\x1b[33mRANDOM WALK\x1b[0m (no reliable edge)",
+        struktura::market::MarketRegime::MeanReverting => "\x1b[36mMEAN-REVERTING\x1b[0m (reversals work)",
+    };
+    println!("  {} α={:.3}  R²={:.4}  n={}", bar, result.alpha, result.r_squared, result.n_returns);
+    println!("  {:30} regime: {}", "", regime_str);
+    println!();
+    println!("  ====================================================================");
+    println!("  α > 0.6 = trending (momentum)");
+    println!("  α ≈ 0.5 = random walk (efficient market)");
+    println!("  α < 0.45 = mean-reverting (reversal strategies)");
+    println!();
+}
+
+fn cmd_rhythm(args: &[String]) {
+    if args.len() < 3 {
+        eprintln!("Usage: struktura rhythm <timestamps.csv>");
+        eprintln!("  One unix timestamp per line. Try: git log --format=%at | struktura rhythm -");
+        process::exit(1);
+    }
+    use struktura::rhythm::{intervals_from_timestamps, rhythm_analyze};
+
+    let timestamps = read_csv(&args[2]);
+    let intervals = intervals_from_timestamps(&timestamps);
+    if intervals.len() < 64 {
+        eprintln!("Need at least 64 intervals (65 timestamps), got {}", intervals.len());
+        process::exit(1);
+    }
+    let result = rhythm_analyze(&intervals);
+
+    println!();
+    println!("  \x1b[1mEVENT RHYTHM ANALYSIS\x1b[0m");
+    println!("  DFA on inter-event intervals");
+    println!("  ====================================================================");
+    println!();
+    let bar = make_bar(result.alpha);
+    let rhythm_str = match result.rhythm {
+        struktura::rhythm::RhythmType::Bursty => "\x1b[35mBURSTY\x1b[0m (creative/flow state bursts)",
+        struktura::rhythm::RhythmType::Natural => "\x1b[32mNATURAL\x1b[0m (human work rhythm)",
+        struktura::rhythm::RhythmType::Random => "\x1b[33mRANDOM\x1b[0m (uncorrelated events)",
+        struktura::rhythm::RhythmType::Metronomic => "\x1b[36mMETRONOMIC\x1b[0m (automated/scheduled)",
+    };
+    println!("  {} α={:.3}  R²={:.4}  n={}", bar, result.alpha, result.r_squared, result.n_intervals);
+    println!("  {:30} rhythm: {}", "", rhythm_str);
+    println!("  {:30} mean interval: {:.1}s", "", result.mean_interval);
+    println!();
+    println!("  ====================================================================");
+    println!("  α > 0.7 = bursty (long correlated work sessions)");
+    println!("  α 0.55-0.7 = natural human rhythm");
+    println!("  α ≈ 0.5 = random/uncorrelated");
+    println!("  α < 0.45 = metronomic (bot/cron/automated)");
     println!();
 }
 
