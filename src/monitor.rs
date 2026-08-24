@@ -233,6 +233,29 @@ pub struct HybridMonitor {
     leg_enabled: [bool; 6],
 }
 
+/// Calibrated constants exported for code generation.
+#[derive(Debug, Clone)]
+pub struct MonitorExport {
+    pub res_thr: f64,
+    pub dfa_thr: f64,
+    pub cusum_thr: f64,
+    pub channels: Vec<ChannelExport>,
+}
+
+/// One channel's calibrated constants.
+#[derive(Debug, Clone, Copy)]
+pub struct ChannelExport {
+    pub ar_a: f64,
+    pub ar_b: f64,
+    pub ar_sd: f64,
+    pub alpha_mean: f64,
+    pub alpha_sd: f64,
+    pub mean: f64,
+    pub roll_thr: f64,
+    pub max_run: usize,
+    pub repeat_enabled: bool,
+}
+
 /// Extreme-value (Gumbel) return-level threshold.
 ///
 /// Max-over-calibration thresholds do not extrapolate: a stream 100x longer
@@ -674,6 +697,32 @@ impl HybridMonitor {
     #[must_use]
     pub fn last_alarm(&self) -> Option<AlarmReport> {
         self.last_alarm
+    }
+
+    /// Export every calibrated constant — for baking a calibration into
+    /// generated flight code (see `codegen::generate_hybrid_c`).
+    #[must_use]
+    pub fn export(&self) -> MonitorExport {
+        MonitorExport {
+            res_thr: self.res_thr,
+            dfa_thr: self.dfa_thr,
+            cusum_thr: self.cusum_thr,
+            channels: self
+                .calib
+                .iter()
+                .map(|c| ChannelExport {
+                    ar_a: c.ar_a,
+                    ar_b: c.ar_b,
+                    ar_sd: c.ar_sd,
+                    alpha_mean: c.alpha_mean,
+                    alpha_sd: c.alpha_sd,
+                    mean: c.mean,
+                    roll_thr: c.roll_thr,
+                    max_run: c.max_run,
+                    repeat_enabled: c.repeat_enabled,
+                })
+                .collect(),
+        }
     }
 
     /// Enable or disable one detector leg (all enabled by default).

@@ -184,6 +184,7 @@ fn main() {
         "benchmark-telemetry" | "bt" => cmd_benchmark_telemetry(&args),
         "monitor-perf" => cmd_monitor_perf(),
         "monitor-real" => cmd_monitor_real(),
+        "generate-hybrid" => cmd_generate_hybrid(&args),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -2579,6 +2580,64 @@ fn cmd_monitor_real() {
         None => println!("  Voyager calibration failed"),
     }
     println!();
+}
+
+fn cmd_generate_hybrid(args: &[String]) {
+    use struktura::codegen::generate_hybrid_c;
+    use struktura::monitor::HybridMonitor;
+    use struktura::telemetry_bench::synth_spacecraft;
+
+    let mut out = "hybrid_monitor.c".to_string();
+    let mut calib_csv: Option<String> = None;
+    let mut i = 2;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-o" | "--output" if i + 1 < args.len() => { out = args[i + 1].clone(); i += 2; }
+            "--calib" if i + 1 < args.len() => { calib_csv = Some(args[i + 1].clone()); i += 2; }
+            _ => { i += 1; }
+        }
+    }
+
+    // Calibration source: a multi-channel CSV (columns = channels), or the
+    // builtin coupled-spacecraft simulation when none is given.
+    let calib: Vec<Vec<f64>> = match calib_csv {
+        Some(path) => {
+            let content = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+                eprintln!("cannot read {}: {}", path, e);
+                process::exit(1);
+            });
+            let rows: Vec<Vec<f64>> = content
+                .lines()
+                .filter_map(|l| {
+                    let vals: Vec<f64> =
+                        l.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+                    if vals.is_empty() { None } else { Some(vals) }
+                })
+                .collect();
+            if rows.is_empty() {
+                eprintln!("no numeric rows in {}", path);
+                process::exit(1);
+            }
+            let nch = rows[0].len();
+            (0..nch)
+                .map(|ch| rows.iter().map(|r| r.get(ch).copied().unwrap_or(0.0)).collect())
+                .collect()
+        }
+        None => synth_spacecraft(2048, 424242),
+    };
+
+    let mon = HybridMonitor::calibrate(&calib).unwrap_or_else(|| {
+        eprintln!("calibration failed (need >= 192 samples per channel, equal lengths)");
+        process::exit(1);
+    });
+    let code = generate_hybrid_c(&mon.export());
+    std::fs::write(&out, &code).unwrap_or_else(|e| {
+        eprintln!("cannot write {}: {}", out, e);
+        process::exit(1);
+    });
+    println!("Generated {} ({} channels, {} bytes)", out, mon.channels(), code.len());
+    println!("Compile:  gcc -std=c99 -Wall -Werror -O2 -DHYBRID_STANDALONE_TEST -o hybrid {} -lm", out);
+    println!("Self-test: ./hybrid  (expects: SELFTEST PASS)");
 }
 
 fn generate_ros_package() -> String {
