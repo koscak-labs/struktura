@@ -180,6 +180,38 @@ pub struct AlarmReport {
     pub hit_gap: u64,
 }
 
+/// Human-readable description of what the alarm means. No jargon.
+#[must_use]
+pub fn explain_alarm(r: &AlarmReport) -> &'static str {
+    match r.leg {
+        Leg::Missingness => "data stopped arriving on this channel",
+        Leg::Parity => {
+            if r.observed > 2.0 * r.threshold {
+                "sudden spike — this channel jumped far outside what the other channels predict"
+            } else {
+                "this channel disagrees with what the other channels' physics says it should be"
+            }
+        }
+        Leg::RepeatedValue => "sensor appears stuck — same value repeating",
+        Leg::Dfa => "the signal's pattern is changing slowly (structural drift)",
+        Leg::ResidualCusum => "gradual drift — the signal is trending away from its baseline",
+        Leg::LevelShift => {
+            if r.observed > 2.0 * r.threshold {
+                "sudden jump — the signal shifted to a new level abruptly"
+            } else {
+                "the signal shifted to a new operating level"
+            }
+        }
+        Leg::Residual => {
+            if r.hit_gap >= 8 {
+                "sudden spike — a sharp transient the predictor didn't expect"
+            } else {
+                "the signal's behavior changed — predictions are failing"
+            }
+        }
+    }
+}
+
 /// Rule-based fault-class identification from alarm provenance.
 /// Returns the most likely fault class name for a report.
 #[must_use]

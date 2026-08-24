@@ -3362,30 +3362,32 @@ fn run_guard_watch(path: &str, baseline_n: usize, json: bool, poll_ms: u64) -> !
 
 fn emit_event(t: usize, ev: &struktura::autopilot::Event, json: bool) {
     use struktura::autopilot::Event;
+    use struktura::monitor::explain_alarm;
     match ev {
         Event::Alarm { report, class, .. } => {
+            let explanation = explain_alarm(report);
             if json {
-                println!("{{\"event\":\"alarm\",\"t\":{},\"leg\":\"{:?}\",\"channel\":{},\"class\":\"{}\"}}",
-                    t, report.leg, report.channel, class);
+                println!("{{\"event\":\"alarm\",\"t\":{},\"channel\":{},\"class\":\"{}\",\"explanation\":\"{}\"}}",
+                    t, report.channel, class, explanation);
             } else {
-                eprintln!("  t={:>6}  ALARM  {:?} ch{} ({})", t, report.leg, report.channel, class);
+                eprintln!("  row {:>6}  ⚠ ch{}: {}", t, report.channel, explanation);
             }
         }
         Event::Quarantined { channel, .. } => {
             if json { println!("{{\"event\":\"quarantine\",\"t\":{},\"channel\":{}}}", t, channel); }
-            else { eprintln!("  t={:>6}  QUARANTINE ch{}", t, channel); }
+            else { eprintln!("  row {:>6}  ✗ ch{} declared dead — using reconstructed values", t, channel); }
         }
         Event::AdaptationStarted { .. } => {
             if json { println!("{{\"event\":\"adapting\",\"t\":{}}}", t); }
-            else { eprintln!("  t={:>6}  ADAPTING", t); }
+            else { eprintln!("  row {:>6}  ↻ environment may have changed — learning new baseline...", t); }
         }
         Event::Recalibrated { .. } => {
             if json { println!("{{\"event\":\"recalibrated\",\"t\":{}}}", t); }
-            else { eprintln!("  t={:>6}  RECALIBRATED", t); }
+            else { eprintln!("  row {:>6}  ✓ new baseline accepted — this is the new normal", t); }
         }
         Event::RolledBack { .. } => {
             if json { println!("{{\"event\":\"rollback\",\"t\":{}}}", t); }
-            else { eprintln!("  t={:>6}  ROLLBACK", t); }
+            else { eprintln!("  row {:>6}  ✗ not a real environment change — fault confirmed", t); }
         }
     }
 }
@@ -3491,11 +3493,12 @@ fn run_guard(content: &str, baseline_n: usize, json: bool) -> i32 {
                     last_alarm.push((t, leg_id));
                     if dup { continue; }
                     alarm_count += 1;
+                    let explanation = struktura::monitor::explain_alarm(report);
                     if json {
-                        println!("{{\"event\":\"alarm\",\"t\":{},\"leg\":\"{:?}\",\"channel\":{},\"class\":\"{}\",\"observed\":{:.4},\"threshold\":{:.4}}}",
-                            t, report.leg, report.channel, class, report.observed, report.threshold);
+                        println!("{{\"event\":\"alarm\",\"t\":{},\"channel\":{},\"class\":\"{}\",\"explanation\":\"{}\"}}",
+                            t, report.channel, class, explanation);
                     } else {
-                        eprintln!("  t={:>6}  ALARM  {:?} ch{} ({})", t, report.leg, report.channel, class);
+                        eprintln!("  row {:>6}  ⚠ ch{}: {}", t, report.channel, explanation);
                     }
                 }
                 Event::Quarantined { channel, .. } => {
@@ -3503,14 +3506,14 @@ fn run_guard(content: &str, baseline_n: usize, json: bool) -> i32 {
                     if json {
                         println!("{{\"event\":\"quarantine\",\"t\":{},\"channel\":{}}}", t, channel);
                     } else {
-                        eprintln!("  t={:>6}  QUARANTINE ch{}", t, channel);
+                        eprintln!("  row {:>6}  ✗ ch{} declared dead — using reconstructed values", t, channel);
                     }
                 }
                 Event::AdaptationStarted { .. } => {
                     if json {
                         println!("{{\"event\":\"adapting\",\"t\":{}}}", t);
                     } else {
-                        eprintln!("  t={:>6}  ADAPTING", t);
+                        eprintln!("  row {:>6}  ↻ environment may have changed — learning new baseline...", t);
                     }
                 }
                 Event::Recalibrated { .. } => {
@@ -3518,14 +3521,14 @@ fn run_guard(content: &str, baseline_n: usize, json: bool) -> i32 {
                     if json {
                         println!("{{\"event\":\"recalibrated\",\"t\":{}}}", t);
                     } else {
-                        eprintln!("  t={:>6}  RECALIBRATED", t);
+                        eprintln!("  row {:>6}  ✓ new baseline accepted — this is the new normal", t);
                     }
                 }
                 Event::RolledBack { .. } => {
                     if json {
                         println!("{{\"event\":\"rollback\",\"t\":{}}}", t);
                     } else {
-                        eprintln!("  t={:>6}  ROLLBACK", t);
+                        eprintln!("  row {:>6}  ✗ not a real environment change — fault confirmed", t);
                     }
                 }
             }
