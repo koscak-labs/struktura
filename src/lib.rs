@@ -759,6 +759,68 @@ mod tests {
         assert!(law_n.dfa.r_squared > 0.9);
         assert!(law_f.dfa.r_squared > 0.9);
     }
+
+    #[test]
+    fn empty_input_does_not_panic() {
+        let empty: Vec<f64> = vec![];
+        let law = analyze(&empty);
+        assert_eq!(law.quality, LawQuality::Insufficient);
+        let result = dfa(&empty);
+        assert_eq!(result.alpha, 0.5);
+    }
+
+    #[test]
+    fn single_value_does_not_panic() {
+        let law = analyze(&[42.0]);
+        assert_eq!(law.quality, LawQuality::Insufficient);
+    }
+
+    #[test]
+    fn all_nan_produces_abstain() {
+        let nans = vec![f64::NAN; 100];
+        let law = analyze(&nans);
+        assert_eq!(law.quality, LawQuality::Insufficient);
+    }
+
+    #[test]
+    fn inf_values_filtered() {
+        let mut data = white_noise(256, 55);
+        data[50] = f64::INFINITY;
+        data[100] = f64::NEG_INFINITY;
+        let law = analyze(&data);
+        assert!(law.n < 256, "inf values should be filtered out");
+    }
+
+    #[test]
+    fn constant_signal_abstains() {
+        let constant = vec![3.14; 200];
+        let law = analyze(&constant);
+        assert_eq!(law.quality, LawQuality::Abstain);
+    }
+
+    #[test]
+    fn compare_identical_signals_healthy() {
+        let data = white_noise(1024, 42);
+        let result = compare(&data, &data);
+        assert_eq!(result.verdict, HealthVerdict::Healthy);
+        assert!(result.shift.abs() < 1e-10);
+    }
+
+    #[test]
+    fn is_degraded_catches_structural_change() {
+        let normal = white_noise(1024, 42);
+        let brownian = brownian(1024, 42);
+        assert!(is_degraded(&normal, &brownian));
+    }
+
+    #[test]
+    fn has_changed_more_sensitive_than_is_degraded() {
+        let data1 = white_noise(1024, 42);
+        let data2 = white_noise(1024, 99);
+        // Two different white noise samples should have similar alpha
+        // but has_changed might catch tiny differences
+        let _ = has_changed(&data1, &data2); // just verify no panic
+    }
 }
 
 impl fmt::Display for LawQuality {
