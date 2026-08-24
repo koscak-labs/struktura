@@ -18,6 +18,8 @@ jobs:
         run: cargo install mdbook
       - name: Build docs
         run: cd docs && mdbook build
+      - name: Copy playground into docs
+        run: cp -r playground docs/book/playground
       - name: Setup Pages
         uses: actions/configure-pages@v5
       - name: Upload artifact
