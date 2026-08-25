@@ -1,6 +1,6 @@
 [package]
 name = "struktura"
-version = "1.7.1"
+version = "1.7.2"
 edition = "2021"
 rust-version = "1.70"
 description = "Predict failure before it happens. Detects when a signal's structure changes — before thresholds fire. Spacecraft, finance, text, IoT. 85x faster than Python. no_std."
@@ -11,7 +11,7 @@ homepage = "https://koscak-labs.github.io/struktura"
 keywords = ["anomaly-detection", "dfa", "time-series", "spacecraft", "health-monitor"]
 categories = ["science", "algorithms", "no-std"]
 readme = "README.md"
-exclude = ["data/genome/", "data/heliopause/", "data/ims/", "data/austen_shuffled.txt", "data/voyager1_2021_healthy.csv", "docs/", "test-ogma-*", "node_modules/", "*.dat", "*.zip", "assets/", "social-preview.*", "PROMOTION_*"]
+exclude = ["data/genome/", "data/heliopause/", "data/ims/", "data/ims_2nd_*", "data/ims_monitor_*", "data/ims/extracted/", "data/smap_msl/", "data/austen_shuffled.txt", "data/voyager1_2021_healthy.csv", "data/bench_*", "data/_bench_*", "data/sylv_*", "docs/", "test-ogma-*", "node_modules/", "*.dat", "*.zip", "assets/", "social-preview.*", "PROMOTION_*", "PROMO_*", "DRAFT_*", "ogma-template/", "examples/rover.csv", "PAPER_DRAFT.md"]
 
 [features]
 default = ["std"]
@@ -30,8 +30,13 @@ pyo3 = { version = "0.23", features = ["extension-module"], optional = true }
 libm = "0.2"
 
 [dev-dependencies]
+anomaly_detection = "0.3.1"
 proptest = "1"
 
 [[example]]
 name = "benchmark"
 path = "examples/benchmark.rs"
+
+[[example]]
+name = "comparison"
+path = "examples/comparison.rs"
