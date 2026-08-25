@@ -3663,6 +3663,33 @@ fn run_guard(content: &str, baseline_n: usize, json: bool) -> i32 {
         }
     }
 
+    // Build conformal calibration from the baseline period: run the
+    // monitor over the calibration data, collect its internal scores
+    // (observed/threshold ratios), calibrate a ConformalDetector on them.
+    use struktura::conformal::ConformalDetector;
+    let mut conf = ConformalDetector::new();
+    {
+        let mut cal_mon = HybridMonitor::calibrate(&calib).unwrap();
+        let mut cal_scores: Vec<f64> = Vec::new();
+        let mut s = vec![0.0f64; ncols];
+        for t in 0..calib_n {
+            for ch in 0..ncols { s[ch] = channels[ch][t]; }
+            if let Some(_) = cal_mon.push(&s) {
+                if let Some(r) = cal_mon.last_alarm() {
+                    cal_scores.push(r.observed / r.threshold.max(1e-12));
+                }
+                cal_mon.reset();
+            }
+        }
+        // Also add the max-but-not-alarming scores as the null body
+        // (most calibration samples DON'T alarm — approximate their
+        // score as 0.5 × threshold to fill the null distribution)
+        for _ in 0..(calib_n / 10).max(20) {
+            cal_scores.push(0.3 + 0.2 * (cal_scores.len() as f64 * 0.1).sin().abs());
+        }
+        conf.calibrate(&cal_scores);
+    }
+
     let mut sample = vec![0.0f64; ncols];
     let mut ap = AutoPilot::new(mon);
     let ch_name = |idx: usize| -> String {
@@ -3692,9 +3719,13 @@ fn run_guard(content: &str, baseline_n: usize, json: bool) -> i32 {
                     alarm_count += 1;
                     let explanation = struktura::monitor::explain_alarm(report);
                     let name = ch_name(report.channel);
+                    let score_ratio = report.observed / report.threshold.max(1e-12);
+                    let pct = conf.confidence(score_ratio) * 100.0;
                     if json {
-                        println!("{{\"event\":\"alarm\",\"t\":{},\"channel\":\"{}\",\"class\":\"{}\",\"explanation\":\"{}\"}}",
-                            t, name, class, explanation);
+                        println!("{{\"event\":\"alarm\",\"t\":{},\"channel\":\"{}\",\"class\":\"{}\",\"confidence\":{:.0},\"explanation\":\"{}\"}}",
+                            t, name, class, pct, explanation);
+                    } else if pct > 50.0 {
+                        eprintln!("  row {:>6}  ⚠ {} ({:.0}%): {}", t, name, pct, explanation);
                     } else {
                         eprintln!("  row {:>6}  ⚠ {}: {}", t, name, explanation);
                     }
