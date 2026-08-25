@@ -3804,12 +3804,35 @@ fn cmd_when(args: &[String]) {
 
     let cps = find_changepoints(&data, 128, max);
 
+    // Conformal confidence per changepoint: how likely is this shift to
+    // be real vs random chance? Calibrated from 50 random splits.
+    use struktura::{conformal::ConformalDetector, dfa};
+    let mut conf = ConformalDetector::new();
+    {
+        let half = data.len() / 2;
+        if half >= 64 {
+            let mut null_shifts = Vec::new();
+            for seed in 0..50u64 {
+                let mut state = seed * 7919 + 1;
+                let mut s = data.clone();
+                for i in (1..s.len()).rev() {
+                    state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                    let j = (state >> 33) as usize % (i + 1);
+                    s.swap(i, j);
+                }
+                null_shifts.push((dfa(&s[..half]).alpha - dfa(&s[half..]).alpha).abs());
+            }
+            conf.calibrate(&null_shifts);
+        }
+    }
+
     if json {
         print!("[");
         for (i, cp) in cps.iter().enumerate() {
             if i > 0 { print!(","); }
-            print!("{{\"at\":{},\"alpha_before\":{:.3},\"alpha_after\":{:.3},\"shift\":{:.3}}}",
-                cp.location, cp.alpha_before, cp.alpha_after, cp.shift);
+            let pct = conf.confidence(cp.shift.abs()) * 100.0;
+            print!("{{\"at\":{},\"alpha_before\":{:.3},\"alpha_after\":{:.3},\"shift\":{:.3},\"confidence\":{:.0}}}",
+                cp.location, cp.alpha_before, cp.alpha_after, cp.shift, pct);
         }
         println!("]");
         return;
@@ -3827,7 +3850,9 @@ fn cmd_when(args: &[String]) {
             let before_interp = interpret_alpha(cp.alpha_before);
             let after_interp = interpret_alpha(cp.alpha_after);
             let direction = if cp.shift > 0.0 { "more correlated" } else { "less correlated" };
-            println!("  {}. \x1b[33msample {}\x1b[0m — structure shifted {:+.3}", i + 1, cp.location, cp.shift);
+            let pct = conf.confidence(cp.shift.abs()) * 100.0;
+            let conf_str = if pct > 50.0 { format!(" ({:.0}% confidence)", pct) } else { String::new() };
+            println!("  {}. \x1b[33msample {}\x1b[0m — structure shifted {:+.3}{}", i + 1, cp.location, cp.shift, conf_str);
             println!("     before: α={:.3} ({})", cp.alpha_before, before_interp);
             println!("     after:  α={:.3} ({})", cp.alpha_after, after_interp);
             println!("     → the signal became {} after this point", direction);
