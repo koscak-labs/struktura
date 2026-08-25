@@ -316,26 +316,24 @@ mod tests {
             }
             for ev in ap.push(&sample, &valid) {
                 match ev {
-                    Event::Quarantined { tick, channel } => {
-                        if channel == 2 && quarantine_at.is_none() {
+                    Event::Quarantined { tick, channel }
+                        if channel == 2 && quarantine_at.is_none() => {
                             quarantine_at = Some(tick);
                         }
-                    }
                     Event::Recalibrated { tick } => {
                         recal_count += 1;
                         if recal_at.is_none() {
                             recal_at = Some(tick);
                         }
                     }
-                    Event::Alarm { tick, report, class } => {
+                    Event::Alarm { tick, report, class }
                         if tick > 17_000
                             && report.channel == 0
                             && class == "drift_confirmed"
                             && drift_alarm_at.is_none()
-                        {
+                        => {
                             drift_alarm_at = Some(tick);
                         }
-                    }
                     _ => {}
                 }
             }

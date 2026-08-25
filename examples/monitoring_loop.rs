@@ -10,7 +10,7 @@
 //! - Financial market surveillance
 //! - Industrial equipment health
 
-use struktura::{BaselineTracker, HealthVerdict, analyze, compare};
+use struktura::{BaselineTracker, HealthVerdict, compare};
 
 fn main() {
     println!("=== Production Monitoring Pattern ===\n");

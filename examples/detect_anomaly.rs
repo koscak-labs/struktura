@@ -7,7 +7,7 @@
 //! struktura scan your_data.csv
 //! ```
 
-use struktura::{analyze, compare, is_degraded, LawQuality};
+use struktura::{compare, is_degraded};
 
 fn main() {
     println!("=== Anomaly Detection — Zero Configuration ===\n");

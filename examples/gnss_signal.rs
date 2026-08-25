@@ -39,7 +39,7 @@ fn main() {
         let data: Vec<f64> = std::fs::read_to_string(&args[1])
             .expect("cannot read file")
             .lines()
-            .filter_map(|l| l.trim().split(',').last()?.trim().parse().ok())
+            .filter_map(|l| l.trim().split(',').next_back()?.trim().parse().ok())
             .collect();
         println!("  loaded {} samples from {}", data.len(), args[1]);
         let law = analyze(&data);

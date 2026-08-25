@@ -305,11 +305,7 @@ mod tests {
     #[test]
     fn detects_stuck_sensor() {
         let mut mon = RoverMonitor::new();
-        let mut cal = FCalib::default();
-        cal.ar_a = 1.0; // predict ~1.0 always (simple baseline)
-        cal.ar_b = 0.0;
-        cal.ar_sd = 0.05; // noise scale
-        cal.max_run = 2;
+        let cal = FCalib { ar_a: 1.0, ar_b: 0.0, ar_sd: 0.05, max_run: 2, ..FCalib::default() };
         for ch in 0..N_CH { mon.calibrate_channel(ch, cal); }
         mon.set_residual_threshold(20.0); // high enough for normal noise
 

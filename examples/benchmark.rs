@@ -15,12 +15,10 @@ fn fractal_noise(n: usize, h: f64, seed: u64) -> Vec<f64> {
     let mut step = n / 2;
     let mut scale = 1.0f64;
     while step >= 1 {
-        let mut idx = 0;
-        for i in (step..n).step_by(step * 2) {
+        for (idx, i) in (step..n).step_by(step * 2).enumerate() {
             let left = if i >= step { data[i - step] } else { 0.0 };
             let right = if i + step < n { data[i + step] } else { data[i - step] };
             data[i] = (left + right) / 2.0 + scale * white[idx % n];
-            idx += 1;
         }
         step /= 2;
         scale *= (0.5f64).powf(h);

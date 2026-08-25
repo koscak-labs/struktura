@@ -6,8 +6,8 @@
 //! usage:
 //!   cargo run --release --example esa_adb_mission1 -- path/to/csv/
 
-use struktura::{dfa, analyze};
-use std::{fs, path::Path, time::Instant};
+use struktura::dfa;
+use std::{fs, time::Instant};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -29,7 +29,7 @@ fn main() {
     let mut entries: Vec<_> = fs::read_dir(csv_dir)
         .expect("cannot read dir")
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map_or(false, |x| x == "csv"))
+        .filter(|e| e.path().extension().is_some_and(|x| x == "csv"))
         .collect();
     entries.sort_by_key(|e| e.file_name());
 
@@ -38,7 +38,7 @@ fn main() {
         let name = path.file_stem().unwrap().to_string_lossy().to_string();
         let content = fs::read_to_string(&path).unwrap();
         let values: Vec<f64> = content.lines().skip(1)
-            .filter_map(|l| l.split(',').last()?.trim().parse().ok())
+            .filter_map(|l| l.split(',').next_back()?.trim().parse().ok())
             .filter(|v: &f64| v.is_finite())
             .collect();
 

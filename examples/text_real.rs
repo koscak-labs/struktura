@@ -1,4 +1,4 @@
-use struktura::text::{text_structure, sentence_lengths};
+use struktura::text::text_structure;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -16,7 +16,7 @@ fn main() {
             Err(e) => { eprintln!("  {}: {}", path, e); continue; }
         };
         let result = text_structure(&text);
-        let lens = &result.sentence_lengths;
+        let _lens = &result.sentence_lengths;
 
         println!("  FILE: {}", path);
         println!("  sentences: {}  mean_len: {:.1} chars  total chars: {}", 

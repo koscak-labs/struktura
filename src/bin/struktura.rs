@@ -118,6 +118,7 @@ fn parse_multi_csv(content: &str) -> ParsedCsv {
 }
 
 impl ParsedCsv {
+    #[allow(dead_code)]
     fn ch_name(&self, idx: usize) -> String {
         self.col_names.get(idx).cloned().unwrap_or_else(|| format!("ch{}", idx))
     }
@@ -3673,7 +3674,7 @@ fn run_guard(content: &str, baseline_n: usize, json: bool) -> i32 {
     }
     let n = rows.len();
     let ncols = rows[0].len();
-    let calib_n = if baseline_n > 0 { baseline_n.min(n) } else { (n / 3).min(100_000).max(192) };
+    let calib_n = if baseline_n > 0 { baseline_n.min(n) } else { (n / 3).clamp(192, 100_000) };
 
     let channels: Vec<Vec<f64>> = (0..ncols)
         .map(|ch| rows.iter().map(|r| r.get(ch).copied().unwrap_or(0.0)).collect())
@@ -3712,7 +3713,7 @@ fn run_guard(content: &str, baseline_n: usize, json: bool) -> i32 {
         let mut s = vec![0.0f64; ncols];
         for t in 0..calib_n {
             for ch in 0..ncols { s[ch] = channels[ch][t]; }
-            if let Some(_) = cal_mon.push(&s) {
+            if cal_mon.push(&s).is_some() {
                 if let Some(r) = cal_mon.last_alarm() {
                     cal_scores.push(r.observed / r.threshold.max(1e-12));
                 }

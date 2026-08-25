@@ -199,6 +199,6 @@ mod tests {
             signal[i] = prev;
         }
         let cps = find_changepoints(&signal, 512, 3);
-        assert!(cps.len() >= 1, "should find at least 1 changepoint");
+        assert!(!cps.is_empty(), "should find at least 1 changepoint");
     }
 }

@@ -1,4 +1,4 @@
-use struktura::text::{text_structure, sentence_lengths};
+use struktura::text::text_structure;
 
 fn main() {
     // Test 1: Human literary prose (Melville style - varied sentence length)

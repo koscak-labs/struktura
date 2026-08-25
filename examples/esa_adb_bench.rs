@@ -9,7 +9,7 @@
 //! the benchmark runs DFA on each channel independently, computes per-window
 //! anomaly scores, and reports detection metrics against the labeled anomalies.
 
-use struktura::{dfa, anomaly_scores};
+use struktura::dfa;
 use std::fs;
 
 fn parse_multivariate_csv(path: &str) -> (Vec<Vec<f64>>, usize) {
@@ -60,9 +60,9 @@ fn main() {
     println!();
     println!("  analyzing {} channels...", nchan);
 
-    let window = 256;
-    let step = 128;
-    let threshold = 0.05;
+    let _window = 256;
+    let _step = 128;
+    let _threshold = 0.05;
     let mut shifts = Vec::new();
 
     for ch in 0..nchan {

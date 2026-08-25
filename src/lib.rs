@@ -1019,7 +1019,7 @@ mod tests {
 
     #[test]
     fn constant_signal_abstains() {
-        let constant = vec![3.14; 200];
+        let constant = vec![core::f64::consts::PI; 200];
         let law = analyze(&constant);
         assert_eq!(law.quality, LawQuality::Abstain);
     }
