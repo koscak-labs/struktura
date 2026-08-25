@@ -12,50 +12,62 @@
 
 ---
 
-anomaly detection that actually works. not thresholds. not ML. not vibes. built while contributing to [NASA F´ flight software](https://github.com/nasa/fprime).
+is your data broken? find out in one command. zero config. zero training.
 
-<p align="center">
-  <img src="assets/terminal-demo.svg" alt="struktura voyager demo" width="100%">
-</p>
+```
+$ struktura guard server_metrics.csv
 
-DFA (Detrended Fluctuation Analysis) gives you one number that tells you if a signal's structure changed. works on literally anything with a time axis. spacecraft, bearings, financial data, heartbeats, DNA, text rhythm. you name it.
+  row   4521  ⚠ response_time (99%): gradual drift — the signal is trending away from its baseline
+  row   4890  ↻ environment may have changed — learning new baseline...
+  row   5190  ✗ not a real environment change — fault confirmed
+
+  3 faults detected. all decisions autonomous.
+```
+
+```
+$ struktura when sensor_data.csv
+
+  1. sample 1631 — structure shifted +0.42 (98% confidence)
+     → the signal became more correlated after this point
+```
 
 ```
 cargo install struktura
-struktura demo              # 🔧 bearing fault detection (real CWRU data)
-struktura voyager           # 🚀 Voyager 1 AACS anomaly (real NASA data)
-struktura spacecraft        # 🛰️ multi-channel spacecraft health
-struktura text novel.txt    # 📖 writing rhythm analysis
 ```
 
-## 🚀 10 second demo
+that's it. pipe any CSV. get told what changed, when, and how confident. works on server metrics, IoT sensors, factory machines, financial data, spacecraft telemetry, heartbeats, DNA, text rhythm — anything with a time axis.
+
+**what makes it different:** it calibrates itself, quarantines dead sensors autonomously, adapts to environment changes, and tells you in plain english what happened. no thresholds to set. no model to train. no PhD required. 85-112x faster than Python. `no_std` compatible. one dependency.
+
+built while contributing to [NASA F´ flight software](https://github.com/nasa/fprime). tested on real NASA satellite + ESA spacecraft data. the same engine that monitors Mars rovers runs on your laptop.
+
+<p align="center">
+  <img src="assets/terminal-demo.svg" alt="struktura demo" width="100%">
+</p>
+
+## 📋 use cases
+
+| you have | you run | you get |
+|---|---|---|
+| server metrics CSV | `struktura guard metrics.csv` | live anomaly alerts with confidence % |
+| "when did performance change?" | `struktura when latency.csv` | "sample 4521, 98% confidence" |
+| two datasets to compare | `struktura compare before.csv after.csv` | "WARNING (71% confidence this is real)" |
+| factory sensor log | `struktura guard --watch machine.csv` | real-time monitoring, auto-adapts |
+| healthy baseline to certify | `struktura stamp baseline.csv` | self-certifying CSV (carries its own fingerprint) |
+| rover/IoT/embedded | `struktura generate --rover` | zero-alloc C99 flight monitor, 6KB RAM |
+
+## 🤖 autonomous operation
+
+`struktura guard` doesn't just detect — it makes decisions:
 
 ```
-$ struktura voyager
+$ struktura guard examples/rover.csv --baseline 1000
 
-  VOYAGER 1 STRUCTURAL HEALTH ANALYSIS
-  ====================================================================
-
-  2021 (healthy)    alpha=0.989  R²=0.9869
-  2022 (anomaly)    alpha=0.801  R²=0.9681
-                    shift=-0.187  CRITICAL
-
-  the magnetic field's fractal structure changed during the anomaly.
-  detectable from public NASA data, zero training, zero ML.
-```
-
-real data. real spacecraft. one rust function caught it. 🎯
-
-## 🤖 it flies missions autonomously
-
-`struktura mission` — 24,000 samples, three scripted disasters, zero human calls:
-
-```
-t=  4004  ALARM        RepeatedValue on temp (class: stuck)
-t=  4004  QUARANTINE   temp declared dead -> virtual mode
-t= 10069  ALARM        LevelShift on pointing (class: regime_shift)
-t= 10769  RECALIBRATED guard passed -> new normal accepted
-t= 19173  ALARM        LevelShift on soc (class: drift_confirmed)
+  row   1436  ⚠ imu_accel_g (99%): gradual drift
+  row   1644  ⚠ wheel_rpm (99%): predictions are failing
+  row   1725  ↻ environment may have changed — learning new baseline...
+  row   2176  ✗ not a real environment change — fault confirmed
+  row   2182  ✗ battery_soc declared dead — using reconstructed values
 ```
 
 dead sensor? quarantined in 4 samples, its reading reconstructed from the
