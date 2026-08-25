@@ -350,8 +350,35 @@ fn cmd_check(args: &[String]) {
     if let Some(b) = baseline {
         let verdict = health_check(&law, b);
         let (color, label) = verdict_color(verdict);
+        let shift = (law.dfa.alpha - b).abs();
+        // Conformal confidence: how extreme is this shift compared to
+        // what you'd see by chance on clean data?
+        use struktura::{conformal::ConformalDetector, dfa};
+        let mut conf = ConformalDetector::new();
+        let mut null_shifts = Vec::new();
+        let half = data.len() / 2;
+        if half >= 64 {
+            for seed in 0..50u64 {
+                let mut state = seed * 7919 + 1;
+                let mut shuffled = data.clone();
+                for i in (1..shuffled.len()).rev() {
+                    state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                    let j = (state >> 33) as usize % (i + 1);
+                    shuffled.swap(i, j);
+                }
+                let a1 = dfa(&shuffled[..half]).alpha;
+                let a2 = dfa(&shuffled[half..]).alpha;
+                null_shifts.push((a2 - a1).abs());
+            }
+            conf.calibrate(&null_shifts);
+        }
+        let conf_pct = conf.confidence(shift) * 100.0;
         println!();
-        println!("  >>> {}{}\x1b[0m", color, label);
+        if conf_pct > 50.0 {
+            println!("  >>> {}{}\x1b[0m ({:.0}% confidence)", color, label, conf_pct);
+        } else {
+            println!("  >>> {}{}\x1b[0m", color, label);
+        }
     }
 
     if args.iter().any(|a| a == "--shuffle") {
