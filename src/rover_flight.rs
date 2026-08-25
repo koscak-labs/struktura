@@ -210,13 +210,16 @@ impl RoverMonitor {
 
 static mut ROVER_MON: RoverMonitor = RoverMonitor::new();
 
-/// Initialize (reset) the global rover monitor. Call once at boot.
+/// # Safety
+/// Single-threaded only. Call once at boot before any other FFI function.
 #[no_mangle]
 pub unsafe extern "C" fn rover_monitor_init() {
-    ROVER_MON = RoverMonitor::new();
+    let mon = core::ptr::addr_of_mut!(ROVER_MON);
+    (*mon) = RoverMonitor::new();
 }
 
-/// Set calibration constants for one channel.
+/// # Safety
+/// `ch` must be < N_CH. Single-threaded only.
 #[no_mangle]
 pub unsafe extern "C" fn rover_monitor_calibrate_channel(
     ch: u32,
@@ -224,16 +227,19 @@ pub unsafe extern "C" fn rover_monitor_calibrate_channel(
     mean: f64, roll_max_dev: f64,
     max_run: u32, repeat_enabled: i32,
 ) {
-    ROVER_MON.calibrate_channel(ch as usize, FCalib {
+    let mon = &mut *core::ptr::addr_of_mut!(ROVER_MON);
+    mon.calibrate_channel(ch as usize, FCalib {
         ar_a, ar_b, ar_sd, mean, roll_max_dev, max_run,
         repeat_enabled: repeat_enabled != 0,
     });
 }
 
-/// Set the global residual z-threshold.
+/// # Safety
+/// Single-threaded only. Call after `rover_monitor_init`.
 #[no_mangle]
 pub unsafe extern "C" fn rover_monitor_set_res_threshold(thr: f64) {
-    ROVER_MON.set_residual_threshold(thr);
+    let mon = &mut *core::ptr::addr_of_mut!(ROVER_MON);
+    mon.set_residual_threshold(thr);
 }
 
 /// C-compatible alarm output (matches the struct in RoverHealthImpl.c).
@@ -244,17 +250,19 @@ pub struct CAlarm {
     pub tick: u32,
 }
 
-/// Push one sample vector. Returns 1 if an alarm fired (written to `out`),
-/// 0 otherwise. The monitor latches after an alarm until `rover_monitor_reset`.
+/// # Safety
+/// `sample` must point to N_CH valid f64s. `out` must be valid for write.
+/// Single-threaded only.
 #[no_mangle]
 pub unsafe extern "C" fn rover_monitor_push(
     sample: *const f64,
     out: *mut CAlarm,
 ) -> i32 {
+    let mon = &mut *core::ptr::addr_of_mut!(ROVER_MON);
     let s = core::slice::from_raw_parts(sample, N_CH);
     let mut arr = [0.0f64; N_CH];
     arr.copy_from_slice(s);
-    match ROVER_MON.push(&arr) {
+    match mon.push(&arr) {
         Some(alarm) => {
             (*out).leg = alarm.leg as u8;
             (*out).channel = alarm.channel;
@@ -265,10 +273,16 @@ pub unsafe extern "C" fn rover_monitor_push(
     }
 }
 
-/// Clear the alarm latch so the monitor resumes watching.
+/// # Safety
+/// Single-threaded only.
 #[no_mangle]
 pub unsafe extern "C" fn rover_monitor_reset() {
-    ROVER_MON.reset();
+    let mon = &mut *core::ptr::addr_of_mut!(ROVER_MON);
+    mon.reset();
+}
+
+impl Default for RoverMonitor {
+    fn default() -> Self { Self::new() }
 }
 
 #[cfg(test)]

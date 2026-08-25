@@ -97,7 +97,7 @@ impl RoverSim {
 
     /// Generate `n` samples of 10-channel rover telemetry.
     pub fn run(&mut self, n: usize) -> Vec<Vec<f64>> {
-        let mut channels = vec![Vec::with_capacity(n); ROVER_CHANNELS];
+        let mut channels: Vec<Vec<f64>> = (0..ROVER_CHANNELS).map(|_| Vec::with_capacity(n)).collect();
 
         // State variables
         let mut soc = 0.92f64;
@@ -162,7 +162,7 @@ impl RoverSim {
                         soc -= progress * 0.0002;
                         // Voltage sags more under load as internal resistance rises
                         let extra_sag = progress * 1.5 * drive_load;
-                        channels[5].last_mut().map(|v| *v -= extra_sag);
+                        if let Some(v) = channels[5].last_mut() { *v -= extra_sag; }
                     }
                     RoverFault::ThermalRunaway { channel, rate } => {
                         if *channel == 7 {
