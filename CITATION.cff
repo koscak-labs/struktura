@@ -20,5 +20,5 @@ abstract: >-
   Struktura detects structural shifts in any time-series signal
   using Detrended Fluctuation Analysis (DFA). Bearings, heartbeats,
   spacecraft, DNA. Zero deps, no_std, no hyperparameters.
-version: "1.7.0"
+version: "1.7.1"
 date-released: "2026-08-24"
