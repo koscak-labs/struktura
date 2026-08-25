@@ -822,7 +822,7 @@ fn cmd_heliopause() {
     println!();
     println!("  The magnetic field's long-range correlation structure changed");
     println!("  when Voyager crossed from solar wind into interstellar medium.");
-    println!("  Same 98 lines of C that detect bearing faults.");
+    println!("  The same DFA core that detects bearing faults.");
     println!();
 }
 
@@ -1207,7 +1207,7 @@ fn cmd_ims() {
     println!("  The bearing's structure STIFFENED (correlations appeared) 2+ hours");
     println!("  before final collapse. DFA detected a regime change — the bearing");
     println!("  entered a new mechanical state before it destroyed itself.");
-    println!("  Same 98 lines of C. Same function as the heliopause demo.");
+    println!("  The same DFA core. Same function as the heliopause demo.");
     println!();
 }
 

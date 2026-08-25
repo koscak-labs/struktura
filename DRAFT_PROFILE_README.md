@@ -26,7 +26,7 @@ per sample. yeah.
 - 🌌 the **edge of the solar system** (heliopause crossing, α shift in the field)
 - 🧬 what makes human DNA structurally different from a chimp's
 
-same 98 lines of math. zero training. works on anything with a time axis.
+zero training. works on anything with a time axis.
 
 ### currently cooking 🔭
 - benchmarking against NASA's SMAP satellite + **Curiosity rover** labeled
