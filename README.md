@@ -148,6 +148,7 @@ let mut rwa = SpacecraftMonitor::new(Subsystem::ReactionWheel, "RWA_current");
 |--------|--------|-----------|---------|-------|---------|
 | 🔧 **bearings** | CWRU 12kHz vibration | 0.689 | 0.183 | -0.506 | CRITICAL |
 | 🚀 **spacecraft** | Voyager 1 magnetometer | 0.989 | 0.801 | -0.187 | CRITICAL |
+| 🛰️ **ESA satellites** | ESA-ADB Mission 1 (76 ch) | — | — | — | **65/65 detected** |
 | 📖 **text** | Austen vs shuffled | 0.749 | 0.572 | -0.177 | detected |
 | 🧬 **genome** | Human chr1 GC% | 0.909 | | | R²=0.991 |
 | ❤️ **cardiac** | HRV RR intervals | 0.695 | | | R²=0.985 |
