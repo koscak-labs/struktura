@@ -12,7 +12,7 @@
 
 ---
 
-anomaly detection that actually works. not thresholds. not ML. not vibes.
+anomaly detection that actually works. not thresholds. not ML. not vibes. built while contributing to [NASA F´ flight software](https://github.com/nasa/fprime).
 
 <p align="center">
   <img src="assets/terminal-demo.svg" alt="struktura voyager demo" width="100%">
@@ -106,6 +106,22 @@ broke through.
 at 1Hz spacecraft telemetry: 0.24ms per analysis = **4,000 channels on one core**. yeah.
 
 reproduce it yourself: `cargo run --release --example speed_bench`
+
+## 🏆 head-to-head: struktura vs alternatives
+
+tested on real datasets against [ankane/AnomalyDetection.rs](https://github.com/ankane/AnomalyDetection.rs) (STL decomposition) and classic 3σ threshold:
+
+| dataset | struktura | ankane (STL) | threshold (3σ) |
+|---------|-----------|-------------|----------------|
+| **IMS bearing failure** (NASA) | YES, 46μs | YES, 696μs | YES, 0μs |
+| **Voyager heliopause** (NASA) | **YES**, 570μs | **no** | YES, 0μs |
+| **synthetic correlation shift** | no | no | no |
+
+struktura catches the Voyager structural shift that ankane completely misses — at 100x less latency. on the synthetic correlation change, nobody detects via simple API (that's the honest frontier we're working on). threshold is fastest but only catches amplitude anomalies, not structural changes.
+
+different tools for different fault types. DFA detects when the STRUCTURE of a signal changes — not when values go out of bounds. ankane/threshold catch amplitude outliers. use both.
+
+reproduce: `cargo run --release --example comparison`
 
 ## 🔧 as a library
 

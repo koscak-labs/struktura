@@ -3914,7 +3914,7 @@ fn generate_ros_package() -> String {
     s.push_str("<package format=\"3\">\n");
     s.push_str("  <name>dfa_monitor</name>\n  <version>1.0.0</version>\n");
     s.push_str("  <description>DFA structural health monitor for ROS 2</description>\n");
-    s.push_str("  <maintainer email=\"phil@koscak.ai\">Phil Koscak</maintainer>\n");
+    s.push_str("  <maintainer email=\"maintainer@example.com\">koscak-labs</maintainer>\n");
     s.push_str("  <license>MIT</license>\n\n");
     s.push_str("  <buildtool_depend>ament_cmake</buildtool_depend>\n");
     s.push_str("  <depend>rclcpp</depend>\n  <depend>std_msgs</depend>\n\n");

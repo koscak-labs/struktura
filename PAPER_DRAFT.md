@@ -1,6 +1,6 @@
 # Universal Structural Health Detection via Detrended Fluctuation Analysis
 
-Phil Koščák, Juraj Koščák
+Phil Koščák
 
 ## Abstract
 
