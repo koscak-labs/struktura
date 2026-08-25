@@ -1344,6 +1344,7 @@ pub mod smap_eval;
 #[cfg(feature = "std")]
 pub mod rover;
 pub mod rover_flight;
+pub mod conformal;
 #[cfg(feature = "wasm")]
 pub mod wasm;
 #[cfg(feature = "python")]
