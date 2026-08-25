@@ -460,10 +460,42 @@ fn cmd_compare(args: &[String]) {
     println!("  CURRENT:");
     print_law_detail(&law_b);
 
+    let shift = law_b.dfa.alpha - law_a.dfa.alpha;
     let verdict = health_check(&law_b, law_a.dfa.alpha);
     let (color, label) = verdict_color(verdict);
+
+    let direction = if shift > 0.0 { "more correlated (more persistent)" }
+                    else { "less correlated (more random)" };
     println!();
-    println!("  >>> {}{}\x1b[0m", color, label);
+    println!("  shift: {:+.3} — the signal became {}", shift, direction);
+
+    // Conformal confidence via shuffle null
+    use struktura::{conformal::ConformalDetector, dfa};
+    let mut conf = ConformalDetector::new();
+    let combined: Vec<f64> = data_a.iter().chain(data_b.iter()).cloned().collect();
+    let half = combined.len() / 2;
+    if half >= 64 {
+        let mut null_shifts = Vec::new();
+        for seed in 0..50u64 {
+            let mut state = seed * 7919 + 1;
+            let mut s = combined.clone();
+            for i in (1..s.len()).rev() {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                let j = (state >> 33) as usize % (i + 1);
+                s.swap(i, j);
+            }
+            null_shifts.push((dfa(&s[..half]).alpha - dfa(&s[half..]).alpha).abs());
+        }
+        conf.calibrate(&null_shifts);
+        let pct = conf.confidence(shift.abs()) * 100.0;
+        if pct > 50.0 {
+            println!("  >>> {}{}\x1b[0m ({:.0}% confidence this is a real change)", color, label, pct);
+        } else {
+            println!("  >>> {}{}\x1b[0m (low confidence — could be noise)", color, label);
+        }
+    } else {
+        println!("  >>> {}{}\x1b[0m", color, label);
+    }
     println!();
 }
 
