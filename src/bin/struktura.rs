@@ -72,6 +72,57 @@ fn parse_values_col(content: &str, column: Option<usize>) -> Vec<f64> {
         .collect()
 }
 
+/// Parsed multi-column CSV with smart header/delimiter detection.
+struct ParsedCsv {
+    rows: Vec<Vec<f64>>,
+    col_names: Vec<String>,
+    ncols: usize,
+}
+
+/// Smart CSV parser: auto-detect delimiter, skip headers, skip non-numeric
+/// columns, handle # comments, BOM, quoted fields. Used by guard/watch/report.
+fn parse_multi_csv(content: &str) -> ParsedCsv {
+    let delim = if content.lines().next().unwrap_or("").contains('\t') { '\t' }
+                else if content.lines().next().unwrap_or("").contains(';') { ';' }
+                else { ',' };
+    let mut rows: Vec<Vec<f64>> = Vec::new();
+    let mut col_mask: Option<Vec<bool>> = None;
+    let mut col_names: Vec<String> = Vec::new();
+    let mut header_seen = false;
+    for line in content.lines() {
+        let line = line.trim().trim_start_matches('\u{feff}');
+        if line.is_empty() || line.starts_with('#') { continue; }
+        let fields: Vec<&str> = line.split(delim).map(|s| s.trim().trim_matches('"')).collect();
+        if col_mask.is_none() {
+            let mask: Vec<bool> = fields.iter().map(|s| s.parse::<f64>().is_ok()).collect();
+            if mask.iter().all(|&m| !m) {
+                col_names = fields.iter().map(|s| s.to_string()).collect();
+                header_seen = true;
+                continue;
+            }
+            if header_seen && !col_names.is_empty() {
+                col_names = col_names.iter().zip(mask.iter())
+                    .filter(|(_, &m)| m).map(|(n, _)| n.clone()).collect();
+            }
+            col_mask = Some(mask);
+        }
+        let mask = col_mask.as_ref().unwrap();
+        let vals: Vec<f64> = fields.iter().zip(mask.iter())
+            .filter(|(_, &m)| m)
+            .filter_map(|(s, _)| s.parse().ok())
+            .collect();
+        if !vals.is_empty() { rows.push(vals); }
+    }
+    let ncols = rows.first().map(|r| r.len()).unwrap_or(0);
+    ParsedCsv { rows, col_names, ncols }
+}
+
+impl ParsedCsv {
+    fn ch_name(&self, idx: usize) -> String {
+        self.col_names.get(idx).cloned().unwrap_or_else(|| format!("ch{}", idx))
+    }
+}
+
 fn quality_str(q: LawQuality) -> &'static str {
     match q {
         LawQuality::Exact => "EXACT",
@@ -3346,36 +3397,11 @@ fn run_guard_watch(path: &str, baseline_n: usize, json: bool, poll_ms: u64) -> !
         process::exit(2);
     });
 
-    let delim = if initial.lines().next().unwrap_or("").contains('\t') { '\t' }
-                else if initial.lines().next().unwrap_or("").contains(';') { ';' }
-                else { ',' };
-
-    let parse_row = |line: &str, mask: &[bool]| -> Option<Vec<f64>> {
-        let fields: Vec<&str> = line.split(delim).map(|s| s.trim().trim_matches('"')).collect();
-        let vals: Vec<f64> = fields.iter().zip(mask.iter())
-            .filter(|(_, &m)| m)
-            .filter_map(|(s, _)| s.parse().ok())
-            .collect();
-        if vals.is_empty() { None } else { Some(vals) }
-    };
-
-    // Build column mask + initial rows
-    let mut col_mask: Vec<bool> = Vec::new();
-    let mut rows: Vec<Vec<f64>> = Vec::new();
-    let mut _header_lines = 0usize;
-    for line in initial.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') { _header_lines += 1; continue; }
-        if col_mask.is_empty() {
-            let fields: Vec<&str> = line.split(delim).map(|s| s.trim().trim_matches('"')).collect();
-            col_mask = fields.iter().map(|s| s.parse::<f64>().is_ok()).collect();
-            if col_mask.iter().all(|&m| !m) { _header_lines += 1; col_mask.clear(); continue; }
-        }
-        if let Some(v) = parse_row(line, &col_mask) { rows.push(v); }
-    }
+    let parsed = parse_multi_csv(&initial);
+    let rows = parsed.rows;
     if rows.is_empty() { eprintln!("no numeric rows"); process::exit(2); }
-    let ncols = rows[0].len();
-    let calib_n = if baseline_n > 0 { baseline_n.min(rows.len()) } else { rows.len().min(rows.len()) };
+    let ncols = parsed.ncols;
+    let calib_n = if baseline_n > 0 { baseline_n.min(rows.len()) } else { rows.len() };
 
     let channels: Vec<Vec<f64>> = (0..ncols)
         .map(|ch| rows.iter().map(|r| r.get(ch).copied().unwrap_or(0.0)).collect())
@@ -3429,7 +3455,8 @@ fn run_guard_watch(path: &str, baseline_n: usize, json: bool, poll_ms: u64) -> !
         if new_lines.is_empty() { continue; }
         lines_seen += new_lines.len();
         for line in new_lines {
-            if let Some(vals) = parse_row(line, &col_mask) {
+            let vals: Vec<f64> = line.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+            if !vals.is_empty() {
                 for ch in 0..ncols { sample[ch] = vals.get(ch).copied().unwrap_or(0.0); }
                 for ev in ap.push(&sample, &valid) {
                     emit_dedup(t, &ev, json);
@@ -3633,49 +3660,9 @@ fn run_guard(content: &str, baseline_n: usize, json: bool) -> i32 {
     use struktura::monitor::HybridMonitor;
     use struktura::autopilot::{AutoPilot, Event};
 
-    // Smart CSV parsing: skip header rows, auto-detect delimiter (comma,
-    // tab, semicolon, space), skip timestamp/string columns, handle
-    // quoted fields. Real-world CSVs are messy.
-    let delim = if content.lines().next().unwrap_or("").contains('\t') {
-        '\t'
-    } else if content.lines().next().unwrap_or("").contains(';') {
-        ';'
-    } else {
-        ','
-    };
-    let mut rows: Vec<Vec<f64>> = Vec::new();
-    let mut col_mask: Option<Vec<bool>> = None;
-    let mut col_names: Vec<String> = Vec::new();
-    let mut header_seen = false;
-    for line in content.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') { continue; }
-        let fields: Vec<&str> = line.split(delim).map(|s| s.trim().trim_matches('"')).collect();
-        if col_mask.is_none() {
-            let mask: Vec<bool> = fields.iter().map(|s| s.parse::<f64>().is_ok()).collect();
-            if mask.iter().all(|&m| !m) {
-                // Header row — save the names of columns that will be numeric
-                // (we don't know which yet, so save all; filter after first data row)
-                col_names = fields.iter().map(|s| s.to_string()).collect();
-                header_seen = true;
-                continue;
-            }
-            if header_seen && !col_names.is_empty() {
-                // Filter col_names to only the numeric columns
-                col_names = col_names.iter().zip(mask.iter())
-                    .filter(|(_, &m)| m)
-                    .map(|(n, _)| n.clone())
-                    .collect();
-            }
-            col_mask = Some(mask);
-        }
-        let mask = col_mask.as_ref().unwrap();
-        let vals: Vec<f64> = fields.iter().zip(mask.iter())
-            .filter(|(_, &m)| m)
-            .filter_map(|(s, _)| s.parse().ok())
-            .collect();
-        if !vals.is_empty() { rows.push(vals); }
-    }
+    let parsed = parse_multi_csv(content);
+    let rows = parsed.rows;
+    let col_names = parsed.col_names;
     if rows.is_empty() {
         if json {
             println!("{{\"error\":\"no numeric rows\"}}");
