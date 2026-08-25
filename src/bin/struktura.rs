@@ -3635,7 +3635,7 @@ fn run_guard(content: &str, baseline_n: usize, json: bool) -> i32 {
     }
     let n = rows.len();
     let ncols = rows[0].len();
-    let calib_n = if baseline_n > 0 { baseline_n.min(n) } else { n / 3 };
+    let calib_n = if baseline_n > 0 { baseline_n.min(n) } else { (n / 3).min(100_000).max(192) };
 
     let channels: Vec<Vec<f64>> = (0..ncols)
         .map(|ch| rows.iter().map(|r| r.get(ch).copied().unwrap_or(0.0)).collect())
