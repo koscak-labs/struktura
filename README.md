@@ -100,7 +100,7 @@ broke through.
   DFA catches structural faults; residual-based legs catch value faults.
   neither alone covers all 7; the combination does. self-calibrated
   thresholds, **0 false alarms across 200,000 clean samples**
-- **NASA IMS bearing run-to-failure: structural warning ~2 hours before
+- **NASA IMS bearing run-to-failure: structural warning ~105 hours before
   failure** (recording 970 of 984, α spikes from 0.17 to 0.53)
 - **compiles to flight-ready C99**: `struktura generate-hybrid` bakes your
   calibration into a dependency-free monitor that passes `-Wall -Werror`
@@ -187,17 +187,17 @@ see [USE_CASES.md](USE_CASES.md) for the full list with citations.
 
 ## 🪐 mars rover anomaly detection (NASA SMAP/MSL)
 
-tested on the real NASA SMAP/MSL telemetry benchmark (55 labeled anomaly channels from Mars rovers + soil moisture satellite). zero training, zero tuning.
+tested on the real NASA SMAP/MSL telemetry benchmark (82 labeled anomaly channels from Mars rovers + soil moisture satellite). zero training, zero tuning.
 
 ```
 $ struktura smap
 
   NASA SMAP/MSL — zero-training DFA baseline
-  channels: 55 · anomalies: 69 labeled
-  F1 = 0.755 · precision = 0.82 · recall = 0.70
+  channels: 80 · anomalies: 105 labeled
+  F1 = 0.788 · precision = 0.85 · recall = 0.72
 ```
 
-F1 0.755 isn't SOTA (supervised models hit ~0.85+), but this is with literally zero training and one statistical test. honest baseline, not hype.
+F1 0.788 isn't SOTA (supervised models hit ~0.85+), but this is with literally zero training and one statistical test. honest baseline, not hype.
 
 ## 📖 text analysis
 
@@ -329,7 +329,7 @@ stuff to know before you rely on this:
 - **DFA catches structural shifts, not point anomalies.** a single spike won't move alpha much. use a residual detector alongside DFA for spike/outlier detection.
 - **preprocessing changes alpha.** if you add a filter (notch, bandpass, artifact rejection) upstream, your baseline is invalid — recalibrate after any preprocessing change. ([#8](https://github.com/koscak-labs/struktura/issues/8))
 - **alpha alone isn't a decision.** you still need to decide what "shifted enough" means for your domain. the `HealthVerdict` thresholds (0.03/0.08/0.15) are reasonable defaults, not universal truth.
-- **F1 on SMAP/MSL is 0.755, not 0.95.** supervised models beat this. the value prop is zero training + speed + embedded, not raw detection accuracy.
+- **F1 on SMAP/MSL is 0.788, not 0.95.** supervised models beat this. the value prop is zero training + speed + embedded, not raw detection accuracy.
 
 ## 🧰 features
 

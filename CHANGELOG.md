@@ -2,6 +2,21 @@
 
 All notable changes to Struktura are documented here.
 
+## v1.7.2 (2026-08-25) — Human-Readable Output + Conformal Confidence + Rover FFI
+
+- All alarms now show column names from CSV headers instead of ch0/ch1/ch2
+- Conformal confidence (%) on every alarm, changepoint, check, and compare
+- `stamp` command: self-certifying CSVs — data carries its own structural fingerprint
+- `rover` command + `rover_flight.rs` flight module (6KB, zero-alloc, const-constructible)
+- F Prime rover component template (`generate --rover`)
+- C FFI exports proven: linked + called from C test program
+- no_std build verified with rover_flight
+- Shared CSV parser (deduped from 3 copies)
+- Package size: 4.9MB → 551KB (excluded 162 NASA CSVs from crate)
+- README rebranded: problem-first ("is your data broken?") not math-first
+- Stale "98 lines" claims removed from CLI output
+- 92 tests pass
+
 ## v1.7.0 (2026-08-24) — Guard Mode + Changepoints + 80 Tests
 
 - `guard` command: pipe any CSV and get live anomaly detection with `--watch` tail mode
