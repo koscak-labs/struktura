@@ -3534,33 +3534,37 @@ fn run_guard(content: &str, baseline_n: usize, json: bool) -> i32 {
         ','
     };
     let mut rows: Vec<Vec<f64>> = Vec::new();
-    let mut col_mask: Option<Vec<bool>> = None; // which columns are numeric
+    let mut col_mask: Option<Vec<bool>> = None;
+    let mut col_names: Vec<String> = Vec::new();
+    let mut header_seen = false;
     for line in content.lines() {
         let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
+        if line.is_empty() || line.starts_with('#') { continue; }
         let fields: Vec<&str> = line.split(delim).map(|s| s.trim().trim_matches('"')).collect();
         if col_mask.is_none() {
-            // First non-empty line: probe which columns parse as f64
             let mask: Vec<bool> = fields.iter().map(|s| s.parse::<f64>().is_ok()).collect();
             if mask.iter().all(|&m| !m) {
-                // Entire first row is non-numeric → header row, skip it
-                col_mask = None;
+                // Header row — save the names of columns that will be numeric
+                // (we don't know which yet, so save all; filter after first data row)
+                col_names = fields.iter().map(|s| s.to_string()).collect();
+                header_seen = true;
                 continue;
+            }
+            if header_seen && !col_names.is_empty() {
+                // Filter col_names to only the numeric columns
+                col_names = col_names.iter().zip(mask.iter())
+                    .filter(|(_, &m)| m)
+                    .map(|(n, _)| n.clone())
+                    .collect();
             }
             col_mask = Some(mask);
         }
         let mask = col_mask.as_ref().unwrap();
-        let vals: Vec<f64> = fields
-            .iter()
-            .zip(mask.iter())
+        let vals: Vec<f64> = fields.iter().zip(mask.iter())
             .filter(|(_, &m)| m)
             .filter_map(|(s, _)| s.parse().ok())
             .collect();
-        if !vals.is_empty() {
-            rows.push(vals);
-        }
+        if !vals.is_empty() { rows.push(vals); }
     }
     if rows.is_empty() {
         if json {
@@ -3592,11 +3596,19 @@ fn run_guard(content: &str, baseline_n: usize, json: bool) -> i32 {
     };
 
     if !json {
-        eprintln!("struktura guard: {} samples x {} ch, calibrated on {} rows", n, ncols, calib_n);
+        if col_names.is_empty() {
+            eprintln!("struktura guard: {} samples x {} channels, calibrated on {} rows", n, ncols, calib_n);
+        } else {
+            eprintln!("struktura guard: {} samples x {} channels ({}), calibrated on {} rows",
+                n, ncols, col_names.join(", "), calib_n);
+        }
     }
 
     let mut sample = vec![0.0f64; ncols];
     let mut ap = AutoPilot::new(mon);
+    let ch_name = |idx: usize| -> String {
+        col_names.get(idx).cloned().unwrap_or_else(|| format!("ch{}", idx))
+    };
     let mut alarm_count = 0usize;
     let mut adapt_count = 0usize;
     let mut quarantine_count = 0usize;
@@ -3620,19 +3632,21 @@ fn run_guard(content: &str, baseline_n: usize, json: bool) -> i32 {
                     if dup { continue; }
                     alarm_count += 1;
                     let explanation = struktura::monitor::explain_alarm(report);
+                    let name = ch_name(report.channel);
                     if json {
-                        println!("{{\"event\":\"alarm\",\"t\":{},\"channel\":{},\"class\":\"{}\",\"explanation\":\"{}\"}}",
-                            t, report.channel, class, explanation);
+                        println!("{{\"event\":\"alarm\",\"t\":{},\"channel\":\"{}\",\"class\":\"{}\",\"explanation\":\"{}\"}}",
+                            t, name, class, explanation);
                     } else {
-                        eprintln!("  row {:>6}  ⚠ ch{}: {}", t, report.channel, explanation);
+                        eprintln!("  row {:>6}  ⚠ {}: {}", t, name, explanation);
                     }
                 }
                 Event::Quarantined { channel, .. } => {
                     quarantine_count += 1;
+                    let name = ch_name(*channel);
                     if json {
-                        println!("{{\"event\":\"quarantine\",\"t\":{},\"channel\":{}}}", t, channel);
+                        println!("{{\"event\":\"quarantine\",\"t\":{},\"channel\":\"{}\"}}", t, name);
                     } else {
-                        eprintln!("  row {:>6}  ✗ ch{} declared dead — using reconstructed values", t, channel);
+                        eprintln!("  row {:>6}  ✗ {} declared dead — using reconstructed values", t, name);
                     }
                 }
                 Event::AdaptationStarted { .. } => {
