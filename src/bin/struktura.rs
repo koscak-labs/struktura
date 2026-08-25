@@ -163,6 +163,7 @@ fn main() {
         "demo" => cmd_demo(),
         "check" => cmd_check(&args),
         "compare" => cmd_compare(&args),
+        "stamp" => cmd_stamp(&args),
         "bench" => cmd_bench(),
         "report" => cmd_report(&args),
         "validate" => cmd_validate(&args),
@@ -267,7 +268,11 @@ fn cmd_check(args: &[String]) {
     }
 
     let law = analyze(&data);
-    let mut baseline: Option<f64> = None;
+    // Auto-read baseline from struktura stamp if present and no --baseline given
+    let stamp_baseline = if path != "-" {
+        std::fs::read_to_string(path).ok().and_then(|c| read_stamp(&c))
+    } else { None };
+    let mut baseline: Option<f64> = stamp_baseline;
     let mut threshold: Option<f64> = None;
     let json_mode = args.iter().any(|a| a == "--json");
     let quiet_mode = args.iter().any(|a| a == "--quiet");
@@ -3480,6 +3485,52 @@ fn generate_rover_c_wrapper() -> String {
     s.push_str("    }\n");
     s.push_str("}\n");
     s
+}
+
+fn cmd_stamp(args: &[String]) {
+    if args.len() < 3 {
+        eprintln!("Usage: struktura stamp <file.csv>");
+        eprintln!("  Write a structural fingerprint into the CSV header.");
+        eprintln!("  guard/check auto-read the stamp as the baseline.");
+        process::exit(1);
+    }
+    let path = &args[2];
+    let content = std::fs::read_to_string(path).unwrap_or_else(|e| {
+        eprintln!("cannot read {}: {}", path, e);
+        process::exit(1);
+    });
+    let data = read_csv(path);
+    if data.len() < 64 {
+        eprintln!("need >= 64 samples, got {}", data.len());
+        process::exit(1);
+    }
+    let law = analyze(&data);
+    let stamp = format!(
+        "# struktura:baseline alpha={:.4} r2={:.4} hurst={:.4} n={} kurtosis={:.2}\n",
+        law.dfa.alpha, law.dfa.r_squared, law.hurst, law.n, law.kurtosis
+    );
+    // Write stamp + original content (skip any existing stamp line)
+    let mut out = stamp;
+    for line in content.lines() {
+        if line.starts_with("# struktura:baseline") { continue; }
+        out.push_str(line);
+        out.push('\n');
+    }
+    std::fs::write(path, &out).unwrap_or_else(|e| {
+        eprintln!("cannot write {}: {}", path, e);
+        process::exit(1);
+    });
+    eprintln!("stamped {}: alpha={:.4} r2={:.4} n={}", path, law.dfa.alpha, law.dfa.r_squared, law.n);
+}
+
+/// Read a struktura stamp from a CSV's first line, if present.
+fn read_stamp(content: &str) -> Option<f64> {
+    let first = content.lines().next()?.trim_start_matches('\u{feff}');
+    if !first.starts_with("# struktura:baseline") { return None; }
+    first.split_whitespace()
+        .find(|s| s.starts_with("alpha="))
+        .and_then(|s| s.strip_prefix("alpha="))
+        .and_then(|s| s.parse().ok())
 }
 
 fn cmd_rover() {
