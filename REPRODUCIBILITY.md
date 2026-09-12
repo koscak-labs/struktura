@@ -3,7 +3,7 @@
 Every measured claim in this repository maps to one command. All commands
 run from the repository root; the binary builds with
 `cargo build --release --bin struktura` (binary at `target/release/struktura`,
-or `C:\Oura\target\release\struktura.exe` with a shared target dir).
+or the equivalent path with a shared target dir).
 All benchmarks use deterministic seeds — outputs reproduce exactly.
 
 | Claim | Command | Verified output (2026-08-24) |
