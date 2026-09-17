@@ -203,10 +203,6 @@ pub fn dfa(values: &[f64]) -> DfaResult {
     dfa_into(values, &mut buf)
 }
 
-/// DFA with a caller-provided buffer, avoiding allocation.
-///
-/// `buf` is resized to `values.len()` and used for the cumulative sum.
-/// On embedded systems, pre-allocate once and reuse across calls.
 #[must_use]
 /// Prefix-sum DFA: identical boxes and mathematics to [`dfa_into`], but the
 /// per-segment sums (Σy, Σj·y, Σy²) are O(1) prefix-difference lookups
@@ -306,21 +302,53 @@ pub fn dfa_fast_into(values: &[f64], buf: &mut Vec<f64>) -> DfaResult {
     linreg(&log_s[..pts], &log_f[..pts])
 }
 
+/// DFA with a caller-provided buffer, avoiding allocation on the hot path.
+///
+/// `buf` is resized to `values.len()` and used for the cumulative sum.
+/// Pre-allocate once and reuse across calls. For a heap-free build use
+/// [`dfa_scratch`], which takes a plain slice.
+#[must_use]
 pub fn dfa_into(values: &[f64], buf: &mut Vec<f64>) -> DfaResult {
     let n = values.len();
     if n < 64 {
         return DfaResult { alpha: 0.5, r_squared: 0.0 };
     }
+    buf.clear();
+    buf.resize(n, 0.0);
+    dfa_scratch(values, buf)
+}
+
+/// Allocation-free DFA: the same mathematics as [`dfa_into`], with the
+/// cumulative profile written into a caller-owned slice. Runs on `no_std`
+/// targets with no heap at all; a stack array or a `static mut` buffer works.
+///
+/// `scratch` must hold at least `values.len()` elements; only the first
+/// `values.len()` are written. Returns the neutral result
+/// (`alpha = 0.5`, `r_squared = 0.0`) for fewer than 64 samples or a scratch
+/// slice that is too short.
+///
+/// ```
+/// use struktura::dfa_scratch;
+/// let signal: [f64; 256] = core::array::from_fn(|i| (i as f64 * 0.1).sin());
+/// let mut scratch = [0.0f64; 256];
+/// let r = dfa_scratch(&signal, &mut scratch);
+/// assert!(r.r_squared >= 0.0);
+/// ```
+#[must_use]
+pub fn dfa_scratch(values: &[f64], scratch: &mut [f64]) -> DfaResult {
+    let n = values.len();
+    if n < 64 || scratch.len() < n {
+        return DfaResult { alpha: 0.5, r_squared: 0.0 };
+    }
 
     let mean = values.iter().sum::<f64>() / n as f64;
 
-    buf.clear();
-    buf.reserve(n);
     let mut cum = 0.0;
-    for &v in values {
+    for (slot, &v) in scratch[..n].iter_mut().zip(values) {
         cum += v - mean;
-        buf.push(cum);
+        *slot = cum;
     }
+    let buf = &scratch[..n];
 
     // Adaptive box sizes: geometric spacing from max(16, n/50) to n/4.
     // Gives consistent accuracy across signal lengths — short signals
@@ -1325,6 +1353,43 @@ pub fn anomaly_scores(values: &[f64], window: usize, step: usize, threshold: f64
 }
 
 // ── Domain modules ──────────────────────────────────────────────────
+
+#[cfg(test)]
+mod scratch_tests {
+    use super::{dfa_into, dfa_scratch};
+
+    /// `dfa_scratch` must reproduce `dfa_into` bit for bit: same profile,
+    /// same boxes, same fit. A tolerance here would hide a real divergence.
+    #[test]
+    fn scratch_matches_into_bitwise() {
+        let signals: [Vec<f64>; 3] = [
+            (0..1024)
+                .map(|i| ((i as f64 * 1103515245.0 + 12345.0) % 65536.0) / 65536.0 - 0.5)
+                .collect(),
+            (0..2048).map(|i| (i as f64 * 0.013).sin()).collect(),
+            (0..4096)
+                .map(|i| (i as f64 * 0.007).sin() + (i as f64 * 0.0003))
+                .collect(),
+        ];
+        let mut buf = Vec::new();
+        for sig in &signals {
+            let mut scratch = vec![0.0f64; sig.len() + 7];
+            let a = dfa_into(sig, &mut buf);
+            let b = dfa_scratch(sig, &mut scratch);
+            assert_eq!(a.alpha.to_bits(), b.alpha.to_bits(), "alpha {} vs {}", a.alpha, b.alpha);
+            assert_eq!(a.r_squared.to_bits(), b.r_squared.to_bits());
+        }
+    }
+
+    #[test]
+    fn short_scratch_is_neutral() {
+        let sig: Vec<f64> = (0..256).map(|i| (i as f64 * 0.1).sin()).collect();
+        let mut short = [0.0f64; 255];
+        let r = dfa_scratch(&sig, &mut short);
+        assert_eq!(r.alpha, 0.5);
+        assert_eq!(r.r_squared, 0.0);
+    }
+}
 
 pub mod ffi;
 pub mod space;

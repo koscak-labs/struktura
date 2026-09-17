@@ -21,7 +21,15 @@ wasm = ["dep:wasm-bindgen"]
 python = ["dep:pyo3"]
 
 [lib]
-crate-type = ["lib", "cdylib", "staticlib"]
+# rlib only. Observed in 1.7.2 with crate-type = ["lib", "cdylib", "staticlib"]:
+# a dependent using `default-features = false` failed to build with
+#   error: no global memory allocator found but one is required
+#   error: `#[panic_handler]` function required, but not found
+#   error: unwinding panics are not supported without std
+# and built cleanly once the list was reduced to ["lib"] (see docs/evidence/).
+# The C artifacts are built on demand instead:
+#   cargo rustc --lib --release --crate-type cdylib --crate-type staticlib
+crate-type = ["lib"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"], optional = true }

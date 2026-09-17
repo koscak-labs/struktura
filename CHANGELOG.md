@@ -2,6 +2,21 @@
 
 All notable changes to Struktura are documented here.
 
+## Unreleased
+
+- `[lib] crate-type` reduced to `["lib"]`. Observed in 1.7.2: a dependent with
+  `default-features = false` failed to build with three errors (no global memory
+  allocator found; `#[panic_handler]` function required; unwinding panics are not
+  supported without std) and built cleanly with the reduced list. The C artifacts are
+  produced on demand with `cargo rustc --lib --release --crate-type cdylib --crate-type staticlib`.
+- New `dfa_scratch(values, &mut [f64])`: the DFA with the profile written into a
+  caller-owned slice, no heap required. `dfa_into` now wraps it; a test checks the two
+  agree bit for bit.
+- CI: a `no_std` job (bare-metal `thumbv7em-none-eabihf` library check plus a
+  dependent built with `default-features = false`) and a `c-ffi` job that builds the
+  static library and runs `tests/c/test_struktura.c`.
+- Evidence for the above: `docs/evidence/2026-09-17-nostd-*.log`.
+
 ## v1.7.2 (2026-08-25) — Human-Readable Output + Conformal Confidence + Rover FFI
 
 - All alarms now show column names from CSV headers instead of ch0/ch1/ch2
