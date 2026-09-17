@@ -428,31 +428,16 @@ fn cmd_check(args: &[String]) {
         let verdict = health_check(&law, b);
         let (color, label) = verdict_color(verdict);
         let shift = (law.dfa.alpha - b).abs();
-        // Conformal confidence: how extreme is this shift compared to
-        // what you'd see by chance on clean data?
-        use struktura::{conformal::ConformalDetector, dfa};
-        let mut conf = ConformalDetector::new();
-        let mut null_shifts = Vec::new();
-        let half = data.len() / 2;
-        if half >= 64 {
-            for seed in 0..50u64 {
-                let mut state = seed * 7919 + 1;
-                let mut shuffled = data.clone();
-                for i in (1..shuffled.len()).rev() {
-                    state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
-                    let j = (state >> 33) as usize % (i + 1);
-                    shuffled.swap(i, j);
-                }
-                let a1 = dfa(&shuffled[..half]).alpha;
-                let a2 = dfa(&shuffled[half..]).alpha;
-                null_shifts.push((a2 - a1).abs());
-            }
-            conf.calibrate(&null_shifts);
-        }
-        let conf_pct = conf.confidence(shift) * 100.0;
+        // Significance: the shift against the signal's own alpha spread
+        // across quarter-length windows (subsampling, see bootstrap_alpha).
+        // A shuffle null is wrong here: shuffling destroys the ordering
+        // that alpha measures and calibrates against ~0.5, not the baseline.
+        let ci = bootstrap_alpha(&data, 20);
+        let se = (ci.ci_high - ci.ci_low) / (2.0 * 1.96);
+        let z = if se > 0.0 { shift / se } else { f64::INFINITY };
         println!();
-        if conf_pct > 50.0 {
-            println!("  >>> {}{}\x1b[0m ({:.0}% confidence)", color, label, conf_pct);
+        if data.len() >= 256 {
+            println!("  >>> {}{}\x1b[0m (z={:.1} against this signal's alpha spread ±{:.3})", color, label, z, se * 1.96);
         } else {
             println!("  >>> {}{}\x1b[0m", color, label);
         }
@@ -546,29 +531,22 @@ fn cmd_compare(args: &[String]) {
     println!();
     println!("  shift: {:+.3} — the signal became {}", shift, direction);
 
-    // Conformal confidence via shuffle null
-    use struktura::{conformal::ConformalDetector, dfa};
-    let mut conf = ConformalDetector::new();
-    let combined: Vec<f64> = data_a.iter().chain(data_b.iter()).cloned().collect();
-    let half = combined.len() / 2;
-    if half >= 64 {
-        let mut null_shifts = Vec::new();
-        for seed in 0..50u64 {
-            let mut state = seed * 7919 + 1;
-            let mut s = combined.clone();
-            for i in (1..s.len()).rev() {
-                state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
-                let j = (state >> 33) as usize % (i + 1);
-                s.swap(i, j);
-            }
-            null_shifts.push((dfa(&s[..half]).alpha - dfa(&s[half..]).alpha).abs());
-        }
-        conf.calibrate(&null_shifts);
-        let pct = conf.confidence(shift.abs()) * 100.0;
-        if pct > 50.0 {
-            println!("  >>> {}{}\x1b[0m ({:.0}% confidence this is a real change)", color, label, pct);
+    // Significance: z of the shift against both signals' own alpha spread
+    // across quarter-length windows (subsampling, see bootstrap_alpha).
+    // The previous shuffle null calibrated against ~0.5 and reported
+    // "94% confidence" for shifts that sit inside either signal's spread.
+    if data_a.len() >= 256 && data_b.len() >= 256 {
+        let ca = bootstrap_alpha(&data_a, 20);
+        let cb = bootstrap_alpha(&data_b, 20);
+        let se_a = (ca.ci_high - ca.ci_low) / (2.0 * 1.96);
+        let se_b = (cb.ci_high - cb.ci_low) / (2.0 * 1.96);
+        let se = (se_a * se_a + se_b * se_b).sqrt();
+        let z = if se > 0.0 { shift.abs() / se } else { f64::INFINITY };
+        println!("  spread:    baseline ±{:.3}  current ±{:.3}  (95%, quarter-length windows)", se_a * 1.96, se_b * 1.96);
+        if z >= 3.0 {
+            println!("  >>> {}{}\x1b[0m (z={:.1}: the shift is outside both signals' own variability)", color, label, z);
         } else {
-            println!("  >>> {}{}\x1b[0m (low confidence — could be noise)", color, label);
+            println!("  >>> {}{}\x1b[0m (z={:.1}: the shift is within the signals' own variability, treat as inconclusive)", color, label, z);
         }
     } else {
         println!("  >>> {}{}\x1b[0m", color, label);
