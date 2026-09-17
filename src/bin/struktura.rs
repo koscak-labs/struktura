@@ -273,6 +273,9 @@ fn main() {
         "guard" => cmd_guard(&args),
         "when" => cmd_when(&args),
         "pipe" => cmd_pipe(&args),
+        "investigate" => cmd_investigate(&args),
+        "case" => cmd_case(&args),
+        "replay" => cmd_replay(&args),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -3980,4 +3983,297 @@ fn cmd_pipe(args: &[String]) {
             println!("alpha={:.4}  R²={:.4}  shift={:+.4}  {}", alpha, r2, shift, verdict);
         }
     }
+}
+
+// ── debugger commands (v1.8) ─────────────────────────────────────────
+
+fn cmd_investigate(args: &[String]) {
+    let mut file_path = String::new();
+    let mut context_path = String::new();
+    let mut baseline_n = 0usize;
+    let mut json = false;
+    let mut i = 2;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--context" if i + 1 < args.len() => { context_path = args[i + 1].clone(); i += 2; }
+            "--baseline" if i + 1 < args.len() => { baseline_n = args[i + 1].parse().unwrap_or(0); i += 2; }
+            "--json" => { json = true; i += 1; }
+            "--help" | "-h" => {
+                println!("struktura investigate <file.csv> [--context ctx.csv] [--baseline N] [--json]");
+                println!("  Run a full investigation: data quality, detection, incident grouping, report.");
+                println!("  --context  Sidecar CSV with operating context (mode, commands, annotations)");
+                println!("  --baseline Calibration window in samples (default: first 1/3 of the file)");
+                println!("  --json     Print incident records as JSON instead of human-readable report");
+                process::exit(0);
+            }
+            s if !s.starts_with('-') && file_path.is_empty() => { file_path = s.to_string(); i += 1; }
+            _ => { i += 1; }
+        }
+    }
+    if file_path.is_empty() {
+        eprintln!("Usage: struktura investigate <file.csv> [--context ctx.csv] [--baseline N]");
+        process::exit(2);
+    }
+    let content = std::fs::read_to_string(&file_path).unwrap_or_else(|e| {
+        eprintln!("cannot read {}: {}", file_path, e);
+        process::exit(2);
+    });
+    let (header, cols) = parse_csv_columns(&content);
+    let channels = cols.len();
+    let samples = if channels > 0 { cols[0].len() } else { 0 };
+    if channels == 0 || samples < 64 {
+        eprintln!("need at least 1 channel and 64 samples, got {}ch x {}s", channels, samples);
+        process::exit(2);
+    }
+
+    // Column schema from header
+    let schema = struktura::context::ColumnSchema::from_header(
+        &header.iter().map(|s| s.as_str()).collect::<Vec<_>>()
+    );
+    let measurement_cols = schema.measurement_indices();
+
+    // Extract measurement channels only
+    let meas_data: Vec<Vec<f64>> = measurement_cols.iter().map(|&i| cols[i].clone()).collect();
+    let meas_names: Vec<&str> = measurement_cols.iter().map(|&i| header[i].as_str()).collect();
+
+    // Calibration window
+    let baseline = if baseline_n > 0 { baseline_n.min(meas_data[0].len()) } else { meas_data[0].len() / 3 };
+    let calib: Vec<Vec<f64>> = meas_data.iter().map(|c| c[..baseline].to_vec()).collect();
+
+    // Data quality: count NaN/Inf per channel
+    let mut quality_issues = Vec::new();
+    for (ci, col) in meas_data.iter().enumerate() {
+        let bad = col.iter().filter(|v| !v.is_finite()).count();
+        if bad > 0 {
+            quality_issues.push(format!("  {} — {} non-finite values ({:.1}%)", meas_names[ci], bad, 100.0 * bad as f64 / col.len() as f64));
+        }
+    }
+
+    // Context timeline
+    let mut timeline = struktura::context::ContextTimeline::new();
+    if !context_path.is_empty() {
+        match struktura::context::ContextTimeline::from_csv(&context_path, 0, 1, 2) {
+            Ok(t) => timeline = t,
+            Err(e) => eprintln!("warning: could not parse context CSV: {}", e),
+        }
+    }
+
+    // Calibrate and run
+    let monitor = match struktura::monitor::HybridMonitor::calibrate(&calib) {
+        Some(m) => m,
+        None => {
+            eprintln!("calibration failed on {} samples x {} channels", baseline, meas_data.len());
+            process::exit(2);
+        }
+    };
+    let mut pilot = struktura::autopilot::AutoPilot::new(monitor);
+    let mut builder = struktura::incident::IncidentBuilder::new(10);
+    let valid: Vec<bool> = vec![true; meas_data.len()];
+
+    // Summary and quality issues go to stderr so --json stdout is clean JSON
+    eprintln!("struktura investigate: {} samples x {} channels, calibrated on {} rows", samples, meas_data.len(), baseline);
+    if !quality_issues.is_empty() {
+        eprintln!("\n⚠ Data quality issues:");
+        for q in &quality_issues { eprintln!("{}", q); }
+        eprintln!();
+    }
+
+    for t in baseline..meas_data[0].len() {
+        let row: Vec<f64> = meas_data.iter().map(|c| c[t]).collect();
+        let events = pilot.push(&row, &valid);
+        for ev in &events {
+            match ev {
+                struktura::autopilot::Event::Alarm { report, .. } => {
+                    builder.push_alarm(report);
+                }
+                _ => {}
+            }
+            builder.push_event(ev);
+        }
+    }
+
+    builder.attach_context(&timeline);
+    let incidents = builder.finalize();
+
+    if json {
+        print!("[");
+        for (i, inc) in incidents.iter().enumerate() {
+            if i > 0 { print!(","); }
+            print!("{}", inc.to_json());
+        }
+        println!("]");
+    } else {
+        let report = struktura::report::investigation_report(&incidents, &meas_names, samples);
+        println!("{}", report);
+    }
+
+    if incidents.iter().any(|inc| !inc.evidence.is_empty()) {
+        process::exit(1);
+    }
+}
+
+fn cmd_case(args: &[String]) {
+    if args.len() < 3 {
+        eprintln!("Usage: struktura case <save|load> [options]");
+        process::exit(2);
+    }
+    match args[2].as_str() {
+        "save" => {
+            let mut recording_path = String::new();
+            let mut incidents_path = String::new();
+            let mut baseline_n = 0usize;
+            let mut name = String::new();
+            let mut out_dir = String::new();
+            let mut i = 3;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--from" if i + 1 < args.len() => { recording_path = args[i + 1].clone(); i += 2; }
+                    "--incidents" if i + 1 < args.len() => { incidents_path = args[i + 1].clone(); i += 2; }
+                    "--baseline" if i + 1 < args.len() => { baseline_n = args[i + 1].parse().unwrap_or(0); i += 2; }
+                    "--name" if i + 1 < args.len() => { name = args[i + 1].clone(); i += 2; }
+                    "--out" if i + 1 < args.len() => { out_dir = args[i + 1].clone(); i += 2; }
+                    "--help" | "-h" => {
+                        println!("struktura case save --from <recording.csv> --name <case-name> [--baseline N] [--out <dir>]");
+                        println!("  Save a recording and its investigation as a replayable case directory.");
+                        process::exit(0);
+                    }
+                    _ => { i += 1; }
+                }
+            }
+            if recording_path.is_empty() || name.is_empty() {
+                eprintln!("need --from <file> and --name <name>");
+                process::exit(2);
+            }
+            let content = std::fs::read_to_string(&recording_path).unwrap_or_else(|e| {
+                eprintln!("cannot read {}: {}", recording_path, e);
+                process::exit(2);
+            });
+            let (_header, cols) = parse_csv_columns(&content);
+            let baseline = if baseline_n > 0 { baseline_n } else { cols[0].len() / 3 };
+
+            // Run investigation to get incidents
+            let calib: Vec<Vec<f64>> = cols.iter().map(|c| c[..baseline].to_vec()).collect();
+            let monitor = match struktura::monitor::HybridMonitor::calibrate(&calib) {
+                Some(m) => m,
+                None => { eprintln!("calibration failed"); process::exit(2); }
+            };
+            let mut pilot = struktura::autopilot::AutoPilot::new(monitor);
+            let mut builder = struktura::incident::IncidentBuilder::new(10);
+            let valid: Vec<bool> = vec![true; cols.len()];
+            for t in baseline..cols[0].len() {
+                let row: Vec<f64> = cols.iter().map(|c| c[t]).collect();
+                let events = pilot.push(&row, &valid);
+                for ev in &events {
+                    match ev { struktura::autopilot::Event::Alarm { report, .. } => { builder.push_alarm(report); } _ => {} }
+                    builder.push_event(ev);
+                }
+            }
+            let incidents = builder.finalize();
+
+            let dir = if out_dir.is_empty() {
+                std::path::PathBuf::from(format!("cases/{}", name))
+            } else {
+                std::path::PathBuf::from(&out_dir)
+            };
+            // Transpose column-major to row-major for Case::save
+            let nsamples = cols[0].len();
+            let rows: Vec<Vec<f64>> = (0..nsamples).map(|t| cols.iter().map(|c| c[t]).collect()).collect();
+            match struktura::case::Case::save(&dir, &rows, &incidents, baseline, &name) {
+                Ok(c) => println!("case saved: {} ({} incidents, {} channels x {} samples)",
+                    c.dir().display(), incidents.len(), cols.len(), cols[0].len()),
+                Err(e) => { eprintln!("save failed: {}", e); process::exit(2); }
+            }
+        }
+        "load" => {
+            let dir = args.get(3).map(|s| s.as_str()).unwrap_or_else(|| {
+                eprintln!("Usage: struktura case load <dir>");
+                process::exit(2);
+            });
+            match struktura::case::Case::load(std::path::Path::new(dir)) {
+                Ok(c) => {
+                    let m = c.manifest;
+                    println!("case: {} (v{}, {} channels x {} samples, baseline {})",
+                        m.name, m.detector_version, m.channels, m.samples, m.baseline_samples);
+                }
+                Err(e) => { eprintln!("load failed: {}", e); process::exit(2); }
+            }
+        }
+        other => {
+            eprintln!("unknown case subcommand: {} (try: save, load)", other);
+            process::exit(2);
+        }
+    }
+}
+
+fn cmd_replay(args: &[String]) {
+    let mut case_dir = String::new();
+    let mut baseline_override: Option<usize> = None;
+    let mut json = false;
+    let mut i = 2;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--baseline" if i + 1 < args.len() => { baseline_override = args[i + 1].parse().ok(); i += 2; }
+            "--json" => { json = true; i += 1; }
+            "--help" | "-h" => {
+                println!("struktura replay <case-dir> [--baseline N] [--json]");
+                println!("  Re-run the detector on a saved case and diff against saved incidents.");
+                process::exit(0);
+            }
+            s if !s.starts_with('-') && case_dir.is_empty() => { case_dir = s.to_string(); i += 1; }
+            _ => { i += 1; }
+        }
+    }
+    if case_dir.is_empty() {
+        eprintln!("Usage: struktura replay <case-dir> [--baseline N] [--json]");
+        process::exit(2);
+    }
+    let case = match struktura::case::Case::load(std::path::Path::new(&case_dir)) {
+        Ok(c) => c,
+        Err(e) => { eprintln!("load failed: {}", e); process::exit(2); }
+    };
+    match struktura::replay::replay(&case, baseline_override) {
+        Ok((incidents, diff)) => {
+            if json {
+                println!("{}", diff.to_json());
+            } else {
+                let old_incidents = case.incidents().unwrap_or_default();
+                let rpt = struktura::report::replay_report(&diff, &old_incidents, &incidents);
+                println!("{}", rpt);
+                if !incidents.is_empty() {
+                    println!();
+                    let names: Vec<&str> = (0..case.manifest.channels).map(|i| {
+                        // no header in saved recording, use ch0..chN
+                        Box::leak(format!("ch{}", i).into_boxed_str()) as &str
+                    }).collect();
+                    let rpt = struktura::report::investigation_report(&incidents, &names, case.manifest.samples);
+                    println!("{}", rpt);
+                }
+            }
+            if incidents.iter().any(|inc| !inc.evidence.is_empty()) {
+                process::exit(1);
+            }
+        }
+        Err(e) => { eprintln!("replay failed: {}", e); process::exit(2); }
+    }
+}
+
+fn parse_csv_columns(content: &str) -> (Vec<String>, Vec<Vec<f64>>) {
+    // Reuse the existing CSV parsing logic: first line is header,
+    // remaining lines are comma-separated f64 values.
+    let mut lines = content.lines();
+    let header_line = match lines.next() {
+        Some(h) => h,
+        None => return (vec![], vec![]),
+    };
+    let header: Vec<String> = header_line.split(',').map(|s| s.trim().to_string()).collect();
+    let ncols = header.len();
+    let mut cols: Vec<Vec<f64>> = (0..ncols).map(|_| Vec::new()).collect();
+    for line in lines {
+        let fields: Vec<&str> = line.split(',').collect();
+        if fields.len() != ncols { continue; }
+        for (i, f) in fields.iter().enumerate() {
+            cols[i].push(f.trim().parse::<f64>().unwrap_or(f64::NAN));
+        }
+    }
+    (header, cols)
 }

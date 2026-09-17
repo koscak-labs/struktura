@@ -1474,3 +1474,13 @@ pub mod changepoint;
 pub mod fingerprint;
 #[cfg(feature = "std")]
 pub mod codegen;
+
+// --- debugger modules (v1.8 telemetry investigation) ---
+pub mod context;
+pub mod incident;
+#[cfg(feature = "std")]
+pub mod case;
+#[cfg(feature = "std")]
+pub mod replay;
+#[cfg(feature = "std")]
+pub mod report;
