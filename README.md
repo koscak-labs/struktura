@@ -217,7 +217,7 @@ let mut rwa = SpacecraftMonitor::new(Subsystem::ReactionWheel, "RWA_current");
 |--------|--------|-----------|---------|-------|---------|
 | 🔧 **bearings** | CWRU 12kHz vibration | 0.689 | 0.183 | -0.506 | CRITICAL |
 | 🚀 **spacecraft** | Voyager 1 magnetometer, 2021 vs 2022 slices (not the AACS anomaly window; z=1.5, inconclusive) | 0.989 | 0.801 | -0.187 | CRITICAL |
-| 🛰️ **ESA satellites** | ESA-ADB Mission 1 (76 ch) | — | — | — | **65/65 detected** |
+| 🛰️ **ESA satellites** | ESA-ADB Mission 1 | — | — | — | adapter built ([esa-adb/](esa-adb/struktura-dfa/)); PA%K scores pending benchmark run |
 | 📖 **text** | Austen vs shuffled | 0.749 | 0.572 | -0.177 | detected |
 | 🧬 **genome** | Human chr1 GC% | 0.909 | | | R²=0.991 |
 | ❤️ **cardiac** | HRV RR intervals | 0.695 | | | R²=0.985 |

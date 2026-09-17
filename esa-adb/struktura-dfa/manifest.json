@@ -1,0 +1,37 @@
+{
+  "title": "Struktura DFA",
+  "description": "Detrended Fluctuation Analysis (DFA) anomaly detection. Computes windowed DFA scaling exponents and scores deviations from a self-calibrated baseline. Zero training, zero hyperparameter tuning. The first Rust algorithm in this benchmark.",
+  "inputDimensionality": "univariate",
+  "version": "1.7.3",
+  "authors": "Phil Koščák",
+  "language": "Rust",
+  "type": "Detector",
+  "mainFile": "src/main.rs",
+  "learningType": "unsupervised",
+  "executionStep": {
+    "parameters": [
+      {
+        "name": "window_size",
+        "type": "int",
+        "defaultValue": 256,
+        "optional": "true",
+        "description": "DFA window size in samples. Must be >= 64."
+      },
+      {
+        "name": "step_size",
+        "type": "int",
+        "defaultValue": 128,
+        "optional": "true",
+        "description": "Sliding window step size in samples."
+      },
+      {
+        "name": "threshold",
+        "type": "float",
+        "defaultValue": 0.05,
+        "optional": "true",
+        "description": "Baseline noise floor for the score denominator."
+      }
+    ],
+    "modelInput": "none"
+  }
+}
