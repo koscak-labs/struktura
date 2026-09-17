@@ -20,6 +20,12 @@ pub struct EvidenceChange {
     pub incident_id: u64,
     pub added_evidence: usize,
     pub removed_evidence: usize,
+    /// Evidence items present on both sides at the same `(channel, leg,
+    /// tick)` whose `observed` or `threshold` value differs by more than a
+    /// relative tolerance (see [`value_differs`]). A changed threshold or
+    /// observed value with an unchanged key would otherwise report zero
+    /// changes (Finding 4).
+    pub value_changes: usize,
     pub channel_diff: Vec<usize>,
 }
 
@@ -38,6 +44,18 @@ pub struct ReplayDiff {
     pub timing_deltas: Vec<(u64, i64)>,
     /// Evidence-level diff for every matched pair (see [`EvidenceChange`]).
     pub evidence_changes: Vec<EvidenceChange>,
+    /// (saved, current) `recording.csv` content fingerprints — set only
+    /// when the case's `config.json` has a saved `input_hash` and it
+    /// differs from the current recording file (Finding 5).
+    pub fingerprint_mismatch: Option<(String, String)>,
+    /// `(res_thr, dfa_thr, cusum_thr)` read back from the case's saved
+    /// `config.json` `monitor_export`, when present and parseable
+    /// (Finding 5's "saved configuration").
+    pub saved_thresholds: Option<(f64, f64, f64)>,
+    /// `(res_thr, dfa_thr, cusum_thr)` from this replay's fresh
+    /// recalibration, for side-by-side comparison against
+    /// `saved_thresholds`.
+    pub fresh_thresholds: (f64, f64, f64),
 }
 
 impl ReplayDiff {
@@ -55,7 +73,7 @@ impl ReplayDiff {
         let changed = self
             .evidence_changes
             .iter()
-            .filter(|c| c.added_evidence > 0 || c.removed_evidence > 0)
+            .filter(|c| c.added_evidence > 0 || c.removed_evidence > 0 || c.value_changes > 0)
             .count();
         format!(
             "{} matched, {} missed, {} new, {} evidence-changed, max timing delta {} ticks",
@@ -109,8 +127,8 @@ impl ReplayDiff {
                 .collect::<Vec<_>>()
                 .join(",");
             out.push_str(&format!(
-                "{{\"incident_id\":{},\"added_evidence\":{},\"removed_evidence\":{},\"channel_diff\":[{}]}}",
-                c.incident_id, c.added_evidence, c.removed_evidence, channels
+                "{{\"incident_id\":{},\"added_evidence\":{},\"removed_evidence\":{},\"value_changes\":{},\"channel_diff\":[{}]}}",
+                c.incident_id, c.added_evidence, c.removed_evidence, c.value_changes, channels
             ));
         }
         out.push_str("]}");
@@ -124,10 +142,11 @@ impl ReplayDiff {
 /// Calibrates a fresh [`HybridMonitor`] on `cols[..baseline]`, streams the
 /// remaining rows through [`AutoPilot`] (validity derived per-row from the
 /// data: a channel is invalid at a tick when its value is NaN or
-/// infinite), groups the resulting alarms into [`Incident`]s, then shifts
-/// every tick by `baseline` so incidents are ticked against the *full*
-/// recording rather than the post-baseline stream — matching how
-/// `timeline` (e.g. a context sidecar) ticks its events.
+/// infinite), stamping each alarm with the recording-row index it was
+/// observed at (not AutoPilot's or a recalibrated candidate's own local
+/// tick counter — see Finding 1), and groups the resulting alarms into
+/// [`Incident`]s already ticked against the *full* recording — matching
+/// how `timeline` (e.g. a context sidecar) ticks its events.
 ///
 /// `cols` is column-major: one `Vec<f64>` per channel, all the same
 /// length. Returns the finalized incidents plus the calibrated monitor's
@@ -151,6 +170,23 @@ pub fn run_investigation(
     }
 
     let calib: Vec<Vec<f64>> = cols.iter().map(|c| c[..baseline].to_vec()).collect();
+
+    // Finding 3: HybridMonitor::calibrate has no NaN guard of its own — a
+    // channel that's mostly non-finite in the calibration window silently
+    // poisons its thresholds with NaN instead of failing loudly. Refuse to
+    // calibrate in that case, naming the channel.
+    for (ci, c) in calib.iter().enumerate() {
+        let finite = c.iter().filter(|v| v.is_finite()).count();
+        if finite * 2 < c.len() {
+            return Err(format!(
+                "channel {} has too many non-finite values in the calibration window ({}/{} finite)",
+                ci,
+                finite,
+                c.len()
+            ));
+        }
+    }
+
     let monitor = HybridMonitor::calibrate(&calib)
         .ok_or_else(|| "calibration failed on baseline window".to_string())?;
     let export = monitor.export();
@@ -160,7 +196,28 @@ pub fn run_investigation(
     for t in baseline..samples {
         let row: Vec<f64> = (0..channels).map(|c| cols[c][t]).collect();
         let valid: Vec<bool> = (0..channels).map(|c| cols[c][t].is_finite()).collect();
-        for event in autopilot.push(&row, &valid) {
+        for mut event in autopilot.push(&row, &valid) {
+            // Finding 1: tick alignment through recalibration. Every tick
+            // AutoPilot/HybridMonitor attaches to an event is local to
+            // whichever monitor is currently active — and a recalibrated
+            // candidate's own counter restarts at zero when it's
+            // calibrated, partway through the recording. Stamp every event
+            // with the recording-row index `t` we're already iterating on,
+            // directly at the source, instead of trying to offset
+            // candidate-local ticks after the fact.
+            match &mut event {
+                Event::Alarm { tick, report, .. } => {
+                    *tick = t as u64;
+                    report.tick = t as u64;
+                }
+                Event::Quarantined { tick, .. }
+                | Event::AdaptationStarted { tick }
+                | Event::Recalibrated { tick } => *tick = t as u64,
+                Event::RolledBack { tick, guard_report } => {
+                    *tick = t as u64;
+                    guard_report.tick = t as u64;
+                }
+            }
             if let Event::Alarm { report, .. } = &event {
                 builder.push_alarm(report);
             }
@@ -168,8 +225,9 @@ pub fn run_investigation(
         }
     }
 
+    // Ticks are recording-row indices from the source above, so no
+    // post-hoc offset_ticks() is needed (and would double-shift them).
     let mut incidents = builder.finalize();
-    crate::incident::offset_ticks(&mut incidents, baseline as u64);
     crate::incident::attach_context(&mut incidents, timeline);
     Ok((incidents, export))
 }
@@ -192,10 +250,34 @@ pub fn replay(
     // A saved case has no context sidecar of its own; replay compares pure
     // detector output against what was saved.
     let timeline = ContextTimeline::new();
-    let (new_incidents, _export) = run_investigation(&cols, baseline, &timeline)?;
+    let (new_incidents, export) = run_investigation(&cols, baseline, &timeline)?;
 
     let saved_incidents = case.incidents()?;
-    let diff = diff_incidents(&saved_incidents, &new_incidents);
+    let mut diff = diff_incidents(&saved_incidents, &new_incidents);
+    diff.fresh_thresholds = (export.res_thr, export.dfa_thr, export.cusum_thr);
+
+    // Finding 5: replay used to recalibrate from scratch and never look at
+    // what was actually saved. Read config.json back, surface its
+    // monitor_export as the "saved configuration" alongside the fresh one
+    // above, and warn if recording.csv itself has drifted since the case
+    // was saved.
+    if let Ok(config_json) = case.config_json() {
+        diff.saved_thresholds = crate::case::parse_config_monitor_thresholds(&config_json);
+        if let Some(saved_hash) = crate::case::parse_config_input_hash(&config_json) {
+            let recording_path = case.dir().join("recording.csv");
+            if let Ok(bytes) = std::fs::read(&recording_path) {
+                let current_hash = crate::case::fingerprint_content(&bytes);
+                if current_hash != saved_hash {
+                    eprintln!(
+                        "warning: recording.csv has changed since this case was saved (saved: {}, current: {})",
+                        saved_hash, current_hash
+                    );
+                    diff.fingerprint_mismatch = Some((saved_hash, current_hash));
+                }
+            }
+        }
+    }
+
     Ok((new_incidents, diff))
 }
 
@@ -254,13 +336,15 @@ fn diff_incidents(saved: &[Incident], new: &[Incident]) -> ReplayDiff {
         .map(|(_, n)| n.id)
         .collect();
 
-    ReplayDiff { matched, missed, new_alarms, timing_deltas, evidence_changes }
+    ReplayDiff { matched, missed, new_alarms, timing_deltas, evidence_changes, ..Default::default() }
 }
 
 /// Diff a matched pair's evidence: what's in `new` but not `old` (added),
 /// what's in `old` but not `new` (removed) — keyed by (channel, leg, tick)
-/// since evidence is otherwise just a snapshot of an `AlarmReport` — plus
-/// which channels appear in `new` but not `old`.
+/// since evidence is otherwise just a snapshot of an `AlarmReport` — which
+/// evidence items share a key but have a changed `observed`/`threshold`
+/// value (Finding 4 — a same-key comparison alone reports zero changes for
+/// those), plus which channels appear in `new` but not `old`.
 fn evidence_change(saved_id: u64, old: &Incident, new: &Incident) -> EvidenceChange {
     let old_keys: Vec<(usize, Leg, u64)> =
         old.evidence.iter().map(|e| (e.channel, e.leg, e.tick)).collect();
@@ -268,6 +352,17 @@ fn evidence_change(saved_id: u64, old: &Incident, new: &Incident) -> EvidenceCha
         new.evidence.iter().map(|e| (e.channel, e.leg, e.tick)).collect();
     let added_evidence = new_keys.iter().filter(|k| !old_keys.contains(k)).count();
     let removed_evidence = old_keys.iter().filter(|k| !new_keys.contains(k)).count();
+    let value_changes = old
+        .evidence
+        .iter()
+        .filter(|oe| {
+            new.evidence.iter().any(|ne| {
+                (oe.channel, oe.leg, oe.tick) == (ne.channel, ne.leg, ne.tick)
+                    && (value_differs(oe.observed, ne.observed)
+                        || value_differs(oe.threshold, ne.threshold))
+            })
+        })
+        .count();
     let mut channel_diff: Vec<usize> = new
         .channels_involved
         .iter()
@@ -275,7 +370,15 @@ fn evidence_change(saved_id: u64, old: &Incident, new: &Incident) -> EvidenceCha
         .copied()
         .collect();
     channel_diff.sort_unstable();
-    EvidenceChange { incident_id: saved_id, added_evidence, removed_evidence, channel_diff }
+    EvidenceChange { incident_id: saved_id, added_evidence, removed_evidence, value_changes, channel_diff }
+}
+
+/// True if `a` and `b` differ by more than a relative tolerance of `1e-6`
+/// (the tolerance floor is 1.0, so near-zero values compare with an
+/// absolute tolerance instead of an unstable relative one).
+fn value_differs(a: f64, b: f64) -> bool {
+    let scale = a.abs().max(b.abs()).max(1.0);
+    (a - b).abs() > 1e-6 * scale
 }
 
 #[cfg(test)]
@@ -352,6 +455,7 @@ mod tests {
             new_alarms: vec![],
             timing_deltas: vec![(0, 2), (1, -1), (2, 5)],
             evidence_changes: vec![],
+            ..Default::default()
         };
         assert_eq!(
             diff.summary(),
@@ -366,9 +470,13 @@ mod tests {
             missed: vec![],
             new_alarms: vec![],
             timing_deltas: vec![(0, 0)],
-            evidence_changes: vec![
-                EvidenceChange { incident_id: 0, added_evidence: 0, removed_evidence: 0, channel_diff: vec![] },
-            ],
+            evidence_changes: vec![EvidenceChange {
+                incident_id: 0,
+                added_evidence: 0,
+                removed_evidence: 0,
+                ..Default::default()
+            }],
+            ..Default::default()
         };
         assert!(diff.summary().contains("0 evidence-changed"));
     }
@@ -385,7 +493,9 @@ mod tests {
                 added_evidence: 1,
                 removed_evidence: 2,
                 channel_diff: vec![5],
+                ..Default::default()
             }],
+            ..Default::default()
         };
         let json = diff.to_json();
         assert!(json.starts_with('{') && json.ends_with('}'));
@@ -449,5 +559,107 @@ mod tests {
         }
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Finding 1 regression test. A `regime_shift` fault across every
+    /// channel is exactly AutoPilot's guarded self-recalibration scenario
+    /// (level-shift alarm -> candidate collection -> guard window ->
+    /// accepted candidate). Before the fix, alarms raised by the accepted
+    /// candidate carried the *candidate's own* local tick counter (which
+    /// restarts at zero when the candidate is calibrated partway through
+    /// the recording), so evidence ticks would jump backward right after
+    /// recalibration instead of continuing to track the recording row.
+    #[test]
+    fn evidence_ticks_stay_recording_row_aligned_through_recalibration() {
+        use crate::telemetry_bench::{inject_fault, synth_spacecraft};
+
+        let baseline = 1000;
+        let total = baseline + 2000;
+        let clean = synth_spacecraft(total, 42);
+        let faulted = inject_fault(&clean, "regime_shift", 42);
+        let timeline = ContextTimeline::new();
+
+        let (incidents, _export) =
+            run_investigation(&faulted, baseline, &timeline).expect("investigates");
+
+        // Confirm this fixture actually exercises recalibration, or the
+        // rest of the test proves nothing.
+        let recalibrated =
+            incidents.iter().any(|inc| inc.context.iter().any(|c| c.kind == "recalibrated"));
+        assert!(recalibrated, "fixture did not trigger a recalibration");
+
+        for inc in &incidents {
+            for e in &inc.evidence {
+                assert!(
+                    e.tick >= baseline as u64 && (e.tick as usize) < total,
+                    "evidence tick {} out of recording range [{}, {})",
+                    e.tick,
+                    baseline,
+                    total
+                );
+            }
+        }
+
+        // Alarms are pushed in recording order, so ticks across the whole
+        // stream must be non-decreasing. A candidate-local tick after
+        // acceptance would regress backward here.
+        let all_ticks: Vec<u64> =
+            incidents.iter().flat_map(|inc| inc.evidence.iter().map(|e| e.tick)).collect();
+        let mut sorted = all_ticks.clone();
+        sorted.sort_unstable();
+        assert_eq!(
+            all_ticks, sorted,
+            "evidence ticks are not monotonically non-decreasing through recalibration"
+        );
+    }
+
+    /// Finding 3 regression test: a calibration window that's mostly NaN on
+    /// one channel must fail loudly, naming the channel, instead of
+    /// silently poisoning that channel's thresholds with NaN.
+    #[test]
+    fn run_investigation_rejects_mostly_nan_calibration_window() {
+        let baseline = 200;
+        let samples = 300;
+        let mut good = vec![0.0f64; samples];
+        for (i, v) in good.iter_mut().enumerate() {
+            *v = (i as f64 * 0.01).sin();
+        }
+        let mut bad = vec![f64::NAN; samples];
+        // Less than half the calibration window is finite.
+        for v in bad.iter_mut().take(baseline / 4) {
+            *v = 1.0;
+        }
+        let cols = vec![good, bad];
+        let timeline = ContextTimeline::new();
+
+        let err = run_investigation(&cols, baseline, &timeline).unwrap_err();
+        assert!(err.contains("channel 1"), "error should name the bad channel: {}", err);
+    }
+
+    /// Finding 4 regression test: two incidents whose evidence shares the
+    /// same `(channel, leg, tick)` key but has a different threshold must
+    /// be reported as a value change, not silently ignored.
+    #[test]
+    fn evidence_change_counts_same_key_different_threshold_as_value_change() {
+        let mut old = incident(0, 100, 100, vec![0]);
+        old.evidence[0].threshold = 3.0;
+        let mut new = incident(0, 100, 100, vec![0]);
+        new.evidence[0].threshold = 5.0;
+
+        let change = evidence_change(0, &old, &new);
+        assert_eq!(change.added_evidence, 0);
+        assert_eq!(change.removed_evidence, 0);
+        assert!(change.value_changes > 0, "changed threshold at the same key must count as a value change");
+    }
+
+    #[test]
+    fn evidence_change_ignores_within_tolerance_float_noise() {
+        let mut old = incident(0, 100, 100, vec![0]);
+        old.evidence[0].threshold = 3.0;
+        let mut new = incident(0, 100, 100, vec![0]);
+        new.evidence[0].threshold = 3.0 + 1e-9;
+
+        let change = evidence_change(0, &old, &new);
+        assert_eq!(change.value_changes, 0, "sub-tolerance float noise must not count as a value change");
     }
 }

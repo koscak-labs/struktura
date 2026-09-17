@@ -132,14 +132,37 @@ pub fn replay_report(
     let changed: Vec<_> = diff
         .evidence_changes
         .iter()
-        .filter(|c| c.added_evidence > 0 || c.removed_evidence > 0 || !c.channel_diff.is_empty())
+        .filter(|c| {
+            c.added_evidence > 0
+                || c.removed_evidence > 0
+                || c.value_changes > 0
+                || !c.channel_diff.is_empty()
+        })
         .collect();
     if !changed.is_empty() {
         out.push_str("\nEvidence changes (matched incidents):\n");
         for c in changed {
             out.push_str(&format!(
-                "  - incident #{}: +{} evidence, -{} evidence, new channels {:?}\n",
-                c.incident_id, c.added_evidence, c.removed_evidence, c.channel_diff
+                "  - incident #{}: +{} evidence, -{} evidence, new channels {:?}, {} value changes\n",
+                c.incident_id, c.added_evidence, c.removed_evidence, c.channel_diff, c.value_changes
+            ));
+        }
+    }
+
+    if let Some((saved, current)) = &diff.fingerprint_mismatch {
+        out.push_str(&format!(
+            "\nWarning: recording.csv has changed since this case was saved (saved: {}, current: {})\n",
+            saved, current
+        ));
+    }
+
+    if let Some((res, dfa, cusum)) = diff.saved_thresholds {
+        let (fres, fdfa, fcusum) = diff.fresh_thresholds;
+        if (res - fres).abs() > 1e-9 || (dfa - fdfa).abs() > 1e-9 || (cusum - fcusum).abs() > 1e-9 {
+            out.push_str(&format!(
+                "\nSaved configuration (config.json): res_thr={:.4} dfa_thr={:.4} cusum_thr={:.4}\n\
+                 Fresh configuration (this replay):  res_thr={:.4} dfa_thr={:.4} cusum_thr={:.4}\n",
+                res, dfa, cusum, fres, fdfa, fcusum
             ));
         }
     }
@@ -216,6 +239,7 @@ mod tests {
             new_alarms: vec![1],
             timing_deltas: vec![],
             evidence_changes: vec![],
+            ..Default::default()
         };
         let report = replay_report(&diff, &old, &new);
         assert!(report.starts_with("Replay comparison: 0 matched, 1 missed, 1 new"));
@@ -240,7 +264,9 @@ mod tests {
                 added_evidence: 2,
                 removed_evidence: 1,
                 channel_diff: vec![3],
+                ..Default::default()
             }],
+            ..Default::default()
         };
         let report = replay_report(&diff, &old, &new);
         assert!(report.contains("Evidence changes"));
@@ -261,9 +287,51 @@ mod tests {
                 added_evidence: 0,
                 removed_evidence: 0,
                 channel_diff: vec![],
+                ..Default::default()
             }],
+            ..Default::default()
         };
         let report = replay_report(&diff, &old, &new);
         assert!(!report.contains("Evidence changes"));
+    }
+
+    /// Finding 5: when a case's saved config.json thresholds differ from
+    /// this replay's fresh recalibration, the report must show both, side
+    /// by side, so an engineer can see the drift.
+    #[test]
+    fn replay_report_shows_saved_vs_fresh_thresholds_when_they_differ() {
+        let diff = ReplayDiff {
+            saved_thresholds: Some((3.0, 3.0, 6.0)),
+            fresh_thresholds: (3.5, 3.0, 6.0),
+            ..Default::default()
+        };
+        let report = replay_report(&diff, &[], &[]);
+        assert!(report.contains("Saved configuration"));
+        assert!(report.contains("Fresh configuration"));
+        assert!(report.contains("res_thr=3.0000"));
+        assert!(report.contains("res_thr=3.5000"));
+    }
+
+    #[test]
+    fn replay_report_omits_threshold_section_when_unchanged() {
+        let diff = ReplayDiff {
+            saved_thresholds: Some((3.0, 3.0, 6.0)),
+            fresh_thresholds: (3.0, 3.0, 6.0),
+            ..Default::default()
+        };
+        let report = replay_report(&diff, &[], &[]);
+        assert!(!report.contains("Saved configuration"));
+    }
+
+    #[test]
+    fn replay_report_shows_fingerprint_mismatch_warning() {
+        let diff = ReplayDiff {
+            fingerprint_mismatch: Some(("aaaa".to_string(), "bbbb".to_string())),
+            ..Default::default()
+        };
+        let report = replay_report(&diff, &[], &[]);
+        assert!(report.contains("recording.csv has changed"));
+        assert!(report.contains("aaaa"));
+        assert!(report.contains("bbbb"));
     }
 }

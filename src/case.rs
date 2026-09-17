@@ -231,6 +231,31 @@ impl Case {
         let text = std::fs::read_to_string(&path).map_err(|e| format!("read incidents.json: {}", e))?;
         split_by_anchor(&text, "{\"id\":").iter().map(|o| parse_incident(o)).collect()
     }
+
+    /// Raw text of this case's `config.json` (the detector configuration
+    /// saved alongside the recording — see [`CaseConfig`]). Used by
+    /// `struktura replay` (Finding 5) to compare the saved configuration
+    /// and recording fingerprint against a fresh recalibration.
+    pub fn config_json(&self) -> Result<String, String> {
+        let path = self.dir.join("config.json");
+        std::fs::read_to_string(&path).map_err(|e| format!("read config.json: {}", e))
+    }
+}
+
+/// Extract just the `input_hash` field from a case's `config.json` text
+/// (see [`Case::config_json`]) — cheap drift detection without parsing the
+/// full monitor export.
+#[must_use]
+pub fn parse_config_input_hash(json: &str) -> Option<String> {
+    extract_str(json, "input_hash")
+}
+
+/// Extract the saved `(res_thr, dfa_thr, cusum_thr)` from a case's
+/// `config.json` `monitor_export` object, for side-by-side comparison
+/// against a fresh recalibration on `struktura replay`.
+#[must_use]
+pub fn parse_config_monitor_thresholds(json: &str) -> Option<(f64, f64, f64)> {
+    Some((extract_f64(json, "res_thr")?, extract_f64(json, "dfa_thr")?, extract_f64(json, "cusum_thr")?))
 }
 
 // incidents.json parsing: anchor-split on each object's unique key.
@@ -483,6 +508,44 @@ mod tests {
         assert_eq!(config_json.matches('{').count(), config_json.matches('}').count());
         assert_eq!(config_json.matches('[').count(), config_json.matches(']').count());
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Finding 5: `Case::config_json` + `parse_config_input_hash` +
+    /// `parse_config_monitor_thresholds` are what `replay()` uses to
+    /// compare a fresh recalibration against what was saved.
+    #[test]
+    fn config_json_round_trips_input_hash_and_thresholds() {
+        let dir = tmp_dir("config_json");
+        let _ = std::fs::remove_dir_all(&dir);
+        let recording = vec![vec![1.0, 2.0], vec![1.5, 2.5]];
+        let config = test_case_config();
+        let case = Case::save(&dir, &recording, &[], 1, "config_json", &config).expect("saves");
+
+        let text = case.config_json().expect("reads config.json");
+        assert_eq!(parse_config_input_hash(&text), Some(config.input_hash.clone()));
+        assert_eq!(
+            parse_config_monitor_thresholds(&text),
+            Some((config.monitor_export.res_thr, config.monitor_export.dfa_thr, config.monitor_export.cusum_thr))
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn config_json_errors_when_missing() {
+        let dir = tmp_dir("config_json_missing");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create dir");
+        let manifest = CaseManifest {
+            name: "missing".to_string(), created: "2026-09-17T12:00:00Z".to_string(),
+            detector_version: "1.0.0".to_string(), baseline_samples: 1,
+            recording_path: "r.csv".to_string(), incidents_count: 0,
+            channels: 1, samples: 1, input_hash: None, schema_version: "0.1".to_string(),
+        };
+        write_file(dir.join("manifest.json"), manifest.to_json()).expect("writes manifest");
+        let case = Case::load(&dir).expect("loads");
+        assert!(case.config_json().unwrap_err().contains("config.json"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

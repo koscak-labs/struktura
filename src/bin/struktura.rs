@@ -4018,23 +4018,17 @@ fn cmd_investigate(args: &[String]) {
         eprintln!("cannot read {}: {}", file_path, e);
         process::exit(2);
     });
-    let (header, cols) = parse_csv_columns(&content);
-    let channels = cols.len();
-    let samples = if channels > 0 { cols[0].len() } else { 0 };
+    // Shared parse -> classify -> filter-to-measurement-columns pipeline
+    // (also used by `case save`, Finding 2), so investigate and a saved
+    // case always calibrate on exactly the same channels.
+    let (meas_names, meas_data, _schema, _header) = prepare_input(&content);
+    let channels = meas_data.len();
+    let samples = if channels > 0 { meas_data[0].len() } else { 0 };
     if channels == 0 || samples < 64 {
         eprintln!("need at least 1 channel and 64 samples, got {}ch x {}s", channels, samples);
         process::exit(2);
     }
-
-    // Column schema from header
-    let schema = struktura::context::ColumnSchema::from_header(
-        &header.iter().map(|s| s.as_str()).collect::<Vec<_>>()
-    );
-    let measurement_cols = schema.measurement_indices();
-
-    // Extract measurement channels only
-    let meas_data: Vec<Vec<f64>> = measurement_cols.iter().map(|&i| cols[i].clone()).collect();
-    let meas_names: Vec<&str> = measurement_cols.iter().map(|&i| header[i].as_str()).collect();
+    let meas_names: Vec<&str> = meas_names.iter().map(|s| s.as_str()).collect();
 
     // Calibration window
     let baseline = if baseline_n > 0 { baseline_n.min(meas_data[0].len()) } else { meas_data[0].len() / 3 };
@@ -4066,10 +4060,10 @@ fn cmd_investigate(args: &[String]) {
     }
 
     // Shared calibrate -> detect -> group-into-incidents -> attach-context
-    // pipeline (also used by `case save` and `replay`): offsets ticks by
-    // `baseline` so incidents line up with recording rows, and derives
-    // per-row validity from the data (NaN/Inf -> invalid) instead of
-    // assuming every row is valid.
+    // pipeline (also used by `case save` and `replay`): incidents are
+    // already ticked against recording rows, and per-row validity is
+    // derived from the data (NaN/Inf -> invalid) instead of assuming every
+    // row is valid.
     let (incidents, _monitor_export) = match struktura::replay::run_investigation(&meas_data, baseline, &timeline) {
         Ok(r) => r,
         Err(e) => {
@@ -4103,7 +4097,6 @@ fn cmd_case(args: &[String]) {
     match args[2].as_str() {
         "save" => {
             let mut recording_path = String::new();
-            let mut _incidents_path = String::new();
             let mut baseline_n = 0usize;
             let mut name = String::new();
             let mut out_dir = String::new();
@@ -4111,7 +4104,6 @@ fn cmd_case(args: &[String]) {
             while i < args.len() {
                 match args[i].as_str() {
                     "--from" if i + 1 < args.len() => { recording_path = args[i + 1].clone(); i += 2; }
-                    "--incidents" if i + 1 < args.len() => { _incidents_path = args[i + 1].clone(); i += 2; }
                     "--baseline" if i + 1 < args.len() => { baseline_n = args[i + 1].parse().unwrap_or(0); i += 2; }
                     "--name" if i + 1 < args.len() => { name = args[i + 1].clone(); i += 2; }
                     "--out" if i + 1 < args.len() => { out_dir = args[i + 1].clone(); i += 2; }
@@ -4134,19 +4126,26 @@ fn cmd_case(args: &[String]) {
             // Fingerprint the raw file content before parsing (Finding 5:
             // reproducibility detection, not a security hash).
             let input_hash = struktura::case::fingerprint_content(content.as_bytes());
-            let (header, cols) = parse_csv_columns(&content);
-            let baseline = if baseline_n > 0 { baseline_n } else { cols[0].len() / 3 };
+            // Shared parse -> classify -> filter-to-measurement-columns
+            // pipeline (also used by `investigate`, Finding 2) — schema is
+            // built up front from the same filtered columns `investigate`
+            // calibrates on, instead of being built after the run over
+            // unfiltered columns (which used to feed timestamp/mode
+            // columns into calibration).
+            let (_meas_names, meas_data, column_schema, _header) = prepare_input(&content);
+            if meas_data.is_empty() || meas_data[0].is_empty() {
+                eprintln!("need at least 1 measurement channel and some samples");
+                process::exit(2);
+            }
+            let baseline = if baseline_n > 0 { baseline_n } else { meas_data[0].len() / 3 };
 
             // Shared calibrate -> detect -> group-into-incidents pipeline
             // (also used by `investigate` and `replay`).
             let timeline = struktura::context::ContextTimeline::new();
-            let (incidents, monitor_export) = match struktura::replay::run_investigation(&cols, baseline, &timeline) {
+            let (incidents, monitor_export) = match struktura::replay::run_investigation(&meas_data, baseline, &timeline) {
                 Ok(r) => r,
                 Err(e) => { eprintln!("investigation failed: {}", e); process::exit(2); }
             };
-            let column_schema = struktura::context::ColumnSchema::from_header(
-                &header.iter().map(|s| s.as_str()).collect::<Vec<_>>()
-            );
 
             let dir = if out_dir.is_empty() {
                 std::path::PathBuf::from(format!("cases/{}", name))
@@ -4154,12 +4153,12 @@ fn cmd_case(args: &[String]) {
                 std::path::PathBuf::from(&out_dir)
             };
             // Transpose column-major to row-major for Case::save
-            let nsamples = cols[0].len();
-            let rows: Vec<Vec<f64>> = (0..nsamples).map(|t| cols.iter().map(|c| c[t]).collect()).collect();
+            let nsamples = meas_data[0].len();
+            let rows: Vec<Vec<f64>> = (0..nsamples).map(|t| meas_data.iter().map(|c| c[t]).collect()).collect();
             let config = struktura::case::CaseConfig { input_hash, monitor_export, column_schema };
             match struktura::case::Case::save(&dir, &rows, &incidents, baseline, &name, &config) {
                 Ok(c) => println!("case saved: {} ({} incidents, {} channels x {} samples)",
-                    c.dir().display(), incidents.len(), cols.len(), cols[0].len()),
+                    c.dir().display(), incidents.len(), meas_data.len(), nsamples),
                 Err(e) => { eprintln!("save failed: {}", e); process::exit(2); }
             }
         }
@@ -4236,23 +4235,100 @@ fn cmd_replay(args: &[String]) {
     }
 }
 
-fn parse_csv_columns(content: &str) -> (Vec<String>, Vec<Vec<f64>>) {
-    // Reuse the existing CSV parsing logic: first line is header,
-    // remaining lines are comma-separated f64 values.
+/// Parse a header + comma-separated-f64 CSV body into column-major data.
+///
+/// A malformed row (wrong field count) used to be silently dropped, which
+/// shifts every later row's tick index relative to a sidecar context file
+/// keyed on the original row number (Finding 3). Instead, a short row is
+/// padded with NaN and a long row is truncated to the header width, so row
+/// count — and therefore tick alignment — is always preserved; the caller
+/// gets back how many rows needed fixing up.
+fn parse_csv_columns(content: &str) -> (Vec<String>, Vec<Vec<f64>>, usize) {
     let mut lines = content.lines();
     let header_line = match lines.next() {
         Some(h) => h,
-        None => return (vec![], vec![]),
+        None => return (vec![], vec![], 0),
     };
     let header: Vec<String> = header_line.split(',').map(|s| s.trim().to_string()).collect();
     let ncols = header.len();
     let mut cols: Vec<Vec<f64>> = (0..ncols).map(|_| Vec::new()).collect();
+    let mut malformed = 0usize;
     for line in lines {
         let fields: Vec<&str> = line.split(',').collect();
-        if fields.len() != ncols { continue; }
-        for (i, f) in fields.iter().enumerate() {
-            cols[i].push(f.trim().parse::<f64>().unwrap_or(f64::NAN));
+        if fields.len() != ncols {
+            malformed += 1;
+        }
+        for i in 0..ncols {
+            let v = fields.get(i).map_or(f64::NAN, |f| f.trim().parse::<f64>().unwrap_or(f64::NAN));
+            cols[i].push(v);
         }
     }
-    (header, cols)
+    (header, cols, malformed)
+}
+
+/// Shared input preparation for `investigate` and `case save` (Finding 2):
+/// parse the CSV, classify its columns, and filter to measurement channels
+/// only — `investigate` used to filter and `case save` didn't, so a case
+/// saved from the same file calibrated on timestamp/mode columns too.
+fn prepare_input(content: &str) -> (Vec<String>, Vec<Vec<f64>>, struktura::context::ColumnSchema, Vec<String>) {
+    let (header, cols, malformed) = parse_csv_columns(content);
+    if malformed > 0 {
+        eprintln!("warning: {} malformed row(s) in input (padded/truncated to header width)", malformed);
+    }
+    let schema = struktura::context::ColumnSchema::from_header(
+        &header.iter().map(|s| s.as_str()).collect::<Vec<_>>()
+    );
+    let measurement_cols = schema.measurement_indices();
+    let meas_cols: Vec<Vec<f64>> = measurement_cols.iter().map(|&i| cols[i].clone()).collect();
+    let meas_names: Vec<String> = measurement_cols.iter().map(|&i| header[i].clone()).collect();
+    (meas_names, meas_cols, schema, header)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Finding 3: a malformed row (wrong field count) must not be dropped
+    /// — dropping it would shift every later row's tick index relative to
+    /// a sidecar keyed on the original row number. It's padded/truncated
+    /// to header width instead, so row count is preserved.
+    #[test]
+    fn parse_csv_columns_pads_short_and_truncates_long_rows_preserving_row_count() {
+        let csv = "time,a,b\n1,10,20\n2,11\n3,12,13,extra\n4,14,15\n";
+        let (header, cols, malformed) = parse_csv_columns(csv);
+        assert_eq!(header, vec!["time", "a", "b"]);
+        // 4 data rows in, 4 rows out on every column -- none dropped.
+        assert_eq!(cols[0].len(), 4);
+        assert_eq!(cols[1].len(), 4);
+        assert_eq!(cols[2].len(), 4);
+        // Short row (row 2, missing "b") is padded with NaN.
+        assert!(cols[2][1].is_nan());
+        // Long row (row 3) is truncated -- its extra field is dropped, not
+        // the whole row.
+        assert_eq!(cols[0][2], 3.0);
+        assert_eq!(cols[1][2], 12.0);
+        assert_eq!(cols[2][2], 13.0);
+        assert_eq!(malformed, 2);
+    }
+
+    #[test]
+    fn parse_csv_columns_reports_zero_malformed_on_clean_input() {
+        let (_, _, malformed) = parse_csv_columns("a,b\n1,2\n3,4\n");
+        assert_eq!(malformed, 0);
+    }
+
+    /// Finding 2: `case save` used to pass ALL parsed columns (timestamp,
+    /// mode, ...) into calibration, unlike `investigate` which filtered to
+    /// measurement columns only. `prepare_input` is now the single place
+    /// that does the filtering, shared by both.
+    #[test]
+    fn prepare_input_filters_to_measurement_columns_only() {
+        let csv = "time,mode,motor_current\n0,cruise,1.0\n1,cruise,1.1\n2,idle,1.2\n";
+        let (names, cols, schema, header) = prepare_input(csv);
+        assert_eq!(names, vec!["motor_current"]);
+        assert_eq!(cols.len(), 1);
+        assert_eq!(cols[0], vec![1.0, 1.1, 1.2]);
+        assert_eq!(header, vec!["time", "mode", "motor_current"]);
+        assert_eq!(schema.measurement_indices(), vec![2]);
+    }
 }
