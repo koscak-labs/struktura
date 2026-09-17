@@ -167,6 +167,13 @@ pub fn replay_report(
         }
     }
 
+    if !diff.threshold_diffs.is_empty() {
+        out.push_str("\nSaved-configuration field differences (config.json vs this replay):\n");
+        for d in &diff.threshold_diffs {
+            out.push_str(&format!("  - {}\n", d));
+        }
+    }
+
     out
 }
 

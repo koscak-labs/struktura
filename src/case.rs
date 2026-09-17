@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::context::{ColumnSchema, ContextEvent};
+use crate::context::{ColumnSchema, ContextEvent, ContextTimeline};
 use crate::incident::{Evidence, Incident};
 use crate::monitor::{ChannelExport, Leg, MonitorExport};
 /// A case directory's manifest (hand-rolled JSON; no serde_json dependency).
@@ -19,9 +19,19 @@ pub struct CaseManifest {
     pub incidents_count: usize,
     pub channels: usize,
     pub samples: usize,
-    /// Content fingerprint of the input recording (see [`fingerprint_content`]).
-    /// `None` for cases saved before this field existed.
+    /// Content fingerprint of the *original input file* (see
+    /// [`fingerprint_content`]). `None` for cases saved before this field
+    /// existed. NOT what `replay()` should diff `recording.csv` against —
+    /// see [`Self::recording_hash`].
     pub input_hash: Option<String>,
+    /// Content fingerprint of the exact bytes written to `recording.csv`
+    /// (the transformed `ch0,ch1,...`-header, normalized-value file, not
+    /// the original input). This is what `replay()` compares a fresh read
+    /// of `recording.csv` against — `input_hash` fingerprints a different
+    /// byte representation and comparing against it always mismatched,
+    /// even for an untouched case. `None` for cases saved before this
+    /// field existed.
+    pub recording_hash: Option<String>,
     /// Case-file layout version, independent of `detector_version`.
     pub schema_version: String,
 }
@@ -32,23 +42,29 @@ impl CaseManifest {
             Some(h) => format!("\"{}\"", json_escape(h)),
             None => "null".to_string(),
         };
+        let recording_hash = match &self.recording_hash {
+            Some(h) => format!("\"{}\"", json_escape(h)),
+            None => "null".to_string(),
+        };
         format!(
             "{{\"name\":\"{}\",\"created\":\"{}\",\"detector_version\":\"{}\",\
              \"baseline_samples\":{},\"recording_path\":\"{}\",\"incidents_count\":{},\
-             \"channels\":{},\"samples\":{},\"input_hash\":{},\"schema_version\":\"{}\"}}",
+             \"channels\":{},\"samples\":{},\"input_hash\":{},\"recording_hash\":{},\"schema_version\":\"{}\"}}",
             json_escape(&self.name), json_escape(&self.created), json_escape(&self.detector_version),
             self.baseline_samples, json_escape(&self.recording_path), self.incidents_count,
-            self.channels, self.samples, input_hash, json_escape(&self.schema_version)
+            self.channels, self.samples, input_hash, recording_hash, json_escape(&self.schema_version)
         )
     }
 
     /// Minimal hand-rolled parser: finds each key, extracts its value.
-    /// `input_hash` and `schema_version` are optional for backward
-    /// compatibility with manifests saved before they existed.
+    /// `input_hash`, `recording_hash` and `schema_version` are optional for
+    /// backward compatibility with manifests saved before they existed.
     pub fn from_json(s: &str) -> Result<Self, String> {
         let req_s = |k: &str| extract_str(s, k).ok_or_else(|| format!("manifest: missing {}", k));
         let req_n = |k: &str| extract_u64(s, k).ok_or_else(|| format!("manifest: missing {}", k));
         let input_hash = if s.contains("\"input_hash\":null") { None } else { extract_str(s, "input_hash") };
+        let recording_hash =
+            if s.contains("\"recording_hash\":null") { None } else { extract_str(s, "recording_hash") };
         let schema_version = extract_str(s, "schema_version").unwrap_or_else(|| "0.1".to_string());
         Ok(Self {
             name: req_s("name")?,
@@ -60,6 +76,7 @@ impl CaseManifest {
             channels: req_n("channels")? as usize,
             samples: req_n("samples")? as usize,
             input_hash,
+            recording_hash,
             schema_version,
         })
     }
@@ -147,6 +164,15 @@ impl Case {
     /// `recording` is row-major (one `Vec<f64>` per tick), matching what
     /// `AutoPilot::push` consumes during live monitoring. [`Case::recording`]
     /// hands it back channel-major, the shape `HybridMonitor::calibrate` wants.
+    ///
+    /// `timeline` is the investigation's context sidecar (if any) — saved to
+    /// `context.json` so `replay()` can reattach the same context at the
+    /// same ticks instead of always replaying against an empty timeline.
+    /// `channel_names` are the measurement column names in recording-column
+    /// order, saved to `schema.json` so replay can produce named reports;
+    /// pass an empty slice (or a slice whose length doesn't match the
+    /// recording's channel count) to fall back to `ch0, ch1, ...`.
+    #[allow(clippy::too_many_arguments)]
     pub fn save(
         dir: &Path,
         recording: &[Vec<f64>],
@@ -154,9 +180,32 @@ impl Case {
         baseline_samples: usize,
         name: &str,
         config: &CaseConfig,
+        timeline: &ContextTimeline,
+        channel_names: &[String],
     ) -> Result<Self, String> {
         std::fs::create_dir_all(dir).map_err(|e| format!("create_dir_all: {}", e))?;
         let channels = recording.first().map(|r| r.len()).unwrap_or(0);
+        let mut csv = (0..channels).map(|c| format!("ch{}", c)).collect::<Vec<_>>().join(",");
+        csv.push('\n');
+        for row in recording {
+            csv.push_str(&row.iter().map(f64::to_string).collect::<Vec<_>>().join(","));
+            csv.push('\n');
+        }
+        // Fingerprint the exact bytes about to be written to
+        // recording.csv -- a different byte representation than the
+        // original input file (`config.input_hash`) -- so `replay()` has
+        // the right baseline to diff a fresh read of recording.csv
+        // against.
+        let recording_hash = fingerprint_content(csv.as_bytes());
+
+        let names: Vec<String> = if channel_names.len() == channels {
+            channel_names.to_vec()
+        } else {
+            (0..channels).map(|c| format!("ch{}", c)).collect()
+        };
+        let schema_json =
+            format!("[{}]", names.iter().map(|n| format!("\"{}\"", json_escape(n))).collect::<Vec<_>>().join(","));
+
         let manifest = CaseManifest {
             name: name.to_string(),
             created: iso8601_now(),
@@ -167,14 +216,9 @@ impl Case {
             channels,
             samples: recording.len(),
             input_hash: Some(config.input_hash.clone()),
+            recording_hash: Some(recording_hash),
             schema_version: "0.1".to_string(),
         };
-        let mut csv = (0..channels).map(|c| format!("ch{}", c)).collect::<Vec<_>>().join(",");
-        csv.push('\n');
-        for row in recording {
-            csv.push_str(&row.iter().map(f64::to_string).collect::<Vec<_>>().join(","));
-            csv.push('\n');
-        }
         let incidents_json =
             format!("[{}]", incidents.iter().map(Incident::to_json).collect::<Vec<_>>().join(","));
         let config_json = format!(
@@ -187,6 +231,8 @@ impl Case {
         write_file(dir.join("recording.csv"), csv)?;
         write_file(dir.join("incidents.json"), incidents_json)?;
         write_file(dir.join("config.json"), config_json)?;
+        write_file(dir.join("context.json"), context_timeline_json(timeline))?;
+        write_file(dir.join("schema.json"), schema_json)?;
         Ok(Case { dir: dir.to_path_buf(), manifest })
     }
 
@@ -240,6 +286,66 @@ impl Case {
         let path = self.dir.join("config.json");
         std::fs::read_to_string(&path).map_err(|e| format!("read config.json: {}", e))
     }
+
+    /// Reads `context.json` back into a [`ContextTimeline`] (the sidecar
+    /// [`Case::save`] wrote alongside the recording). Legacy cases saved
+    /// before `context.json` existed have no such file — that's not an
+    /// error, it just means an empty timeline, same as an investigation
+    /// with no `--context` given.
+    pub fn context(&self) -> Result<ContextTimeline, String> {
+        let path = self.dir.join("context.json");
+        if !path.exists() {
+            return Ok(ContextTimeline::new());
+        }
+        let text = std::fs::read_to_string(&path).map_err(|e| format!("read context.json: {}", e))?;
+        parse_context_timeline(&text)
+    }
+
+    /// Per-channel display names in recording-column order, read back from
+    /// `schema.json`. Falls back to `ch0, ch1, ...` for legacy cases saved
+    /// before `schema.json` existed (or if it's unreadable/empty).
+    pub fn channel_names(&self) -> Vec<String> {
+        let path = self.dir.join("schema.json");
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            let names = split_string_array(&text);
+            if !names.is_empty() {
+                return names;
+            }
+        }
+        (0..self.manifest.channels).map(|c| format!("ch{}", c)).collect()
+    }
+}
+
+/// Serialize a [`ContextTimeline`] to the `context.json` sidecar format: a
+/// JSON array of `{"tick":N,"kind":"...","value":"..."}` objects.
+fn context_timeline_json(timeline: &ContextTimeline) -> String {
+    let events = timeline
+        .iter()
+        .map(|e| {
+            format!(
+                "{{\"tick\":{},\"kind\":\"{}\",\"value\":\"{}\"}}",
+                e.tick,
+                json_escape(&e.kind),
+                json_escape(&e.value)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("[{}]", events)
+}
+
+/// Parse a `context.json` sidecar (see [`context_timeline_json`]) back into
+/// a [`ContextTimeline`]. Anchor-split on each object's unique key, same
+/// pattern as `parse_incident`.
+fn parse_context_timeline(json: &str) -> Result<ContextTimeline, String> {
+    let mut timeline = ContextTimeline::new();
+    for obj in split_by_anchor(json, "{\"tick\":") {
+        let tick = extract_u64(obj, "tick").ok_or("context event: missing tick")?;
+        let kind = extract_str(obj, "kind").ok_or("context event: missing kind")?;
+        let value = extract_str(obj, "value").ok_or("context event: missing value")?;
+        timeline.push(ContextEvent::new(tick, kind, value));
+    }
+    Ok(timeline)
 }
 
 /// Extract just the `input_hash` field from a case's `config.json` text
@@ -256,6 +362,35 @@ pub fn parse_config_input_hash(json: &str) -> Option<String> {
 #[must_use]
 pub fn parse_config_monitor_thresholds(json: &str) -> Option<(f64, f64, f64)> {
     Some((extract_f64(json, "res_thr")?, extract_f64(json, "dfa_thr")?, extract_f64(json, "cusum_thr")?))
+}
+
+/// Extract the *full* saved [`MonitorExport`] (every threshold and every
+/// per-channel calibration field, not just the three global thresholds)
+/// from a case's `config.json` `monitor_export` object, for a complete
+/// drift comparison on `struktura replay`.
+#[must_use]
+pub fn parse_config_monitor_export(json: &str) -> Option<MonitorExport> {
+    let res_thr = extract_f64(json, "res_thr")?;
+    let dfa_thr = extract_f64(json, "dfa_thr")?;
+    let cusum_thr = extract_f64(json, "cusum_thr")?;
+    let channels_content = array_content(json, "channels")?;
+    let channels: Vec<ChannelExport> =
+        split_by_anchor(channels_content, "{\"ar_a\":").iter().map(|s| parse_channel_export(s)).collect::<Option<_>>()?;
+    Some(MonitorExport { res_thr, dfa_thr, cusum_thr, channels })
+}
+
+fn parse_channel_export(s: &str) -> Option<ChannelExport> {
+    Some(ChannelExport {
+        ar_a: extract_f64(s, "ar_a")?,
+        ar_b: extract_f64(s, "ar_b")?,
+        ar_sd: extract_f64(s, "ar_sd")?,
+        alpha_mean: extract_f64(s, "alpha_mean")?,
+        alpha_sd: extract_f64(s, "alpha_sd")?,
+        mean: extract_f64(s, "mean")?,
+        roll_thr: extract_f64(s, "roll_thr")?,
+        max_run: extract_u64(s, "max_run")? as usize,
+        repeat_enabled: s.contains("\"repeat_enabled\":true"),
+    })
 }
 
 // incidents.json parsing: anchor-split on each object's unique key.
@@ -430,21 +565,24 @@ mod tests {
             detector_version: "1.7.3".to_string(), baseline_samples: 200,
             recording_path: "C:\\Oura\\case\\recording.csv".to_string(), incidents_count: 2,
             channels: 3, samples: 500,
-            input_hash: Some("deadbeef01234567".to_string()), schema_version: "0.1".to_string(),
+            input_hash: Some("deadbeef01234567".to_string()),
+            recording_hash: Some("beadfeed76543210".to_string()),
+            schema_version: "0.1".to_string(),
         };
         assert_eq!(CaseManifest::from_json(&m.to_json()).expect("parses"), m);
     }
 
     #[test]
     fn manifest_json_parses_pre_v0_1_manifests_without_input_hash() {
-        // Older manifests lack `input_hash`/`schema_version` entirely;
-        // from_json must default rather than fail.
+        // Older manifests lack `input_hash`/`recording_hash`/`schema_version`
+        // entirely; from_json must default rather than fail.
         let old = "{\"name\":\"old\",\"created\":\"2026-01-01T00:00:00Z\",\
                     \"detector_version\":\"1.0.0\",\"baseline_samples\":100,\
                     \"recording_path\":\"r.csv\",\"incidents_count\":0,\
                     \"channels\":2,\"samples\":300}";
         let m = CaseManifest::from_json(old).expect("parses");
         assert_eq!(m.input_hash, None);
+        assert_eq!(m.recording_hash, None);
         assert_eq!(m.schema_version, "0.1");
     }
 
@@ -483,9 +621,12 @@ mod tests {
         });
         let incidents = builder.finalize();
         let config = test_case_config();
-        let case = Case::save(&dir, &recording, &incidents, 1, "roundtrip", &config).expect("saves");
+        let timeline = ContextTimeline::new();
+        let case =
+            Case::save(&dir, &recording, &incidents, 1, "roundtrip", &config, &timeline, &[]).expect("saves");
         assert_eq!((case.manifest.channels, case.manifest.samples), (2, 3));
         assert_eq!(case.manifest.input_hash, Some(config.input_hash.clone()));
+        assert!(case.manifest.recording_hash.is_some());
         assert_eq!(case.manifest.schema_version, "0.1");
 
         let loaded = Case::load(&dir).expect("loads");
@@ -498,6 +639,10 @@ mod tests {
         assert_eq!(back[0].evidence[0].channel, 0);
         assert_eq!(back[0].evidence[0].leg, Leg::LevelShift);
         assert!(Case::load(&tmp_dir("missing")).unwrap_err().contains("manifest.json"));
+        // No channel_names given -> falls back to ch0..chN.
+        assert_eq!(loaded.channel_names(), vec!["ch0", "ch1"]);
+        // No context given -> empty timeline, not an error.
+        assert!(loaded.context().expect("reads context.json").is_empty());
 
         let config_json = std::fs::read_to_string(dir.join("config.json")).expect("reads config.json");
         assert!(config_json.contains(&format!("\"input_hash\":\"{}\"", config.input_hash)));
@@ -520,7 +665,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let recording = vec![vec![1.0, 2.0], vec![1.5, 2.5]];
         let config = test_case_config();
-        let case = Case::save(&dir, &recording, &[], 1, "config_json", &config).expect("saves");
+        let timeline = ContextTimeline::new();
+        let case = Case::save(&dir, &recording, &[], 1, "config_json", &config, &timeline, &[]).expect("saves");
 
         let text = case.config_json().expect("reads config.json");
         assert_eq!(parse_config_input_hash(&text), Some(config.input_hash.clone()));
@@ -528,6 +674,11 @@ mod tests {
             parse_config_monitor_thresholds(&text),
             Some((config.monitor_export.res_thr, config.monitor_export.dfa_thr, config.monitor_export.cusum_thr))
         );
+        let full = parse_config_monitor_export(&text).expect("parses full monitor export");
+        assert_eq!(full.channels.len(), config.monitor_export.channels.len());
+        assert_eq!(full.channels[0].ar_a, config.monitor_export.channels[0].ar_a);
+        assert_eq!(full.channels[0].max_run, config.monitor_export.channels[0].max_run);
+        assert_eq!(full.channels[0].repeat_enabled, config.monitor_export.channels[0].repeat_enabled);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -541,11 +692,39 @@ mod tests {
             name: "missing".to_string(), created: "2026-09-17T12:00:00Z".to_string(),
             detector_version: "1.0.0".to_string(), baseline_samples: 1,
             recording_path: "r.csv".to_string(), incidents_count: 0,
-            channels: 1, samples: 1, input_hash: None, schema_version: "0.1".to_string(),
+            channels: 1, samples: 1, input_hash: None, recording_hash: None,
+            schema_version: "0.1".to_string(),
         };
         write_file(dir.join("manifest.json"), manifest.to_json()).expect("writes manifest");
         let case = Case::load(&dir).expect("loads");
         assert!(case.config_json().unwrap_err().contains("config.json"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Issue 3: a saved case's context sidecar (`context.json`) must round
+    /// trip back into an equivalent `ContextTimeline`, and per-channel
+    /// names given at save time must round trip via `schema.json`.
+    #[test]
+    fn context_and_schema_round_trip() {
+        let dir = tmp_dir("context_schema");
+        let _ = std::fs::remove_dir_all(&dir);
+        let recording = vec![vec![1.0, 2.0], vec![1.5, 2.5], vec![2.0, 3.0]];
+        let config = test_case_config();
+        let mut timeline = ContextTimeline::new();
+        timeline.push(ContextEvent::new(0, "mode", "boot"));
+        timeline.push(ContextEvent::new(2, "cmd", "arm"));
+        let names = vec!["motor_current_A".to_string(), "wheel_rpm".to_string()];
+
+        let case = Case::save(&dir, &recording, &[], 1, "ctx", &config, &timeline, &names).expect("saves");
+        assert_eq!(case.channel_names(), names);
+
+        let loaded = Case::load(&dir).expect("loads");
+        assert_eq!(loaded.channel_names(), names);
+        let loaded_timeline = loaded.context().expect("reads context.json");
+        assert_eq!(loaded_timeline.len(), 2);
+        assert_eq!(loaded_timeline.active_at(0).unwrap().value, "boot");
+        assert_eq!(loaded_timeline.active_at(2).unwrap().value, "arm");
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

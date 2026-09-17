@@ -4100,6 +4100,7 @@ fn cmd_case(args: &[String]) {
             let mut baseline_n = 0usize;
             let mut name = String::new();
             let mut out_dir = String::new();
+            let mut context_path = String::new();
             let mut i = 3;
             while i < args.len() {
                 match args[i].as_str() {
@@ -4107,9 +4108,11 @@ fn cmd_case(args: &[String]) {
                     "--baseline" if i + 1 < args.len() => { baseline_n = args[i + 1].parse().unwrap_or(0); i += 2; }
                     "--name" if i + 1 < args.len() => { name = args[i + 1].clone(); i += 2; }
                     "--out" if i + 1 < args.len() => { out_dir = args[i + 1].clone(); i += 2; }
+                    "--context" if i + 1 < args.len() => { context_path = args[i + 1].clone(); i += 2; }
                     "--help" | "-h" => {
-                        println!("struktura case save --from <recording.csv> --name <case-name> [--baseline N] [--out <dir>]");
+                        println!("struktura case save --from <recording.csv> --name <case-name> [--baseline N] [--out <dir>] [--context ctx.csv]");
                         println!("  Save a recording and its investigation as a replayable case directory.");
+                        println!("  --context  Sidecar CSV with operating context (mode, commands, annotations)");
                         process::exit(0);
                     }
                     _ => { i += 1; }
@@ -4132,16 +4135,27 @@ fn cmd_case(args: &[String]) {
             // calibrates on, instead of being built after the run over
             // unfiltered columns (which used to feed timestamp/mode
             // columns into calibration).
-            let (_meas_names, meas_data, column_schema, _header) = prepare_input(&content);
+            let (meas_names, meas_data, column_schema, _header) = prepare_input(&content);
             if meas_data.is_empty() || meas_data[0].is_empty() {
                 eprintln!("need at least 1 measurement channel and some samples");
                 process::exit(2);
             }
             let baseline = if baseline_n > 0 { baseline_n } else { meas_data[0].len() / 3 };
 
+            // Issue 3: a saved case used to always build an empty context
+            // timeline, so an investigation run with `--context` never
+            // survived `case save` -> `replay`. Parse the same sidecar
+            // `cmd_investigate` does.
+            let mut timeline = struktura::context::ContextTimeline::new();
+            if !context_path.is_empty() {
+                match struktura::context::ContextTimeline::from_csv(&context_path, 0, 1, 2) {
+                    Ok(t) => timeline = t,
+                    Err(e) => eprintln!("warning: could not parse context CSV: {}", e),
+                }
+            }
+
             // Shared calibrate -> detect -> group-into-incidents pipeline
             // (also used by `investigate` and `replay`).
-            let timeline = struktura::context::ContextTimeline::new();
             let (incidents, monitor_export) = match struktura::replay::run_investigation(&meas_data, baseline, &timeline) {
                 Ok(r) => r,
                 Err(e) => { eprintln!("investigation failed: {}", e); process::exit(2); }
@@ -4156,7 +4170,7 @@ fn cmd_case(args: &[String]) {
             let nsamples = meas_data[0].len();
             let rows: Vec<Vec<f64>> = (0..nsamples).map(|t| meas_data.iter().map(|c| c[t]).collect()).collect();
             let config = struktura::case::CaseConfig { input_hash, monitor_export, column_schema };
-            match struktura::case::Case::save(&dir, &rows, &incidents, baseline, &name, &config) {
+            match struktura::case::Case::save(&dir, &rows, &incidents, baseline, &name, &config, &timeline, &meas_names) {
                 Ok(c) => println!("case saved: {} ({} incidents, {} channels x {} samples)",
                     c.dir().display(), incidents.len(), meas_data.len(), nsamples),
                 Err(e) => { eprintln!("save failed: {}", e); process::exit(2); }
@@ -4219,10 +4233,11 @@ fn cmd_replay(args: &[String]) {
                 println!("{}", rpt);
                 if !incidents.is_empty() {
                     println!();
-                    let names: Vec<&str> = (0..case.manifest.channels).map(|i| {
-                        // no header in saved recording, use ch0..chN
-                        Box::leak(format!("ch{}", i).into_boxed_str()) as &str
-                    }).collect();
+                    // Issue 3: named channels from the case's saved
+                    // schema.json when available, instead of always
+                    // falling back to ch0..chN.
+                    let channel_names = case.channel_names();
+                    let names: Vec<&str> = channel_names.iter().map(|s| s.as_str()).collect();
                     let rpt = struktura::report::investigation_report(&incidents, &names, case.manifest.samples);
                     println!("{}", rpt);
                 }
@@ -4237,33 +4252,45 @@ fn cmd_replay(args: &[String]) {
 
 /// Parse a header + comma-separated-f64 CSV body into column-major data.
 ///
-/// A malformed row (wrong field count) used to be silently dropped, which
-/// shifts every later row's tick index relative to a sidecar context file
-/// keyed on the original row number (Finding 3). Instead, a short row is
-/// padded with NaN and a long row is truncated to the header width, so row
-/// count — and therefore tick alignment — is always preserved; the caller
-/// gets back how many rows needed fixing up.
-fn parse_csv_columns(content: &str) -> (Vec<String>, Vec<Vec<f64>>, usize) {
+/// A malformed row (wrong field count) used to be silently patched up
+/// per-field — a short row padded with NaN, a long row truncated to header
+/// width — which let a bad row masquerade as partly-valid data. Row count
+/// (and therefore tick alignment with a sidecar context file keyed on the
+/// original row number) is still always preserved, but now the entire row
+/// is marked invalid and every channel's value for that row is NaN, not
+/// just padded/truncated. The caller gets back the 0-based data-row indices
+/// that were invalid.
+///
+/// A row with the *right* field count but a value that doesn't parse as a
+/// number (e.g. a `mode`/`command` column carrying a string label) is NOT
+/// treated as malformed here — `prepare_input`'s `ColumnSchema` filters
+/// those non-measurement columns out downstream, so a non-numeric field in
+/// a well-shaped row is expected input, not a data-quality problem; only
+/// that one field becomes NaN.
+fn parse_csv_columns(content: &str) -> (Vec<String>, Vec<Vec<f64>>, Vec<usize>) {
     let mut lines = content.lines();
     let header_line = match lines.next() {
         Some(h) => h,
-        None => return (vec![], vec![], 0),
+        None => return (vec![], vec![], vec![]),
     };
     let header: Vec<String> = header_line.split(',').map(|s| s.trim().to_string()).collect();
     let ncols = header.len();
     let mut cols: Vec<Vec<f64>> = (0..ncols).map(|_| Vec::new()).collect();
-    let mut malformed = 0usize;
-    for line in lines {
+    let mut invalid_rows = Vec::new();
+    for (row_idx, line) in lines.enumerate() {
         let fields: Vec<&str> = line.split(',').collect();
-        if fields.len() != ncols {
-            malformed += 1;
-        }
-        for i in 0..ncols {
-            let v = fields.get(i).map_or(f64::NAN, |f| f.trim().parse::<f64>().unwrap_or(f64::NAN));
-            cols[i].push(v);
+        if fields.len() == ncols {
+            for (i, f) in fields.iter().enumerate() {
+                cols[i].push(f.trim().parse::<f64>().unwrap_or(f64::NAN));
+            }
+        } else {
+            invalid_rows.push(row_idx);
+            for col in cols.iter_mut() {
+                col.push(f64::NAN);
+            }
         }
     }
-    (header, cols, malformed)
+    (header, cols, invalid_rows)
 }
 
 /// Shared input preparation for `investigate` and `case save` (Finding 2):
@@ -4271,9 +4298,13 @@ fn parse_csv_columns(content: &str) -> (Vec<String>, Vec<Vec<f64>>, usize) {
 /// only — `investigate` used to filter and `case save` didn't, so a case
 /// saved from the same file calibrated on timestamp/mode columns too.
 fn prepare_input(content: &str) -> (Vec<String>, Vec<Vec<f64>>, struktura::context::ColumnSchema, Vec<String>) {
-    let (header, cols, malformed) = parse_csv_columns(content);
-    if malformed > 0 {
-        eprintln!("warning: {} malformed row(s) in input (padded/truncated to header width)", malformed);
+    let (header, cols, invalid_rows) = parse_csv_columns(content);
+    if !invalid_rows.is_empty() {
+        eprintln!(
+            "warning: {} malformed row(s) in input (rows {:?}, set to NaN across all channels)",
+            invalid_rows.len(),
+            invalid_rows
+        );
     }
     let schema = struktura::context::ColumnSchema::from_header(
         &header.iter().map(|s| s.as_str()).collect::<Vec<_>>()
@@ -4288,33 +4319,57 @@ fn prepare_input(content: &str) -> (Vec<String>, Vec<Vec<f64>>, struktura::conte
 mod tests {
     use super::*;
 
-    /// Finding 3: a malformed row (wrong field count) must not be dropped
-    /// — dropping it would shift every later row's tick index relative to
-    /// a sidecar keyed on the original row number. It's padded/truncated
-    /// to header width instead, so row count is preserved.
+    /// Data policy: a malformed row (wrong field count, or a value that
+    /// doesn't parse as a number) must not be dropped -- dropping it would
+    /// shift every later row's tick index relative to a sidecar keyed on
+    /// the original row number -- but it also must not be partially
+    /// patched up (padded/truncated) into looking like valid data. The
+    /// entire row is marked invalid instead: every channel gets NaN for
+    /// that row, and its 0-based row index comes back in `invalid_rows`.
     #[test]
-    fn parse_csv_columns_pads_short_and_truncates_long_rows_preserving_row_count() {
+    fn parse_csv_columns_marks_malformed_rows_entirely_invalid_preserving_row_count() {
         let csv = "time,a,b\n1,10,20\n2,11\n3,12,13,extra\n4,14,15\n";
-        let (header, cols, malformed) = parse_csv_columns(csv);
+        let (header, cols, invalid_rows) = parse_csv_columns(csv);
         assert_eq!(header, vec!["time", "a", "b"]);
         // 4 data rows in, 4 rows out on every column -- none dropped.
         assert_eq!(cols[0].len(), 4);
         assert_eq!(cols[1].len(), 4);
         assert_eq!(cols[2].len(), 4);
-        // Short row (row 2, missing "b") is padded with NaN.
-        assert!(cols[2][1].is_nan());
-        // Long row (row 3) is truncated -- its extra field is dropped, not
-        // the whole row.
-        assert_eq!(cols[0][2], 3.0);
-        assert_eq!(cols[1][2], 12.0);
-        assert_eq!(cols[2][2], 13.0);
-        assert_eq!(malformed, 2);
+        assert_eq!(invalid_rows, vec![1, 2]);
+        // Row 1 ("2,11") is missing "b" -- unlike the old pad-short
+        // behavior, "time" and "a" are ALSO NaN'd out for that row, not
+        // just the missing field.
+        assert!(cols[0][1].is_nan() && cols[1][1].is_nan() && cols[2][1].is_nan());
+        // Row 2 ("3,12,13,extra") has an extra field -- unlike the old
+        // truncate-long behavior, the whole row is invalid, not just the
+        // extra field dropped.
+        assert!(cols[0][2].is_nan() && cols[1][2].is_nan() && cols[2][2].is_nan());
+        // Well-formed rows are untouched.
+        assert_eq!(cols[0][0], 1.0);
+        assert_eq!(cols[1][0], 10.0);
+        assert_eq!(cols[0][3], 4.0);
+        assert_eq!(cols[2][3], 15.0);
+    }
+
+    /// A well-shaped row (right field count) with one non-numeric value is
+    /// NOT malformed -- a `mode`/`command` column legitimately carries
+    /// string labels, and `prepare_input`'s `ColumnSchema` filters those
+    /// columns out before calibration. Only that field goes to NaN; the
+    /// row itself isn't flagged invalid, and the row's other fields are
+    /// untouched.
+    #[test]
+    fn parse_csv_columns_treats_unparseable_field_as_nan_without_flagging_whole_row_invalid() {
+        let csv = "a,mode\n1,cruise\n2,idle\n";
+        let (_, cols, invalid_rows) = parse_csv_columns(csv);
+        assert!(invalid_rows.is_empty());
+        assert_eq!(cols[0], vec![1.0, 2.0]);
+        assert!(cols[1][0].is_nan() && cols[1][1].is_nan());
     }
 
     #[test]
     fn parse_csv_columns_reports_zero_malformed_on_clean_input() {
-        let (_, _, malformed) = parse_csv_columns("a,b\n1,2\n3,4\n");
-        assert_eq!(malformed, 0);
+        let (_, _, invalid_rows) = parse_csv_columns("a,b\n1,2\n3,4\n");
+        assert!(invalid_rows.is_empty());
     }
 
     /// Finding 2: `case save` used to pass ALL parsed columns (timestamp,
