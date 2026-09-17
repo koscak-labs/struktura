@@ -2,7 +2,7 @@
 use std::env;
 use std::fs;
 use std::process;
-use struktura::{analyze, health_check, prove_structure, HealthVerdict, LawQuality, StructuralLaw};
+use struktura::{analyze, bootstrap_alpha, health_check, prove_structure, HealthVerdict, LawQuality, StructuralLaw};
 
 const NORMAL_SAMPLES: &str = include_str!("../../data/normal_sample.csv");
 const FAULT_SAMPLES: &str = include_str!("../../data/fault_sample.csv");
@@ -19,7 +19,7 @@ fn read_input(path: &str) -> Vec<f64> {
         eprintln!("Error reading {}: {}", path, e);
         process::exit(1);
     });
-    parse_values(&content)
+    parse_values_col(&content, resolve_col(&content))
 }
 
 fn read_csv(path: &str) -> Vec<f64> { read_input(path) }
@@ -31,7 +31,24 @@ fn read_stdin() -> Vec<f64> {
         eprintln!("Error reading stdin: {}", e);
         process::exit(1);
     });
-    parse_values(&buf)
+    parse_values_col(&buf, resolve_col(&buf))
+}
+
+/// `--col <index|name>` selects a CSV column (0-based index, or header name).
+/// Absent: last column (unchanged default).
+fn resolve_col(content: &str) -> Option<usize> {
+    let args: Vec<String> = env::args().collect();
+    let spec = args.iter().position(|a| a == "--col").and_then(|i| args.get(i + 1))?;
+    if let Ok(n) = spec.parse::<usize>() {
+        return Some(n);
+    }
+    let header = content.lines().find(|l| !l.is_empty() && !l.starts_with('#'))?;
+    let idx = header.split(',').position(|h| h.trim().eq_ignore_ascii_case(spec));
+    if idx.is_none() {
+        eprintln!("Error: column '{}' not found in header: {}", spec, header);
+        process::exit(1);
+    }
+    idx
 }
 
 fn read_text_input(path: &str) -> String {
@@ -188,7 +205,9 @@ fn main() {
         println!("    struktura guard <file.csv> --json          Machine-readable output");
         println!("    cat stream.csv | struktura guard -         Pipe from stdin");
         println!("    struktura when <file.csv>                  Find WHEN something changed (changepoint detection)");
+        println!("    struktura when <file.csv> --truth 0-500,9000-9999   Score changepoints against known windows");
         println!("    struktura check <file.csv>                 One-shot structural analysis");
+        println!("    struktura prove <file.csv>                 Bootstrap CI on alpha + shuffle proof of structure");
         println!("    struktura scan <file_or_->                 Auto-classify + trend + health");
         println!();
         println!("  DEMOS (zero setup, embedded data):");
@@ -205,7 +224,7 @@ fn main() {
         println!("    struktura bench                           Full benchmark with all fault types");
         println!("    struktura benchmark-faults                 F1 scores across 6 telemetry fault types");
         println!();
-        println!("  INPUT: CSV or one-value-per-line. Uses last column.");
+        println!("  INPUT: CSV or one-value-per-line. Uses last column, or --col <index|name>.");
         println!("  MORE: https://github.com/koscak-labs/struktura");
         println!();
         process::exit(0);
@@ -214,6 +233,7 @@ fn main() {
     match args[1].as_str() {
         "demo" => cmd_demo(),
         "check" => cmd_check(&args),
+        "prove" => cmd_prove(&args),
         "compare" => cmd_compare(&args),
         "stamp" => cmd_stamp(&args),
         "bench" => cmd_bench(),
@@ -408,31 +428,16 @@ fn cmd_check(args: &[String]) {
         let verdict = health_check(&law, b);
         let (color, label) = verdict_color(verdict);
         let shift = (law.dfa.alpha - b).abs();
-        // Conformal confidence: how extreme is this shift compared to
-        // what you'd see by chance on clean data?
-        use struktura::{conformal::ConformalDetector, dfa};
-        let mut conf = ConformalDetector::new();
-        let mut null_shifts = Vec::new();
-        let half = data.len() / 2;
-        if half >= 64 {
-            for seed in 0..50u64 {
-                let mut state = seed * 7919 + 1;
-                let mut shuffled = data.clone();
-                for i in (1..shuffled.len()).rev() {
-                    state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
-                    let j = (state >> 33) as usize % (i + 1);
-                    shuffled.swap(i, j);
-                }
-                let a1 = dfa(&shuffled[..half]).alpha;
-                let a2 = dfa(&shuffled[half..]).alpha;
-                null_shifts.push((a2 - a1).abs());
-            }
-            conf.calibrate(&null_shifts);
-        }
-        let conf_pct = conf.confidence(shift) * 100.0;
+        // Significance: the shift against the signal's own alpha spread
+        // across quarter-length windows (subsampling, see bootstrap_alpha).
+        // A shuffle null is wrong here: shuffling destroys the ordering
+        // that alpha measures and calibrates against ~0.5, not the baseline.
+        let ci = bootstrap_alpha(&data, 20);
+        let se = (ci.ci_high - ci.ci_low) / (2.0 * 1.96);
+        let z = if se > 0.0 { shift / se } else { f64::INFINITY };
         println!();
-        if conf_pct > 50.0 {
-            println!("  >>> {}{}\x1b[0m ({:.0}% confidence)", color, label, conf_pct);
+        if data.len() >= 256 {
+            println!("  >>> {}{}\x1b[0m (z={:.1} against this signal's alpha spread ±{:.3})", color, label, z, se * 1.96);
         } else {
             println!("  >>> {}{}\x1b[0m", color, label);
         }
@@ -526,29 +531,22 @@ fn cmd_compare(args: &[String]) {
     println!();
     println!("  shift: {:+.3} — the signal became {}", shift, direction);
 
-    // Conformal confidence via shuffle null
-    use struktura::{conformal::ConformalDetector, dfa};
-    let mut conf = ConformalDetector::new();
-    let combined: Vec<f64> = data_a.iter().chain(data_b.iter()).cloned().collect();
-    let half = combined.len() / 2;
-    if half >= 64 {
-        let mut null_shifts = Vec::new();
-        for seed in 0..50u64 {
-            let mut state = seed * 7919 + 1;
-            let mut s = combined.clone();
-            for i in (1..s.len()).rev() {
-                state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
-                let j = (state >> 33) as usize % (i + 1);
-                s.swap(i, j);
-            }
-            null_shifts.push((dfa(&s[..half]).alpha - dfa(&s[half..]).alpha).abs());
-        }
-        conf.calibrate(&null_shifts);
-        let pct = conf.confidence(shift.abs()) * 100.0;
-        if pct > 50.0 {
-            println!("  >>> {}{}\x1b[0m ({:.0}% confidence this is a real change)", color, label, pct);
+    // Significance: z of the shift against both signals' own alpha spread
+    // across quarter-length windows (subsampling, see bootstrap_alpha).
+    // The previous shuffle null calibrated against ~0.5 and reported
+    // "94% confidence" for shifts that sit inside either signal's spread.
+    if data_a.len() >= 256 && data_b.len() >= 256 {
+        let ca = bootstrap_alpha(&data_a, 20);
+        let cb = bootstrap_alpha(&data_b, 20);
+        let se_a = (ca.ci_high - ca.ci_low) / (2.0 * 1.96);
+        let se_b = (cb.ci_high - cb.ci_low) / (2.0 * 1.96);
+        let se = (se_a * se_a + se_b * se_b).sqrt();
+        let z = if se > 0.0 { shift.abs() / se } else { f64::INFINITY };
+        println!("  spread:    baseline ±{:.3}  current ±{:.3}  (95%, quarter-length windows)", se_a * 1.96, se_b * 1.96);
+        if z >= 3.0 {
+            println!("  >>> {}{}\x1b[0m (z={:.1}: the shift is outside both signals' own variability)", color, label, z);
         } else {
-            println!("  >>> {}{}\x1b[0m (low confidence — could be noise)", color, label);
+            println!("  >>> {}{}\x1b[0m (z={:.1}: the shift is within the signals' own variability, treat as inconclusive)", color, label, z);
         }
     } else {
         println!("  >>> {}{}\x1b[0m", color, label);
@@ -3702,32 +3700,10 @@ fn run_guard(content: &str, baseline_n: usize, json: bool) -> i32 {
         }
     }
 
-    // Build conformal calibration from the baseline period: run the
-    // monitor over the calibration data, collect its internal scores
-    // (observed/threshold ratios), calibrate a ConformalDetector on them.
-    use struktura::conformal::ConformalDetector;
-    let mut conf = ConformalDetector::new();
-    {
-        let mut cal_mon = HybridMonitor::calibrate(&calib).unwrap();
-        let mut cal_scores: Vec<f64> = Vec::new();
-        let mut s = vec![0.0f64; ncols];
-        for t in 0..calib_n {
-            for ch in 0..ncols { s[ch] = channels[ch][t]; }
-            if cal_mon.push(&s).is_some() {
-                if let Some(r) = cal_mon.last_alarm() {
-                    cal_scores.push(r.observed / r.threshold.max(1e-12));
-                }
-                cal_mon.reset();
-            }
-        }
-        // Also add the max-but-not-alarming scores as the null body
-        // (most calibration samples DON'T alarm — approximate their
-        // score as 0.5 × threshold to fill the null distribution)
-        for _ in 0..(calib_n / 10).max(20) {
-            cal_scores.push(0.3 + 0.2 * (cal_scores.len() as f64 * 0.1).sin().abs());
-        }
-        conf.calibrate(&cal_scores);
-    }
+    // Alarm strength is reported as the monitor's own observed/threshold
+    // ratio. An earlier version printed a "% confidence" calibrated on the
+    // calibration window's alarm scores padded with synthetic filler
+    // values; that number was not a measurement and is gone.
 
     let mut sample = vec![0.0f64; ncols];
     let mut ap = AutoPilot::new(mon);
@@ -3759,14 +3735,11 @@ fn run_guard(content: &str, baseline_n: usize, json: bool) -> i32 {
                     let explanation = struktura::monitor::explain_alarm(report);
                     let name = ch_name(report.channel);
                     let score_ratio = report.observed / report.threshold.max(1e-12);
-                    let pct = conf.confidence(score_ratio) * 100.0;
                     if json {
-                        println!("{{\"event\":\"alarm\",\"t\":{},\"channel\":\"{}\",\"class\":\"{}\",\"confidence\":{:.0},\"explanation\":\"{}\"}}",
-                            t, name, class, pct, explanation);
-                    } else if pct > 50.0 {
-                        eprintln!("  row {:>6}  ⚠ {} ({:.0}%): {}", t, name, pct, explanation);
+                        println!("{{\"event\":\"alarm\",\"t\":{},\"channel\":\"{}\",\"class\":\"{}\",\"score_ratio\":{:.2},\"explanation\":\"{}\"}}",
+                            t, name, class, score_ratio, explanation);
                     } else {
-                        eprintln!("  row {:>6}  ⚠ {}: {}", t, name, explanation);
+                        eprintln!("  row {:>6}  ⚠ {} ({:.1}x threshold): {}", t, name, score_ratio, explanation);
                     }
                 }
                 Event::Quarantined { channel, .. } => {
@@ -3824,8 +3797,8 @@ fn cmd_when(args: &[String]) {
     use struktura::changepoint::find_changepoints;
 
     if args.len() < 3 {
-        eprintln!("Usage: struktura when <file.csv> [--max N]");
-        eprintln!("  Find WHEN something changed in your data.");
+        eprintln!("Usage: struktura when <file.csv> [--max N] [--truth a-b,c-d]");
+        eprintln!("  Find WHEN something changed in your data. --max caps the number reported (default 5).");
         process::exit(1);
     }
     let path = &args[2];
@@ -3836,42 +3809,36 @@ fn cmd_when(args: &[String]) {
     let json = args.iter().any(|a| a == "--json");
 
     let data = if path == "-" { read_stdin() } else { read_csv(path) };
-    if data.len() < 200 {
-        eprintln!("need >= 200 samples for changepoint detection, got {}", data.len());
+    if data.len() < struktura::changepoint::MIN_SAMPLES {
+        eprintln!("need >= {} samples for changepoint detection, got {}", struktura::changepoint::MIN_SAMPLES, data.len());
         process::exit(1);
     }
 
     let cps = find_changepoints(&data, 128, max);
 
-    // Conformal confidence per changepoint: how likely is this shift to
-    // be real vs random chance? Calibrated from 50 random splits.
-    use struktura::{conformal::ConformalDetector, dfa};
-    let mut conf = ConformalDetector::new();
-    {
-        let half = data.len() / 2;
-        if half >= 64 {
-            let mut null_shifts = Vec::new();
-            for seed in 0..50u64 {
-                let mut state = seed * 7919 + 1;
-                let mut s = data.clone();
-                for i in (1..s.len()).rev() {
-                    state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
-                    let j = (state >> 33) as usize % (i + 1);
-                    s.swap(i, j);
-                }
-                null_shifts.push((dfa(&s[..half]).alpha - dfa(&s[half..]).alpha).abs());
-            }
-            conf.calibrate(&null_shifts);
-        }
-    }
+    // --truth a-b,c-d : sample-index windows where changes are known to occur.
+    // Scores how many detected changepoints fall inside them.
+    let truth: Vec<(usize, usize)> = args.iter().position(|a| a == "--truth")
+        .and_then(|i| args.get(i + 1))
+        .map(|s| s.split(',').filter_map(|w| {
+            let (a, b) = w.split_once('-')?;
+            Some((a.trim().parse().ok()?, b.trim().parse().ok()?))
+        }).collect())
+        .unwrap_or_default();
+    let in_truth = |loc: usize| truth.iter().any(|&(a, b)| loc >= a && loc <= b);
+    let hits = cps.iter().filter(|cp| in_truth(cp.location)).count();
+
+    // Each changepoint carries its Welch z-score (alpha means of the two
+    // sides' 1024-sample blocks, tested against their own spread).
 
     if json {
         print!("[");
         for (i, cp) in cps.iter().enumerate() {
             if i > 0 { print!(","); }
-            let pct = conf.confidence(cp.shift.abs()) * 100.0;
-            print!("{{\"at\":{},\"alpha_before\":{:.3},\"alpha_after\":{:.3},\"shift\":{:.3},\"confidence\":{:.0}}}",
-                cp.location, cp.alpha_before, cp.alpha_after, cp.shift, pct);
+            print!("{{\"at\":{},\"alpha_before\":{:.3},\"alpha_after\":{:.3},\"shift\":{:.3},\"z\":{:.1}",
+                cp.location, cp.alpha_before, cp.alpha_after, cp.shift, cp.confidence);
+            if !truth.is_empty() { print!(",\"in_truth\":{}", in_truth(cp.location)); }
+            print!("}}");
         }
         println!("]");
         return;
@@ -3889,15 +3856,53 @@ fn cmd_when(args: &[String]) {
             let before_interp = interpret_alpha(cp.alpha_before);
             let after_interp = interpret_alpha(cp.alpha_after);
             let direction = if cp.shift > 0.0 { "more correlated" } else { "less correlated" };
-            let pct = conf.confidence(cp.shift.abs()) * 100.0;
-            let conf_str = if pct > 50.0 { format!(" ({:.0}% confidence)", pct) } else { String::new() };
-            println!("  {}. \x1b[33msample {}\x1b[0m — structure shifted {:+.3}{}", i + 1, cp.location, cp.shift, conf_str);
+            println!("  {}. \x1b[33msample {}\x1b[0m — structure shifted {:+.3} (z={:.1})", i + 1, cp.location, cp.shift, cp.confidence);
             println!("     before: α={:.3} ({})", cp.alpha_before, before_interp);
             println!("     after:  α={:.3} ({})", cp.alpha_after, after_interp);
-            println!("     → the signal became {} after this point", direction);
+            let mark = if truth.is_empty() { "" } else if in_truth(cp.location) { "  [in truth window]" } else { "  [outside truth]" };
+            println!("     → the signal became {} after this point{}", direction, mark);
             println!();
         }
     }
+    if !truth.is_empty() {
+        let pct = if cps.is_empty() { 0.0 } else { 100.0 * hits as f64 / cps.len() as f64 };
+        println!("  truth windows: {} of {} changepoints inside ({:.0}%)", hits, cps.len(), pct);
+        println!();
+    }
+}
+
+/// `struktura prove <file>`: is the measured alpha real structure, and how tight is it?
+/// Bootstrap CI (resample with replacement, default 100) + shuffle proof
+/// (destroy ordering, alpha must collapse toward 0.5).
+fn cmd_prove(args: &[String]) {
+    if args.len() < 3 {
+        eprintln!("Usage: struktura prove <file.csv> [--resamples N] [--json]");
+        process::exit(1);
+    }
+    let path = &args[2];
+    let n_res = args.iter().position(|a| a == "--resamples")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(100usize);
+    let json = args.iter().any(|a| a == "--json");
+    let data = if path == "-" { read_stdin() } else { read_csv(path) };
+    if data.len() < 64 {
+        eprintln!("need >= 64 samples, got {}", data.len());
+        process::exit(1);
+    }
+    let ci = bootstrap_alpha(&data, n_res);
+    let proof = prove_structure(&data);
+    if json {
+        println!("{{\"alpha\":{:.4},\"ci_low\":{:.4},\"ci_high\":{:.4},\"resamples\":{},\"shuffled_alpha\":{:.4},\"structure_confirmed\":{}}}",
+            ci.alpha, ci.ci_low, ci.ci_high, ci.n_resamples, proof.shuffled_alpha, proof.structure_confirmed);
+        return;
+    }
+    println!();
+    println!("  \x1b[1mstruktura prove\x1b[0m  {} samples", data.len());
+    println!("    alpha:     {:.3}  95% CI [{:.3}, {:.3}]  ({} bootstrap resamples)", ci.alpha, ci.ci_low, ci.ci_high, ci.n_resamples);
+    println!("    shuffled:  {:.3}  (ordering destroyed; real structure collapses toward 0.5)", proof.shuffled_alpha);
+    println!("    verdict:   {}", if proof.structure_confirmed { "STRUCTURE CONFIRMED (alpha is a property of the ordering, not the values)" } else { "NOT CONFIRMED (shuffled alpha is as far from 0.5 as the real one)" });
+    println!();
 }
 
 fn interpret_alpha(alpha: f64) -> &'static str {

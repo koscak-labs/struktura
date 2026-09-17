@@ -1,0 +1,30 @@
+name: action-selftest
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run struktura action on a known-fault CSV
+        id: guard
+        uses: ./
+        with:
+          file: data/sylv_spike.csv
+          fail-on-fault: false
+
+      - name: Assert faults were detected
+        shell: bash
+        run: |
+          FAULTS="${{ steps.guard.outputs.faults }}"
+          echo "faults output: $FAULTS"
+          if [ -z "$FAULTS" ] || [ "$FAULTS" -le 0 ]; then
+            echo "::error::expected faults > 0 for data/sylv_spike.csv, got '$FAULTS'"
+            exit 1
+          fi
+          echo "OK: $FAULTS fault(s) detected as expected"

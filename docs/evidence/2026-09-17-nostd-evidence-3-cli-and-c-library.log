@@ -1,0 +1,42 @@
+== 2026-09-17T14:03:36Z rustc 1.98.1 (48a229cea 2026-09-01)
+########## CHECK 3a: normal CLI build
+32:crate-type = ["lib"]
+   Compiling struktura v1.7.2 (/home/philp/struktura-nostd)
+    Finished `release` profile [optimized] target(s) in 9.99s
+cargo build --release exit 0
+-rwxr-xr-x 2 philp philp 1820312 Sep 17 16:03 target/release/struktura
+Unknown command: --version
+Try: struktura demo
+
+  [1mstruktura[0m - detect when a signal's structure changes
+
+  USE IT ON YOUR DATA:
+    struktura guard <file.csv>                 Monitor a CSV for anomalies (autonomous)
+
+########## CHECK 3b: supported C-library builds + tests/c/test_struktura.c
+    Finished `release` profile [optimized] target(s) in 0.03s
+cargo rustc exit 0
+-rw-r--r-- 2 philp philp 22669624 Sep 17 15:51 target/release/libstruktura.a
+-rw-r--r-- 1 philp philp     1290 Sep 17 16:03 target/release/libstruktura.d
+-rw-r--r-- 2 philp philp  1765840 Sep 17 16:03 target/release/libstruktura.rlib
+-rwxr-xr-x 2 philp philp   444232 Sep 17 15:51 target/release/libstruktura.so
+gcc static exit 0
+DFA: alpha=1.689 R2=0.9923
+Analyze: alpha=1.689 hurst=0.878 quality=0 n=256
+Health: verdict=3 (expected CRITICAL=3)
+[PASS] DFA R2 valid
+[PASS] N correct
+[PASS] Verdict CRITICAL
+
+3/3 passed
+static C test exit 0
+gcc shared exit 0
+DFA: alpha=1.689 R2=0.9923
+Analyze: alpha=1.689 hurst=0.878 quality=0 n=256
+Health: verdict=3 (expected CRITICAL=3)
+[PASS] DFA R2 valid
+[PASS] N correct
+[PASS] Verdict CRITICAL
+
+3/3 passed
+shared C test exit 0

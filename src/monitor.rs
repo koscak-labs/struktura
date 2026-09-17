@@ -367,6 +367,22 @@ pub struct ChannelExport {
 /// μ = m − γβ), and return the level expected to be exceeded once per
 /// `horizon` samples. This is how flight monitors express "false alarms per
 /// mission hour" as a design parameter.
+/// Two-sided CUSUM decision threshold `h` for a target ARL0 of `horizon` ticks
+/// on N(0,1) increments with slack `k`, from Siegmund's approximation
+/// ARL0_one ≈ (exp(2k·b) − 2k·b − 1) / (2k²) with b = h + 1.166, two-sided ≈
+/// half of that. Solved as the fixed point b = ln(4k²·horizon + 2k·b + 1)/(2k),
+/// a contraction for every k > 0, so only `ln` is needed. k = 1, horizon = 1e6
+/// gives h ≈ 6.43.
+fn siegmund_cusum_threshold(k: f64, horizon: f64) -> f64 {
+    let k = k.max(1e-6);
+    let c = 4.0 * k * k * horizon.max(2.0);
+    let mut b = crate::ln(c + 1.0) / (2.0 * k);
+    for _ in 0..32 {
+        b = crate::ln(c + 2.0 * k * b + 1.0) / (2.0 * k);
+    }
+    (b - 1.166).max(0.0)
+}
+
 fn gumbel_return_level(scores: &[f64], horizon: f64) -> f64 {
     const BLOCKS: usize = 16;
     let n = scores.len();
@@ -657,7 +673,13 @@ impl HybridMonitor {
                 cusum_path.push(mc);
             }
         }
-        let cusum_thr = gumbel_return_level(&cusum_path, config.design_horizon);
+        // The Gumbel block-maxima extrapolation assumes near-independent maxima;
+        // a reflected CUSUM walk has long memory, so its 40K-sample Gumbel fit
+        // lands ~3x too low at a 1e6 horizon (measured 3.33e-6 false alarms per
+        // tick, koscak-labs/struktura#17). Floor it at Siegmund's ARL0 threshold,
+        // which does not depend on calibration length.
+        let cusum_thr = gumbel_return_level(&cusum_path, config.design_horizon)
+            .max(siegmund_cusum_threshold(config.cusum_k, config.design_horizon));
 
         // DFA threshold: Gumbel return level of the max-over-channels
         // windowed-alpha z stream (horizon scaled by the stride).
@@ -681,23 +703,31 @@ impl HybridMonitor {
         // standardized reconstruction error.
         let recon: Vec<Reconstructor> =
             (0..channels).map(|t| fit_reconstructor(clean, t)).collect();
-        let mut parity_scores = Vec::with_capacity(length);
-        for t in 0..length {
-            let mut mz = 0.0f64;
-            for ch in 0..channels {
-                let r = &recon[ch];
-                let mut pred = r.bias;
-                for (s, c) in clean.iter().enumerate() {
-                    pred += r.weights[s] * c[t];
+        // Parity needs at least two channels: with one, every reconstructor has
+        // zero sources, so `pred == bias == mean` and the leg degenerates to a raw
+        // |v - mean| / sd z-score that duplicates the residual leg without the
+        // AR(1) term (koscak-labs/struktura#16). Inert below two channels.
+        let parity_thr = if channels >= 2 {
+            let mut parity_scores = Vec::with_capacity(length);
+            for t in 0..length {
+                let mut mz = 0.0f64;
+                for ch in 0..channels {
+                    let r = &recon[ch];
+                    let mut pred = r.bias;
+                    for (s, c) in clean.iter().enumerate() {
+                        pred += r.weights[s] * c[t];
+                    }
+                    let z = (clean[ch][t] - pred).abs() / r.sd;
+                    if z > mz {
+                        mz = z;
+                    }
                 }
-                let z = (clean[ch][t] - pred).abs() / r.sd;
-                if z > mz {
-                    mz = z;
-                }
+                parity_scores.push(mz);
             }
-            parity_scores.push(mz);
-        }
-        let parity_thr = gumbel_return_level(&parity_scores, config.design_horizon);
+            gumbel_return_level(&parity_scores, config.design_horizon)
+        } else {
+            f64::INFINITY
+        };
 
         let state = clean
             .iter()
@@ -733,7 +763,7 @@ impl HybridMonitor {
                 q.resize(channels, false);
                 q
             },
-            leg_enabled: [true; 7],
+            leg_enabled: [true, true, true, true, true, true, channels >= 2],
             config,
         })
     }
@@ -1117,6 +1147,35 @@ mod tests {
             }
         }
         None
+    }
+
+    #[test]
+    fn single_channel_parity_is_inert() {
+        // koscak-labs/struktura#16: with one channel every reconstructor has
+        // zero sources and parity degenerated to a raw z-score leg that fired
+        // on thermal runaway at tick 4 and on slow drift at tick 789.
+        let calib = synth_spacecraft(700, 4242);
+        let one = vec![calib[0].clone()];
+        let mon = HybridMonitor::calibrate(&one).expect("calibration");
+        assert!(!mon.leg_enabled[6], "parity must be disabled with one channel");
+        assert!(mon.parity_thr.is_infinite(), "parity threshold must be inert");
+        let two = vec![calib[0].clone(), calib[1].clone()];
+        let mon2 = HybridMonitor::calibrate(&two).expect("calibration");
+        assert!(mon2.leg_enabled[6], "parity must stay enabled with two channels");
+        assert!(mon2.parity_thr.is_finite());
+    }
+
+    #[test]
+    fn cusum_threshold_is_floored_at_siegmund() {
+        // koscak-labs/struktura#17: measured 3.33e-6 false alarms per clean
+        // tick against a 1e-6 design horizon, all on ResidualCusum.
+        let h = siegmund_cusum_threshold(1.0, 1_000_000.0);
+        assert!((h - 6.43).abs() < 0.1, "k=1, H=1e6 must give h~6.43, got {h}");
+        let h05 = siegmund_cusum_threshold(0.5, 1_000_000.0);
+        assert!(h05 > h, "smaller slack needs a higher threshold: {h05} vs {h}");
+        let calib = synth_spacecraft(700, 777);
+        let mon = HybridMonitor::calibrate(&calib).expect("calibration");
+        assert!(mon.cusum_thr >= h - 1e-9, "cusum_thr {} below Siegmund floor {}", mon.cusum_thr, h);
     }
 
     #[test]

@@ -2,6 +2,38 @@
 
 All notable changes to Struktura are documented here.
 
+## v1.7.3 (2026-09-17) — no_std dependents build; every public number re-verified
+
+- Docs: full claims audit (`docs/CLAIMS-AUDIT-2026-09-17.md`). Corrected: IMS early
+  warning ~2 h (was ~105 h); SMAP/MSL F1 0.655 with `smap --ar 0 --dfa` (the earlier
+  0.788 could not be reproduced on any commit or flag, `docs/evidence/smap-f1-2026-09-17.md`);
+  Voyager and heliopause rows labelled inconclusive by their own subsampling z; Python
+  speed ratio labelled as a published reference, not run head-to-head; "flight-ready"
+  → compiles clean, not mission-qualified; rover variant stated to have no DFA leg;
+  "0 false alarms" scoped to one fixed-seed synthetic stream
+  (`docs/evidence/monitor-perf-2026-09-17.md`).
+- CLI: `guard` prints an observed/threshold ratio instead of a percentage that was
+  calibrated on synthetic filler; `check`/`compare` print a subsampling z instead of a
+  shuffle-null confidence; `when` rebuilt as a block-alpha changepoint detector with a
+  data-derived noise gate (0 changes on shuffled / AR / 1/f controls, 123K samples
+  each); `--col`, `prove`, `when --truth`.
+- README CLI examples are generated from `docs/examples/*.cmd` fixtures and checked
+  in CI (`scripts/check-examples.sh`, `.github/workflows/examples.yml`).
+- GitHub Action (`action.yml`) wrapping `struktura guard`, with a self-test workflow.
+- `examples/baseprod_terrain.rs`: ESA BASEPROD terrain blocks, leave-one-traverse-out.
+- `[lib] crate-type` reduced to `["lib"]`. Observed in 1.7.2: a dependent with
+  `default-features = false` failed to build with three errors (no global memory
+  allocator found; `#[panic_handler]` function required; unwinding panics are not
+  supported without std) and built cleanly with the reduced list. The C artifacts are
+  produced on demand with `cargo rustc --lib --release --crate-type cdylib --crate-type staticlib`.
+- New `dfa_scratch(values, &mut [f64])`: the DFA with the profile written into a
+  caller-owned slice, no heap required. `dfa_into` now wraps it; a test checks the two
+  agree bit for bit.
+- CI: a `no_std` job (bare-metal `thumbv7em-none-eabihf` library check plus a
+  dependent built with `default-features = false`) and a `c-ffi` job that builds the
+  static library and runs `tests/c/test_struktura.c`.
+- Evidence for the above: `docs/evidence/2026-09-17-nostd-*.log`.
+
 ## v1.7.2 (2026-08-25) — Human-Readable Output + Conformal Confidence + Rover FFI
 
 - All alarms now show column names from CSV headers instead of ch0/ch1/ch2

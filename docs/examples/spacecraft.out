@@ -1,0 +1,23 @@
+$ struktura spacecraft
+
+  MULTI-CHANNEL SPACECRAFT HEALTH MONITOR
+  DFA structural analysis across 4 telemetry channels
+  (RWA/BAT/THM synthetic; MAG = real Voyager 1 data)
+  ====================================================================
+
+  ############################## [RWA:RWA_current]
+                                 alpha=1.308 baseline=1.193 shift=+0.116 R²=0.9570  WARNING
+
+  ############################## [BAT:BAT_voltage]
+                                 alpha=1.980 baseline=1.883 shift=+0.097 R²=0.9993  WARNING
+
+  ############################## [THM:THM_panel_A]
+                                 alpha=1.888 baseline=1.815 shift=+0.073 R²=0.9944  WATCH
+
+  ############################## [MAG:MAG_B_total]
+                                 alpha=1.030 baseline=0.878 shift=+0.152 R²=0.9903  CRITICAL
+
+  ====================================================================
+  Each channel: first half = baseline, second half = current period.
+  Structural (DFA) monitoring catches degradation threshold-based
+  monitors miss — the mean can look normal while the structure shifts.

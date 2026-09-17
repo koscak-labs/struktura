@@ -1,0 +1,90 @@
+name: 'struktura'
+description: 'Run struktura DFA anomaly guard on a CSV in CI — zero-config drift/fault detection.'
+branding:
+  icon: 'activity'
+  color: 'orange'
+
+inputs:
+  file:
+    description: 'Path to the CSV file to check (one column per channel).'
+    required: true
+  version:
+    description: 'struktura version to install from crates.io.'
+    required: false
+    default: '1.7.3'
+  fail-on-fault:
+    description: 'Fail the step (exit non-zero) when struktura reports a fault.'
+    required: false
+    default: 'true'
+  args:
+    description: 'Extra flags passed through to `struktura guard` (e.g. "--baseline 500").'
+    required: false
+    default: ''
+
+outputs:
+  faults:
+    description: 'Number of fault/alarm events struktura reported.'
+    value: ${{ steps.run-guard.outputs.faults }}
+  report:
+    description: 'Path to the raw struktura JSON report written by this action.'
+    value: ${{ steps.run-guard.outputs.report }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache struktura binary
+      id: cache-struktura
+      uses: actions/cache@v4
+      with:
+        path: ~/.cargo/bin
+        key: struktura-cargo-bin-${{ runner.os }}-${{ inputs.version }}
+
+    - name: Install struktura
+      if: steps.cache-struktura.outputs.cache-hit != 'true'
+      shell: bash
+      run: cargo install struktura --version ${{ inputs.version }} --locked
+
+    - name: Run struktura guard
+      id: run-guard
+      shell: bash
+      run: |
+        set +e
+        REPORT="${RUNNER_TEMP}/struktura-report.json"
+        struktura guard "${{ inputs.file }}" --json ${{ inputs.args }} > "$REPORT" 2>&1
+        EXIT_CODE=$?
+        set -e
+
+        cat "$REPORT"
+
+        FAULTS=$(grep -c '"event":"alarm"' "$REPORT" || true)
+        if [ -z "$FAULTS" ]; then FAULTS=0; fi
+
+        echo "faults=$FAULTS" >> "$GITHUB_OUTPUT"
+        echo "report=$REPORT" >> "$GITHUB_OUTPUT"
+
+        {
+          echo "## struktura guard report"
+          echo ""
+          echo "File: \`${{ inputs.file }}\`"
+          echo ""
+          echo "Faults detected: **$FAULTS**"
+          echo ""
+          echo '```json'
+          cat "$REPORT"
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        if [ "$EXIT_CODE" -eq 2 ]; then
+          echo "::error::struktura guard errored (exit 2) — see report above"
+          exit 2
+        fi
+
+        if [ "$EXIT_CODE" -eq 1 ] && [ "${{ inputs.fail-on-fault }}" = "true" ]; then
+          echo "::error::struktura guard detected $FAULTS fault(s) in ${{ inputs.file }}"
+          exit 1
+        fi
+
+        exit 0

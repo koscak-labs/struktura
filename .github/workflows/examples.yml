@@ -1,0 +1,21 @@
+name: examples
+on:
+  push:
+    branches: [master]
+  pull_request:
+jobs:
+  check-examples:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo build --release --bin struktura
+      - name: check-examples.sh
+        env:
+          STRUKTURA_BIN: ${{ github.workspace }}/target/release/struktura
+        run: scripts/check-examples.sh
+      - name: render-examples.sh and diff README.md
+        env:
+          STRUKTURA_BIN: ${{ github.workspace }}/target/release/struktura
+        run: |
+          scripts/render-examples.sh
+          git diff --exit-code README.md

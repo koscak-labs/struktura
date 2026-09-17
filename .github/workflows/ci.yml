@@ -14,3 +14,30 @@ jobs:
       - run: cargo test
       - run: cargo clippy -- -D warnings
       - run: cargo run --example benchmark
+
+  # The crate advertises no_std. Prove it two ways: the library itself checks
+  # for a bare-metal target, and a std binary can depend on it with
+  # default-features = false (in 1.7.2 that dependent failed with three
+  # errors: no global memory allocator, #[panic_handler] required, unwinding
+  # panics not supported without std).
+  no_std:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add thumbv7em-none-eabihf
+      - run: cargo check --lib --no-default-features --target thumbv7em-none-eabihf
+      - name: build a dependent with default-features = false
+        run: |
+          cargo new --bin "$RUNNER_TEMP/nostd-dep" --name nostd-dep
+          printf 'struktura = { path = "%s", default-features = false }\n' "$GITHUB_WORKSPACE" >> "$RUNNER_TEMP/nostd-dep/Cargo.toml"
+          printf 'fn main() {\n    let v: Vec<f64> = (0..512).map(|i| (i as f64 * 0.01).sin()).collect();\n    let mut scratch = [0.0f64; 512];\n    println!("{:?} {:?}", struktura::dfa(&v), struktura::dfa_scratch(&v, &mut scratch));\n}\n' > "$RUNNER_TEMP/nostd-dep/src/main.rs"
+          cargo run --manifest-path "$RUNNER_TEMP/nostd-dep/Cargo.toml"
+
+  # The C header in include/ is only honest if something links against it.
+  c-ffi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo rustc --lib --release --crate-type cdylib --crate-type staticlib
+      - run: gcc tests/c/test_struktura.c -Iinclude target/release/libstruktura.a -lm -lpthread -ldl -o "$RUNNER_TEMP/test_struktura"
+      - run: "$RUNNER_TEMP/test_struktura"
