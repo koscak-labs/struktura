@@ -4038,7 +4038,6 @@ fn cmd_investigate(args: &[String]) {
 
     // Calibration window
     let baseline = if baseline_n > 0 { baseline_n.min(meas_data[0].len()) } else { meas_data[0].len() / 3 };
-    let calib: Vec<Vec<f64>> = meas_data.iter().map(|c| c[..baseline].to_vec()).collect();
 
     // Data quality: count NaN/Inf per channel
     let mut quality_issues = Vec::new();
@@ -4058,18 +4057,6 @@ fn cmd_investigate(args: &[String]) {
         }
     }
 
-    // Calibrate and run
-    let monitor = match struktura::monitor::HybridMonitor::calibrate(&calib) {
-        Some(m) => m,
-        None => {
-            eprintln!("calibration failed on {} samples x {} channels", baseline, meas_data.len());
-            process::exit(2);
-        }
-    };
-    let mut pilot = struktura::autopilot::AutoPilot::new(monitor);
-    let mut builder = struktura::incident::IncidentBuilder::new(10);
-    let valid: Vec<bool> = vec![true; meas_data.len()];
-
     // Summary and quality issues go to stderr so --json stdout is clean JSON
     eprintln!("struktura investigate: {} samples x {} channels, calibrated on {} rows", samples, meas_data.len(), baseline);
     if !quality_issues.is_empty() {
@@ -4078,22 +4065,18 @@ fn cmd_investigate(args: &[String]) {
         eprintln!();
     }
 
-    for t in baseline..meas_data[0].len() {
-        let row: Vec<f64> = meas_data.iter().map(|c| c[t]).collect();
-        let events = pilot.push(&row, &valid);
-        for ev in &events {
-            match ev {
-                struktura::autopilot::Event::Alarm { report, .. } => {
-                    builder.push_alarm(report);
-                }
-                _ => {}
-            }
-            builder.push_event(ev);
+    // Shared calibrate -> detect -> group-into-incidents -> attach-context
+    // pipeline (also used by `case save` and `replay`): offsets ticks by
+    // `baseline` so incidents line up with recording rows, and derives
+    // per-row validity from the data (NaN/Inf -> invalid) instead of
+    // assuming every row is valid.
+    let (incidents, _monitor_export) = match struktura::replay::run_investigation(&meas_data, baseline, &timeline) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("investigation failed: {}", e);
+            process::exit(2);
         }
-    }
-
-    builder.attach_context(&timeline);
-    let incidents = builder.finalize();
+    };
 
     if json {
         print!("[");
@@ -4120,7 +4103,7 @@ fn cmd_case(args: &[String]) {
     match args[2].as_str() {
         "save" => {
             let mut recording_path = String::new();
-            let mut incidents_path = String::new();
+            let mut _incidents_path = String::new();
             let mut baseline_n = 0usize;
             let mut name = String::new();
             let mut out_dir = String::new();
@@ -4128,7 +4111,7 @@ fn cmd_case(args: &[String]) {
             while i < args.len() {
                 match args[i].as_str() {
                     "--from" if i + 1 < args.len() => { recording_path = args[i + 1].clone(); i += 2; }
-                    "--incidents" if i + 1 < args.len() => { incidents_path = args[i + 1].clone(); i += 2; }
+                    "--incidents" if i + 1 < args.len() => { _incidents_path = args[i + 1].clone(); i += 2; }
                     "--baseline" if i + 1 < args.len() => { baseline_n = args[i + 1].parse().unwrap_or(0); i += 2; }
                     "--name" if i + 1 < args.len() => { name = args[i + 1].clone(); i += 2; }
                     "--out" if i + 1 < args.len() => { out_dir = args[i + 1].clone(); i += 2; }
@@ -4148,27 +4131,22 @@ fn cmd_case(args: &[String]) {
                 eprintln!("cannot read {}: {}", recording_path, e);
                 process::exit(2);
             });
-            let (_header, cols) = parse_csv_columns(&content);
+            // Fingerprint the raw file content before parsing (Finding 5:
+            // reproducibility detection, not a security hash).
+            let input_hash = struktura::case::fingerprint_content(content.as_bytes());
+            let (header, cols) = parse_csv_columns(&content);
             let baseline = if baseline_n > 0 { baseline_n } else { cols[0].len() / 3 };
 
-            // Run investigation to get incidents
-            let calib: Vec<Vec<f64>> = cols.iter().map(|c| c[..baseline].to_vec()).collect();
-            let monitor = match struktura::monitor::HybridMonitor::calibrate(&calib) {
-                Some(m) => m,
-                None => { eprintln!("calibration failed"); process::exit(2); }
+            // Shared calibrate -> detect -> group-into-incidents pipeline
+            // (also used by `investigate` and `replay`).
+            let timeline = struktura::context::ContextTimeline::new();
+            let (incidents, monitor_export) = match struktura::replay::run_investigation(&cols, baseline, &timeline) {
+                Ok(r) => r,
+                Err(e) => { eprintln!("investigation failed: {}", e); process::exit(2); }
             };
-            let mut pilot = struktura::autopilot::AutoPilot::new(monitor);
-            let mut builder = struktura::incident::IncidentBuilder::new(10);
-            let valid: Vec<bool> = vec![true; cols.len()];
-            for t in baseline..cols[0].len() {
-                let row: Vec<f64> = cols.iter().map(|c| c[t]).collect();
-                let events = pilot.push(&row, &valid);
-                for ev in &events {
-                    match ev { struktura::autopilot::Event::Alarm { report, .. } => { builder.push_alarm(report); } _ => {} }
-                    builder.push_event(ev);
-                }
-            }
-            let incidents = builder.finalize();
+            let column_schema = struktura::context::ColumnSchema::from_header(
+                &header.iter().map(|s| s.as_str()).collect::<Vec<_>>()
+            );
 
             let dir = if out_dir.is_empty() {
                 std::path::PathBuf::from(format!("cases/{}", name))
@@ -4178,7 +4156,8 @@ fn cmd_case(args: &[String]) {
             // Transpose column-major to row-major for Case::save
             let nsamples = cols[0].len();
             let rows: Vec<Vec<f64>> = (0..nsamples).map(|t| cols.iter().map(|c| c[t]).collect()).collect();
-            match struktura::case::Case::save(&dir, &rows, &incidents, baseline, &name) {
+            let config = struktura::case::CaseConfig { input_hash, monitor_export, column_schema };
+            match struktura::case::Case::save(&dir, &rows, &incidents, baseline, &name, &config) {
                 Ok(c) => println!("case saved: {} ({} incidents, {} channels x {} samples)",
                     c.dir().display(), incidents.len(), cols.len(), cols[0].len()),
                 Err(e) => { eprintln!("save failed: {}", e); process::exit(2); }

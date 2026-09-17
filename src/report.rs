@@ -129,6 +129,21 @@ pub fn replay_report(
         }
     }
 
+    let changed: Vec<_> = diff
+        .evidence_changes
+        .iter()
+        .filter(|c| c.added_evidence > 0 || c.removed_evidence > 0 || !c.channel_diff.is_empty())
+        .collect();
+    if !changed.is_empty() {
+        out.push_str("\nEvidence changes (matched incidents):\n");
+        for c in changed {
+            out.push_str(&format!(
+                "  - incident #{}: +{} evidence, -{} evidence, new channels {:?}\n",
+                c.incident_id, c.added_evidence, c.removed_evidence, c.channel_diff
+            ));
+        }
+    }
+
     out
 }
 
@@ -200,6 +215,7 @@ mod tests {
             missed: vec![0],
             new_alarms: vec![1],
             timing_deltas: vec![],
+            evidence_changes: vec![],
         };
         let report = replay_report(&diff, &old, &new);
         assert!(report.starts_with("Replay comparison: 0 matched, 1 missed, 1 new"));
@@ -207,5 +223,47 @@ mod tests {
         assert!(report.contains("incident #0"));
         assert!(report.contains("New"));
         assert!(report.contains("incident #1"));
+    }
+
+    #[test]
+    fn replay_report_shows_evidence_changes_for_matched_incidents() {
+        use crate::replay::EvidenceChange;
+        let old = vec![incident_with_unresolved(0)];
+        let new = vec![incident_with_unresolved(0)];
+        let diff = ReplayDiff {
+            matched: vec![(0, 0)],
+            missed: vec![],
+            new_alarms: vec![],
+            timing_deltas: vec![(0, 0)],
+            evidence_changes: vec![EvidenceChange {
+                incident_id: 0,
+                added_evidence: 2,
+                removed_evidence: 1,
+                channel_diff: vec![3],
+            }],
+        };
+        let report = replay_report(&diff, &old, &new);
+        assert!(report.contains("Evidence changes"));
+        assert!(report.contains("incident #0: +2 evidence, -1 evidence, new channels [3]"));
+    }
+
+    #[test]
+    fn replay_report_omits_evidence_changes_section_when_nothing_changed() {
+        let old = vec![incident_with_unresolved(0)];
+        let new = vec![incident_with_unresolved(0)];
+        let diff = ReplayDiff {
+            matched: vec![(0, 0)],
+            missed: vec![],
+            new_alarms: vec![],
+            timing_deltas: vec![(0, 0)],
+            evidence_changes: vec![crate::replay::EvidenceChange {
+                incident_id: 0,
+                added_evidence: 0,
+                removed_evidence: 0,
+                channel_diff: vec![],
+            }],
+        };
+        let report = replay_report(&diff, &old, &new);
+        assert!(!report.contains("Evidence changes"));
     }
 }

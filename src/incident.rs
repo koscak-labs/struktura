@@ -256,12 +256,7 @@ impl IncidentBuilder {
     /// Attach context events in `[start_tick - CONTEXT_LOOKBACK, end_tick]`
     /// from `timeline` to every incident built so far.
     pub fn attach_context(&mut self, timeline: &ContextTimeline) {
-        for incident in &mut self.incidents {
-            let lookback_start = incident.start_tick.saturating_sub(CONTEXT_LOOKBACK);
-            for event in timeline.events_in(lookback_start, incident.end_tick) {
-                incident.context.push(event.clone());
-            }
-        }
+        attach_context(&mut self.incidents, timeline);
     }
 
     pub fn incidents(&self) -> &[Incident] {
@@ -271,6 +266,39 @@ impl IncidentBuilder {
     /// Consume the builder, returning the completed incidents.
     pub fn finalize(self) -> Vec<Incident> {
         self.incidents
+    }
+}
+
+/// Attach context events in `[start_tick - CONTEXT_LOOKBACK, end_tick]` from
+/// `timeline` to every incident in `incidents`. Free function (rather than
+/// only a builder method) so callers that post-process incidents *after*
+/// `finalize()` — e.g. to offset ticks with [`offset_ticks`] before
+/// matching them against a recording-tick-aligned timeline — can reuse the
+/// exact same lookback-window logic.
+pub fn attach_context(incidents: &mut [Incident], timeline: &ContextTimeline) {
+    for incident in incidents.iter_mut() {
+        let lookback_start = incident.start_tick.saturating_sub(CONTEXT_LOOKBACK);
+        for event in timeline.events_in(lookback_start, incident.end_tick) {
+            incident.context.push(event.clone());
+        }
+    }
+}
+
+/// Shift every tick in `incidents` by `offset`. Used when a detector ran
+/// over a sub-slice of a recording (e.g. everything after a baseline
+/// calibration window): the sub-slice's own zero-based ticks need `offset`
+/// added back to line up with recording-row indices, which is what
+/// sidecar context timelines and saved cases use.
+pub fn offset_ticks(incidents: &mut [Incident], offset: u64) {
+    for incident in incidents.iter_mut() {
+        incident.start_tick += offset;
+        incident.end_tick += offset;
+        for e in incident.evidence.iter_mut() {
+            e.tick += offset;
+        }
+        for c in incident.context.iter_mut() {
+            c.tick += offset;
+        }
     }
 }
 
@@ -357,6 +385,21 @@ mod tests {
         assert!(values.contains(&"mid_incident"));
         assert!(!values.contains(&"too_early"));
         assert!(!values.contains(&"too_late"));
+    }
+
+    #[test]
+    fn offset_ticks_shifts_start_end_evidence_and_context() {
+        let mut b = IncidentBuilder::new(10);
+        b.push_alarm(&report(0, 1));
+        b.push_alarm(&report(5, 1));
+        b.push_event(&Event::Recalibrated { tick: 3 });
+        let mut incidents = b.finalize();
+        offset_ticks(&mut incidents, 1000);
+
+        assert_eq!(incidents[0].start_tick, 1000);
+        assert_eq!(incidents[0].end_tick, 1005);
+        assert!(incidents[0].evidence.iter().all(|e| e.tick >= 1000));
+        assert_eq!(incidents[0].context[0].tick, 1003);
     }
 
     #[test]

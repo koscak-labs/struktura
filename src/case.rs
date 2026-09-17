@@ -4,9 +4,9 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::context::ContextEvent;
+use crate::context::{ColumnSchema, ContextEvent};
 use crate::incident::{Evidence, Incident};
-use crate::monitor::Leg;
+use crate::monitor::{ChannelExport, Leg, MonitorExport};
 /// A case directory's manifest (hand-rolled JSON; no serde_json dependency).
 #[derive(Debug, Clone, PartialEq)]
 pub struct CaseManifest {
@@ -19,24 +19,37 @@ pub struct CaseManifest {
     pub incidents_count: usize,
     pub channels: usize,
     pub samples: usize,
+    /// Content fingerprint of the input recording (see [`fingerprint_content`]).
+    /// `None` for cases saved before this field existed.
+    pub input_hash: Option<String>,
+    /// Case-file layout version, independent of `detector_version`.
+    pub schema_version: String,
 }
 
 impl CaseManifest {
     pub fn to_json(&self) -> String {
+        let input_hash = match &self.input_hash {
+            Some(h) => format!("\"{}\"", json_escape(h)),
+            None => "null".to_string(),
+        };
         format!(
             "{{\"name\":\"{}\",\"created\":\"{}\",\"detector_version\":\"{}\",\
              \"baseline_samples\":{},\"recording_path\":\"{}\",\"incidents_count\":{},\
-             \"channels\":{},\"samples\":{}}}",
+             \"channels\":{},\"samples\":{},\"input_hash\":{},\"schema_version\":\"{}\"}}",
             json_escape(&self.name), json_escape(&self.created), json_escape(&self.detector_version),
             self.baseline_samples, json_escape(&self.recording_path), self.incidents_count,
-            self.channels, self.samples
+            self.channels, self.samples, input_hash, json_escape(&self.schema_version)
         )
     }
 
     /// Minimal hand-rolled parser: finds each key, extracts its value.
+    /// `input_hash` and `schema_version` are optional for backward
+    /// compatibility with manifests saved before they existed.
     pub fn from_json(s: &str) -> Result<Self, String> {
         let req_s = |k: &str| extract_str(s, k).ok_or_else(|| format!("manifest: missing {}", k));
         let req_n = |k: &str| extract_u64(s, k).ok_or_else(|| format!("manifest: missing {}", k));
+        let input_hash = if s.contains("\"input_hash\":null") { None } else { extract_str(s, "input_hash") };
+        let schema_version = extract_str(s, "schema_version").unwrap_or_else(|| "0.1".to_string());
         Ok(Self {
             name: req_s("name")?,
             created: req_s("created")?,
@@ -46,8 +59,74 @@ impl CaseManifest {
             incidents_count: req_n("incidents_count")? as usize,
             channels: req_n("channels")? as usize,
             samples: req_n("samples")? as usize,
+            input_hash,
+            schema_version,
         })
     }
+}
+
+/// Full detector configuration for a saved case: what `Case::save` needs
+/// beyond the recording/incidents/baseline to make the case reproducible
+/// and to detect drift on `struktura replay`.
+#[derive(Debug, Clone)]
+pub struct CaseConfig {
+    /// Content fingerprint of the input recording, computed with
+    /// [`fingerprint_content`] on the raw file bytes before parsing.
+    pub input_hash: String,
+    /// The calibrated monitor's exported thresholds and AR coefficients.
+    pub monitor_export: MonitorExport,
+    /// The input CSV's column classification (measurement/mode/command/…).
+    pub column_schema: ColumnSchema,
+}
+
+/// A content fingerprint (FNV-1a, 64-bit) over the full byte content of an
+/// input file, rendered as 16 lowercase hex digits.
+///
+/// This is NOT a cryptographic hash — no crypto-hash dependency is pulled
+/// in for it — and must not be used for integrity/security purposes. Its
+/// only job is reproducibility detection: "was this case built from
+/// exactly this recording file?"
+#[must_use]
+pub fn fingerprint_content(bytes: &[u8]) -> String {
+    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut hash = FNV_OFFSET;
+    for &b in bytes {
+        hash ^= u64::from(b);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    format!("{:016x}", hash)
+}
+
+fn monitor_export_json(m: &MonitorExport) -> String {
+    let channels = m
+        .channels
+        .iter()
+        .map(channel_export_json)
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "{{\"res_thr\":{},\"dfa_thr\":{},\"cusum_thr\":{},\"channels\":[{}]}}",
+        m.res_thr, m.dfa_thr, m.cusum_thr, channels
+    )
+}
+
+fn channel_export_json(c: &ChannelExport) -> String {
+    format!(
+        "{{\"ar_a\":{},\"ar_b\":{},\"ar_sd\":{},\"alpha_mean\":{},\"alpha_sd\":{},\
+         \"mean\":{},\"roll_thr\":{},\"max_run\":{},\"repeat_enabled\":{}}}",
+        c.ar_a, c.ar_b, c.ar_sd, c.alpha_mean, c.alpha_sd, c.mean, c.roll_thr, c.max_run, c.repeat_enabled
+    )
+}
+
+fn column_schema_json(schema: &ColumnSchema) -> String {
+    let cols = schema
+        .columns
+        .iter()
+        .map(|c| format!("{{\"name\":\"{}\",\"role\":\"{:?}\"}}", json_escape(&c.name), c.role))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("[{}]", cols)
 }
 
 /// A saved investigation case: recording + incidents + config + manifest.
@@ -74,6 +153,7 @@ impl Case {
         incidents: &[Incident],
         baseline_samples: usize,
         name: &str,
+        config: &CaseConfig,
     ) -> Result<Self, String> {
         std::fs::create_dir_all(dir).map_err(|e| format!("create_dir_all: {}", e))?;
         let channels = recording.first().map(|r| r.len()).unwrap_or(0);
@@ -86,6 +166,8 @@ impl Case {
             incidents_count: incidents.len(),
             channels,
             samples: recording.len(),
+            input_hash: Some(config.input_hash.clone()),
+            schema_version: "0.1".to_string(),
         };
         let mut csv = (0..channels).map(|c| format!("ch{}", c)).collect::<Vec<_>>().join(",");
         csv.push('\n');
@@ -95,13 +177,16 @@ impl Case {
         }
         let incidents_json =
             format!("[{}]", incidents.iter().map(Incident::to_json).collect::<Vec<_>>().join(","));
-        let config = format!(
-            "{{\"baseline_samples\":{},\"detector_version\":\"{}\"}}", baseline_samples, env!("CARGO_PKG_VERSION")
+        let config_json = format!(
+            "{{\"baseline_samples\":{},\"detector_version\":\"{}\",\"input_hash\":\"{}\",\
+             \"monitor_export\":{},\"column_schema\":{}}}",
+            baseline_samples, env!("CARGO_PKG_VERSION"), json_escape(&config.input_hash),
+            monitor_export_json(&config.monitor_export), column_schema_json(&config.column_schema)
         );
         write_file(dir.join("manifest.json"), manifest.to_json())?;
         write_file(dir.join("recording.csv"), csv)?;
         write_file(dir.join("incidents.json"), incidents_json)?;
-        write_file(dir.join("config.json"), config)?;
+        write_file(dir.join("config.json"), config_json)?;
         Ok(Case { dir: dir.to_path_buf(), manifest })
     }
 
@@ -320,8 +405,46 @@ mod tests {
             detector_version: "1.7.3".to_string(), baseline_samples: 200,
             recording_path: "C:\\Oura\\case\\recording.csv".to_string(), incidents_count: 2,
             channels: 3, samples: 500,
+            input_hash: Some("deadbeef01234567".to_string()), schema_version: "0.1".to_string(),
         };
         assert_eq!(CaseManifest::from_json(&m.to_json()).expect("parses"), m);
+    }
+
+    #[test]
+    fn manifest_json_parses_pre_v0_1_manifests_without_input_hash() {
+        // Older manifests lack `input_hash`/`schema_version` entirely;
+        // from_json must default rather than fail.
+        let old = "{\"name\":\"old\",\"created\":\"2026-01-01T00:00:00Z\",\
+                    \"detector_version\":\"1.0.0\",\"baseline_samples\":100,\
+                    \"recording_path\":\"r.csv\",\"incidents_count\":0,\
+                    \"channels\":2,\"samples\":300}";
+        let m = CaseManifest::from_json(old).expect("parses");
+        assert_eq!(m.input_hash, None);
+        assert_eq!(m.schema_version, "0.1");
+    }
+
+    fn test_case_config() -> CaseConfig {
+        CaseConfig {
+            input_hash: fingerprint_content(b"test fixture content"),
+            monitor_export: MonitorExport {
+                res_thr: 3.0, dfa_thr: 3.0, cusum_thr: 6.0,
+                channels: vec![ChannelExport {
+                    ar_a: 0.5, ar_b: 0.0, ar_sd: 1.0, alpha_mean: 0.5, alpha_sd: 0.05,
+                    mean: 0.0, roll_thr: 2.0, max_run: 10, repeat_enabled: true,
+                }],
+            },
+            column_schema: ColumnSchema::from_header(&["ch0", "ch1"]),
+        }
+    }
+
+    #[test]
+    fn fingerprint_content_is_deterministic_and_content_sensitive() {
+        let a = fingerprint_content(b"hello world");
+        let b = fingerprint_content(b"hello world");
+        let c = fingerprint_content(b"hello world!");
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        assert_eq!(a.len(), 16); // 64-bit hash as hex
     }
 
     #[test]
@@ -334,8 +457,11 @@ mod tests {
             leg: Leg::LevelShift, channel: 0, tick: 1, observed: 4.2, threshold: 3.0, hit_gap: 0,
         });
         let incidents = builder.finalize();
-        let case = Case::save(&dir, &recording, &incidents, 1, "roundtrip").expect("saves");
+        let config = test_case_config();
+        let case = Case::save(&dir, &recording, &incidents, 1, "roundtrip", &config).expect("saves");
         assert_eq!((case.manifest.channels, case.manifest.samples), (2, 3));
+        assert_eq!(case.manifest.input_hash, Some(config.input_hash.clone()));
+        assert_eq!(case.manifest.schema_version, "0.1");
 
         let loaded = Case::load(&dir).expect("loads");
         assert_eq!(loaded.manifest, case.manifest);
@@ -347,6 +473,15 @@ mod tests {
         assert_eq!(back[0].evidence[0].channel, 0);
         assert_eq!(back[0].evidence[0].leg, Leg::LevelShift);
         assert!(Case::load(&tmp_dir("missing")).unwrap_err().contains("manifest.json"));
+
+        let config_json = std::fs::read_to_string(dir.join("config.json")).expect("reads config.json");
+        assert!(config_json.contains(&format!("\"input_hash\":\"{}\"", config.input_hash)));
+        assert!(config_json.contains("\"monitor_export\":{"));
+        assert!(config_json.contains("\"ar_a\":0.5"));
+        assert!(config_json.contains("\"column_schema\":["));
+        assert!(config_json.contains("\"name\":\"ch0\""));
+        assert_eq!(config_json.matches('{').count(), config_json.matches('}').count());
+        assert_eq!(config_json.matches('[').count(), config_json.matches(']').count());
 
         let _ = std::fs::remove_dir_all(&dir);
     }
