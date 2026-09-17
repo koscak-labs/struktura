@@ -71,7 +71,7 @@ fn main() {
 
     // class -> leg -> block alphas ; and per-block 6-leg vectors for LOO
     let mut per_class_leg: BTreeMap<&str, BTreeMap<&str, Vec<f64>>> = BTreeMap::new();
-    let mut vectors: Vec<(&str, [f64; 6])> = Vec::new();
+    let mut vectors: Vec<(&str, &str, [f64; 6])> = Vec::new(); // (class, traverse, six-leg alpha)
     let mut missing: Vec<&str> = Vec::new();
     let mut leg_cache: BTreeMap<(String, &str), Vec<(u64, f64)>> = BTreeMap::new();
 
@@ -99,7 +99,7 @@ fn main() {
         for b in 0..nblocks {
             let mut v = [0.0; 6];
             for (i, la) in leg_alphas.iter().enumerate() { v[i] = la[b]; }
-            vectors.push((class, v));
+            vectors.push((class, trav, v));
         }
         let secs = (t1 - t0) as f64 / 1e9;
         println!("  {:19} {:15} {:5.0} s  {:2} blocks  {}", trav, class, secs, nblocks, comment);
@@ -144,15 +144,28 @@ fn main() {
         }
     }
 
-    // Leave-one-out nearest-centroid on the 6-leg alpha vector
+    // Nearest-centroid on the 6-leg alpha vector, two holdout schemes.
+    //
+    // Blocks from the same traverse share terrain, rover state and operator, so a
+    // leave-one-BLOCK-out is optimistic. The leave-one-TRAVERSE-out drops every
+    // block of the held-out traverse when forming the centroids; a class that only
+    // occurs in one traverse can then never be predicted for its own blocks and is
+    // reported as "not assessable" rather than as an error.
     if vectors.len() >= 4 {
-        let mut correct = 0usize;
-        let mut confusion: BTreeMap<(&str, &str), usize> = BTreeMap::new();
-        for (i, (truth, v)) in vectors.iter().enumerate() {
+        // per-class block and traverse counts
+        println!();
+        println!("  per-class counts:");
+        for class in &classes {
+            let n = vectors.iter().filter(|(c, _, _)| c == class).count();
+            let travs: std::collections::BTreeSet<&str> = vectors.iter().filter(|(c, _, _)| c == class).map(|(_, t, _)| *t).collect();
+            println!("    {:15} {:3} blocks in {} traverse(s): {}", class, n, travs.len(), travs.iter().copied().collect::<Vec<_>>().join(", "));
+        }
+
+        let classify = |v: &[f64; 6], exclude: &dyn Fn(usize) -> bool| -> Option<&str> {
             let mut best: Option<(&str, f64)> = None;
             for class in &classes {
                 let others: Vec<&[f64; 6]> = vectors.iter().enumerate()
-                    .filter(|(j, (c, _))| *j != i && c == class).map(|(_, (_, w))| w).collect();
+                    .filter(|(j, (c, _, _))| !exclude(*j) && c == class).map(|(_, (_, _, w))| w).collect();
                 if others.is_empty() { continue; }
                 let mut centroid = [0.0; 6];
                 for w in &others { for k in 0..6 { centroid[k] += w[k]; } }
@@ -160,15 +173,49 @@ fn main() {
                 let dist: f64 = (0..6).map(|k| (v[k] - centroid[k]).powi(2)).sum::<f64>().sqrt();
                 if best.map_or(true, |(_, bd)| dist < bd) { best = Some((class, dist)); }
             }
-            if let Some((pred, _)) = best {
-                if pred == *truth { correct += 1; }
-                *confusion.entry((truth, pred)).or_default() += 1;
-            }
+            best.map(|(c, _)| c)
+        };
+
+        // (a) leave-one-block-out
+        let mut correct = 0usize;
+        for (i, (truth, _, v)) in vectors.iter().enumerate() {
+            if classify(v, &|j| j == i) == Some(*truth) { correct += 1; }
         }
         println!();
-        println!("  leave-one-out nearest-centroid on the 6-leg α vector: {}/{} = {:.1}%  (zero training, one feature per leg)",
+        println!("  leave-one-block-out nearest-centroid: {}/{} = {:.1}%  (optimistic: neighbours from the same traverse stay in)",
             correct, vectors.len(), 100.0 * correct as f64 / vectors.len() as f64);
-        println!("  confusion (truth -> predicted):");
+
+        // (b) leave-one-traverse-out
+        let mut t_correct = 0usize;
+        let mut t_total = 0usize;
+        let mut t_unassessable = 0usize;
+        let mut per_class: BTreeMap<&str, (usize, usize, usize)> = BTreeMap::new(); // correct, total, unassessable
+        let mut confusion: BTreeMap<(&str, &str), usize> = BTreeMap::new();
+        for (i, (truth, trav, v)) in vectors.iter().enumerate() {
+            let e = per_class.entry(truth).or_default();
+            let class_elsewhere = vectors.iter().any(|(c, t, _)| c == truth && t != trav);
+            if !class_elsewhere { t_unassessable += 1; e.2 += 1; continue; }
+            t_total += 1; e.1 += 1;
+            let held = *trav;
+            let pred = classify(v, &|j| vectors[j].1 == held);
+            if pred == Some(*truth) { t_correct += 1; e.0 += 1; }
+            if let Some(p) = pred { *confusion.entry((truth, p)).or_default() += 1; }
+            let _ = i;
+        }
+        println!("  leave-one-traverse-out nearest-centroid: {}/{} = {:.1}%  ({} blocks not assessable: class present in a single traverse)",
+            t_correct, t_total, if t_total > 0 { 100.0 * t_correct as f64 / t_total as f64 } else { 0.0 }, t_unassessable);
+        for (class, (c, t, u)) in &per_class {
+            if *t > 0 {
+                // Wilson 95% interval on the class accuracy
+                let p = *c as f64 / *t as f64; let n = *t as f64; let z = 1.96;
+                let centre = (p + z * z / (2.0 * n)) / (1.0 + z * z / n);
+                let half = z * ((p * (1.0 - p) / n + z * z / (4.0 * n * n)).sqrt()) / (1.0 + z * z / n);
+                println!("    {:15} {:2}/{:2} correct  95% [{:.0}%, {:.0}%]", class, c, t, 100.0 * (centre - half).max(0.0), 100.0 * (centre + half).min(1.0));
+            } else {
+                println!("    {:15} not assessable ({} blocks, one traverse)", class, u);
+            }
+        }
+        println!("  confusion under traverse holdout (truth -> predicted):");
         for ((t, p), n) in &confusion { println!("    {:15} -> {:15} {}", t, p, n); }
         println!();
         println!("  reference: Gerdes et al. 2025, SVM on 180 F/T statistics, 1 s windows: 95.6%;");
