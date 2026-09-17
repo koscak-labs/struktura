@@ -1,0 +1,160 @@
+== 2026-09-17T14:01:48Z rustc 1.98.1 (48a229cea 2026-09-01) cargo 1.98.1 (797e8a9bc 2026-08-05)
+== source: worktree fix/nostd-crate-type copied from /mnt/c/Users/philp/space/work/struktura-nostd (git-free copy)
+
+########## CHECK 0: cargo test + clippy on the branch
+    Updating crates.io index
+     Locking 64 packages to latest compatible versions
+      Adding anomaly_detection v0.3.1 (available: v0.4.0)
+      Adding pyo3 v0.23.5 (available: v0.29.2)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.10s
+     Running unittests src/lib.rs (target/debug/deps/struktura-72a22d72b379ca05)
+
+running 94 tests
+test conformal::tests::coverage_guarantee ... ok
+test classify::tests::brownian_classified_correctly ... ok
+test conformal::tests::p_value_ranks_correctly ... ok
+test conformal::tests::threshold_at_matches_p_value ... ok
+test classify::tests::white_noise_classified_correctly ... ok
+test genome::tests::gc_windows_basic ... ok
+test genome::tests::parse_fasta_skips_headers ... ok
+test market::tests::regime_monitor_learns ... ok
+test market::tests::returns_from_prices_basic ... ok
+test mfdfa::tests::mfdfa_produces_spectrum ... ok
+test fingerprint::tests::different_signals_different_fingerprints ... ok
+test fingerprint::tests::same_signal_same_fingerprint ... ok
+test changepoint::tests::no_changepoint_in_stationary ... ok
+test changepoint::tests::detects_changepoint_in_synthetic ... ok
+test mfdfa::tests::white_noise_is_monofractal ... ok
+test monitor::tests::calibrate_rejects_too_short ... ok
+test changepoint::tests::multiple_changepoints ... ok
+test monitor::tests::multi_rate_channels_detect_stuck ... ok
+test monitor::tests::quarantined_channel_never_alarms_clean ... ok
+test monitor::tests::alarm_latches_until_reset ... ok
+test monitor::tests::streaming_monitor_catches_correlation_change_via_residual ... ok
+test prognosis::tests::flat_noise_returns_none ... ok
+test monitor::debug_monitor::debug_clean_alarm ... ok
+test prognosis::tests::trend_away_from_threshold_returns_none ... ok
+test prognosis::tests::linear_ramp_predicts_exactly ... ok
+test rhythm::tests::intervals_basic ... ok
+test rhythm::tests::rhythm_of_noise ... ok
+test monitor::tests::streaming_monitor_catches_stuck_and_stays_quiet_on_clean ... ok
+test rover::tests::rover_sim_is_deterministic ... ok
+test monitor::tests::survives_double_fault_with_dead_sensor ... ok
+test rover::tests::rover_sim_produces_10_channels ... ok
+test rover::tests::wheel_stall_spikes_then_drops ... ok
+test rover_flight::tests::detects_stuck_sensor ... ok
+test rover_flight::tests::flight_monitor_is_const_constructible ... ok
+test rover_flight::tests::flight_monitor_size ... ok
+test rover::tests::wheel_bearing_increases_current ... ok
+test rover_flight::tests::no_alloc_proof ... ok
+test scratch_tests::short_scratch_is_neutral ... ok
+test scratch_tests::scratch_matches_into_bitwise ... ok
+test monitor::tests::multi_rate_clean_stays_quiet ... ok
+test smap_eval::tests::ar_predictor_learns_a_sine ... ok
+test space::tests::multi_channel_produces_verdicts ... ok
+test monitor::tests::virtual_sensor_reconstruction_is_accurate ... ok
+test space::tests::heliopause_demo_detects_crossing ... ok
+test space::tests::synth_rwa_degradation_shifts_alpha ... ok
+test space::tests::spacecraft_demo_runs ... ok
+test telemetry_bench::debug_tests::debug_timestep_scores ... ok
+test telemetry_bench::tests::correlation_change_preserves_mean ... ok
+test telemetry_bench::tests::gauss_rng_mean_and_std ... ok
+test telemetry_bench::tests::inject_fault_changes_only_fault_window ... ok
+test telemetry_bench::tests::spacecraft_sim_is_deterministic ... ok
+test telemetry_bench::tests::spacecraft_sim_produces_six_channels ... ok
+test tests::acr_detects_correlation ... ok
+test tests::all_nan_produces_abstain ... ok
+test rover::tests::guard_catches_bearing_fault ... ok
+test space::tests::voyager_detects_anomaly ... ok
+test tests::analyze_produces_quality ... ok
+test tests::analyze_kurtosis_and_p99_computed ... ok
+test tests::anomaly_scores_baseline_uses_first_third ... ok
+test tests::anomaly_scores_too_short_returns_empty ... ok
+test tests::anomaly_scores_window_boundary ... ok
+test tests::anomaly_scores_detects_shift ... ok
+test tests::brownian_alpha_above_one ... ok
+test tests::brownian_alpha_exact ... ok
+test tests::builtin_demo_data_detects_fault ... ok
+test tests::compare_identical_signals_healthy ... ok
+test tests::constant_signal_abstains ... ok
+test tests::deterministic ... ok
+test tests::dfa_box_fit_operator_check ... ok
+test smap_eval::tests::injected_burst_is_detected_and_isolated ... ok
+test tests::empty_input_does_not_panic ... ok
+test tests::has_changed_more_sensitive_than_is_degraded ... ok
+test tests::health_verdict_exact_boundaries ... ok
+test tests::health_verdict_thresholds ... ok
+test tests::inf_values_filtered ... ok
+test tests::is_degraded_catches_structural_change ... ok
+test tests::single_value_does_not_panic ... ok
+test tests::sliding_window_before_fill_still_works ... ok
+test tests::sliding_window_detects_after_fill ... ok
+test tests::too_short_returns_half ... ok
+test tests::white_noise_alpha_exact ... ok
+test tests::white_noise_alpha_near_half ... ok
+test text::tests::builtin_text_demo ... ok
+test text::tests::sentence_splitting ... ok
+test text::tests::short_text_still_works ... ok
+test trend::tests::degrading_signal_has_negative_trend ... ok
+test trend::tests::stable_signal_has_stable_trend ... ok
+test tests::analytic_alpha_sd_bounds_measured_scatter ... ok
+test tests::baseline_tracker_learns_then_verdicts ... ok
+test tests::dfa_fast_matches_dfa_into_exactly ... ok
+test autopilot::tests::unstable_regime_rolls_back ... ok
+test autopilot::tests::autonomous_gauntlet ... ok
+test space::tests::spacecraft_monitor_learns_baseline ... ok
+test redblue::tests::redblue_loop_improves_or_holds_coverage has been running for over 60 seconds
+test redblue::tests::redblue_loop_improves_or_holds_coverage ... ok
+
+test result: ok. 94 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 79.53s
+
+     Running unittests src/bin/struktura.rs (target/debug/deps/struktura-aeedac8ef2374a48)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+     Running tests/property_tests.rs (target/debug/deps/property_tests-3323593f62b7672a)
+
+running 11 tests
+test calibrate_on_mismatched_lengths_is_graceful ... ok
+test monitor_survives_all_nan_stream ... ok
+test calibrate_on_constant_signal_is_graceful ... ok
+test monitor_survives_infinite_values ... ok
+test prognosis_never_panics ... ok
+test analyze_never_panics ... ok
+test dfa_never_panics ... ok
+test anomaly_scores_never_panics ... ok
+test dfa_fast_never_panics_and_matches ... ok
+test monitor_calibrate_never_panics ... ok
+test monitor_push_never_panics ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.32s
+
+   Doc-tests struktura
+
+running 17 tests
+test src/lib.rs - (line 10) ... ok
+test src/conformal.rs - conformal (line 13) ... ok
+test src/changepoint.rs - changepoint (line 7) ... ok
+test src/lib.rs - compare (line 1267) ... ok
+test src/lib.rs - dfa (line 190) ... ok
+test src/fingerprint.rs - fingerprint (line 8) ... ok
+test src/lib.rs - analyze (line 473) ... ok
+test src/classify.rs - classify (line 7) ... ok
+test src/rover.rs - rover (line 12) ... ok
+test src/text.rs - text (line 7) ... ok
+test src/market.rs - market (line 8) ... ok
+test src/mfdfa.rs - mfdfa (line 11) ... ok
+test src/space.rs - space (line 7) ... ok
+test src/lib.rs - health_check (line 663) ... ok
+test src/rhythm.rs - rhythm (line 6) ... ok
+test src/lib.rs - dfa_scratch (line 330) ... ok
+test src/trend.rs - trend (line 7) ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.78s
+
+cargo test exit 0
+    Checking struktura v1.7.2 (/home/philp/struktura-nostd)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.34s
+cargo clippy exit 0

@@ -1,0 +1,187 @@
+== 2026-09-17T14:03:28Z rustc 1.98.1 (48a229cea 2026-09-01)
+########## CHECK 1+2: external consumer of the PACKAGED crate on thumbv7em-none-eabihf
+info: component rust-std for target thumbv7em-none-eabihf is up to date
+--- cargo package (branch crate-type)
+32:crate-type = ["lib"]
+   Packaging struktura v1.7.2 (/home/philp/struktura-nostd)
+    Updating crates.io index
+    Packaged 75 files, 2.2MiB (553.7KiB compressed)
+cargo package exit 0
+-rw-r--r-- 1 philp philp 567024 Sep 17 16:03 target/package/struktura-1.7.2.crate
+--- extracted package dir: /home/philp/struktura-pkg/struktura-1.7.2
+--- packaged Cargo.toml [lib] section:
+76:[lib]
+77-name = "struktura"
+--- consumer crate
+[package]
+name = "nostd-consumer"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Standalone: not a member of any surrounding workspace.
+[workspace]
+
+[dependencies]
+# Path is rewritten by the acceptance script to the extracted `cargo package` output.
+struktura = { path = "/home/philp/struktura-pkg/struktura-1.7.2", default-features = false }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+    Updating crates.io index
+     Locking 2 packages to latest compatible versions
+   Compiling libm v0.2.16
+   Compiling struktura v1.7.2 (/home/philp/struktura-pkg/struktura-1.7.2)
+warning: unused import: `alloc::format`
+  --> /home/philp/struktura-pkg/struktura-1.7.2/src/space.rs:18:5
+   |
+18 | use alloc::format;
+   |     ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `alloc::string::String`
+  --> /home/philp/struktura-pkg/struktura-1.7.2/src/text.rs:16:5
+   |
+16 | use alloc...tring;
+   |     ^^^^^...^^^^^
+
+warning: unused import: `alloc::format`
+  --> /home/philp/struktura-pkg/struktura-1.7.2/src/text.rs:18:5
+   |
+18 | use alloc::format;
+   |     ^^^^^^^^^^^^^
+
+warning: unused import: `alloc::string::String`
+  --> /home/philp/struktura-pkg/struktura-1.7.2/src/market.rs:20:5
+   |
+20 | use alloc...tring;
+   |     ^^^^^...^^^^^
+
+warning: unused import: `alloc::string::String`
+  --> /home/philp/struktura-pkg/struktura-1.7.2/src/genome.rs:15:5
+   |
+15 | use alloc...tring;
+   |     ^^^^^...^^^^^
+
+warning: unused import: `alloc::vec::Vec`
+  --> /home/philp/struktura-pkg/struktura-1.7.2/src/prognosis.rs:15:5
+   |
+15 | use alloc...::Vec;
+   |     ^^^^^...^^^^^
+
+warning: unused import: `alloc::string::String`
+  --> /home/philp/struktura-pkg/struktura-1.7.2/src/classify.rs:15:5
+   |
+15 | use alloc...tring;
+   |     ^^^^^...^^^^^
+
+warning: unused import: `alloc::string::String`
+  --> /home/philp/struktura-pkg/struktura-1.7.2/src/fingerprint.rs:16:5
+   |
+16 | use alloc...tring;
+   |     ^^^^^...^^^^^
+
+warning: unused import: `alloc::format`
+  --> /home/philp/struktura-pkg/struktura-1.7.2/src/fingerprint.rs:18:5
+   |
+18 | use alloc::format;
+   |     ^^^^^^^^^^^^^
+
+warning: function `solve_ridge` is never used
+    --> /home/philp/struktura-pkg/struktura-1.7.2/src/lib.rs:1420:15
+     |
+1420 | ...fn solve_ridge(a:...
+     |       ^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `struktura` (lib) generated 10 warnings (run `cargo fix --lib -p struktura` to apply 9 suggestions)
+   Compiling nostd-consumer v0.0.0 (/home/philp/nostd-consumer)
+    Finished `release` profile [optimized] target(s) in 3.99s
+consumer build exit 0
+target/thumbv7em-none-eabihf/release/nostd-consumer: ELF 32-bit LSB executable, ARM, EABI5 version 1 (SYSV), statically linked, not stripped
+--- DFA symbols linked into the consumer ELF:
+00020578 t _RNvCs1njKG4L9aB3_7___rustc12___rust_alloc
+000205e8 t _RNvCs1njKG4L9aB3_7___rustc17rust_begin_unwind
+00020aea T _RNvCs1njKG4L9aB3_7___rustc26___rust_alloc_error_handler
+00020b00 T _RNvCs8mjgY9t0TjI_9struktura11dfa_scratch
+00021f08 T _RNvCs8mjgY9t0TjI_9struktura8dfa_into
+000205f0 T _start
+
+--- CONTROL: same consumer against a package built with the 1.7.2 crate-type list
+32:crate-type = ["lib", "cdylib", "staticlib"]
+    Updating crates.io index
+    Packaged 75 files, 2.2MiB (553.7KiB compressed)
+76:[lib]
+77-name = "struktura"
+   Compiling libm v0.2.16
+   Compiling struktura v1.7.2 (/home/philp/struktura-pkg-control/struktura-1.7.2)
+warning: dropping unsupported crate type `cdylib` for target `thumbv7em-none-eabihf`
+
+error: no global memory allocator found but one is required; link to std or add `#[global_allocator]` to a static item that implements the GlobalAlloc trait
+
+warning: unused import: `alloc::format`
+  --> /home/philp/struktura-pkg-control/struktura-1.7.2/src/space.rs:18:5
+   |
+18 | use alloc::format;
+   |     ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `alloc::string::String`
+  --> /home/philp/struktura-pkg-control/struktura-1.7.2/src/text.rs:16:5
+   |
+16 | use alloc...tring;
+   |     ^^^^^...^^^^^
+
+warning: unused import: `alloc::format`
+  --> /home/philp/struktura-pkg-control/struktura-1.7.2/src/text.rs:18:5
+   |
+18 | use alloc::format;
+   |     ^^^^^^^^^^^^^
+
+warning: unused import: `alloc::string::String`
+  --> /home/philp/struktura-pkg-control/struktura-1.7.2/src/market.rs:20:5
+   |
+20 | use alloc...tring;
+   |     ^^^^^...^^^^^
+
+warning: unused import: `alloc::string::String`
+  --> /home/philp/struktura-pkg-control/struktura-1.7.2/src/genome.rs:15:5
+   |
+15 | use alloc...tring;
+   |     ^^^^^...^^^^^
+
+warning: unused import: `alloc::vec::Vec`
+  --> /home/philp/struktura-pkg-control/struktura-1.7.2/src/prognosis.rs:15:5
+   |
+15 | use alloc...::Vec;
+   |     ^^^^^...^^^^^
+
+warning: unused import: `alloc::string::String`
+  --> /home/philp/struktura-pkg-control/struktura-1.7.2/src/classify.rs:15:5
+   |
+15 | use alloc...tring;
+   |     ^^^^^...^^^^^
+
+warning: unused import: `alloc::string::String`
+  --> /home/philp/struktura-pkg-control/struktura-1.7.2/src/fingerprint.rs:16:5
+   |
+16 | use alloc...tring;
+   |     ^^^^^...^^^^^
+
+warning: unused import: `alloc::format`
+  --> /home/philp/struktura-pkg-control/struktura-1.7.2/src/fingerprint.rs:18:5
+   |
+18 | use alloc::format;
+   |     ^^^^^^^^^^^^^
+
+error: `#[panic_handler]` function required, but not found
+
+warning: `struktura` (lib) generated 10 warnings
+error: could not compile `struktura` (lib) due to 2 previous errors; 10 warnings emitted
+control consumer build exit 101 (1.7.2 crate-type; failure expected)
