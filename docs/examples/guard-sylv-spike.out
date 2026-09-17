@@ -1,0 +1,7 @@
+$ struktura guard data/sylv_spike.csv
+struktura guard: 1000 samples x 1 channels, calibrated on 333 rows
+  row    500  ⚠ ch0 (4.6x threshold): gradual drift — the signal is trending away from its baseline
+  row    551  ⚠ ch0 (1.7x threshold): the signal's pattern is changing slowly (structural drift)
+  2 faults detected across 667 samples (0 adaptations, 0 quarantines)
+$ echo $?
+1

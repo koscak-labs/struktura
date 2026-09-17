@@ -1,0 +1,50 @@
+# struktura
+
+> struktura is a Rust crate for detecting structural anomalies in
+> time-series data using Detrended Fluctuation Analysis (DFA). It computes
+> the DFA scaling exponent (alpha) and its R-squared for any `f64` slice,
+> compares it against a self-calibrated baseline, and reports a health
+> verdict — with no hyperparameters to tune and no training data required.
+> It is `no_std` + `alloc` compatible (default-features off; still requires
+> a global allocator), has one required
+> dependency (`libm`), and ships a CLI (`struktura`) plus a library API.
+
+struktura detects when the STRUCTURE of a signal changes — not just when
+values cross a threshold. It is used for spacecraft telemetry anomaly
+detection, bearing/rotating-machinery fault detection, cardiac HRV
+monitoring, GNSS scintillation detection, DevOps/production time series
+health monitoring, financial regime detection, genome sequence structure,
+and text-rhythm analysis. It has been tested against real NASA (SMAP/MSL,
+IMS bearing run-to-failure, Voyager 1 magnetometer) and ESA (ESA-ADB Mission 1)
+spacecraft telemetry datasets, and against the CWRU bearing dataset.
+
+Algorithm: Peng et al., "Mosaic organization of DNA nucleotide sequences,"
+Physical Review E 49(2), 1994 — a well-established statistical-physics
+method for measuring long-range correlation structure, related to the
+Hurst exponent.
+
+## Docs
+
+- [README](https://github.com/koscak-labs/struktura/blob/main/README.md): quickstart, CLI examples, use cases, benchmarks
+- [USE_CASES.md](https://github.com/koscak-labs/struktura/blob/main/USE_CASES.md): domain-by-domain use cases with citations
+- [GUARANTEES.md](https://github.com/koscak-labs/struktura/blob/main/GUARANTEES.md): what the crate does and does not do
+- [REPRODUCIBILITY.md](https://github.com/koscak-labs/struktura/blob/main/REPRODUCIBILITY.md): every measured claim mapped to a runnable command
+- [docs/COMPARISON.md](https://github.com/koscak-labs/struktura/blob/main/docs/COMPARISON.md): honest comparison vs. Python/Rust alternatives
+- [API docs (docs.rs)](https://docs.rs/struktura)
+- [crates.io](https://crates.io/crates/struktura)
+
+## What it is NOT
+
+- Not a frequency-domain tool (no FFT/wavelets) — DFA measures correlation
+  structure, not frequency content.
+- Not a point-anomaly/spike detector by itself — pair it with a residual
+  detector for single-sample outliers.
+- Not a trained model — there is nothing to fit; the baseline comes from
+  the signal itself.
+- Does not claim to run onboard any specific flight mission; it has been
+  tested offline against public NASA/ESA telemetry datasets.
+
+## Citation
+
+If referencing struktura, cite via [CITATION.cff](https://github.com/koscak-labs/struktura/blob/main/CITATION.cff)
+(version 1.7.2). License: MIT OR Apache-2.0.

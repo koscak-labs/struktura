@@ -1,0 +1,20 @@
+$ struktura redblue
+
+  RED/BLUE ADVERSARIAL SELF-IMPROVEMENT
+  RED probes the continuous fault space for misses; BLUE evolves the
+  detection policy against the accumulated miss corpus under a
+  ZERO-clean-alarm law. 6 rounds x 120 probes x 10 mutations.
+  ================================================================
+
+  | Round | RED coverage | New misses | Corpus cov. after BLUE | Evolved? |
+  |-------|--------------|------------|------------------------|----------|
+  |     1 |    60.0%     |         48 |              16.7%     | YES |
+  |     2 |    70.8%     |         35 |              21.7%     | YES |
+  |     3 |    68.3%     |         38 |              15.7%     | YES |
+  |     4 |    74.2%     |         31 |              10.7%     | YES |
+  |     5 |    64.2%     |         43 |               3.6%     |       no |
+  |     6 |    75.0%     |         30 |               0.7%     |       no |
+
+  RED coverage: 60.0% (round 1) -> 75.0% (round 6)
+  Evolved config: res_span=20 dfa_persist=2 roll_persist=7 cusum_k=1.00 horizon=147553
+  Zero-clean-alarm law verified on every accepted mutation.

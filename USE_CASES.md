@@ -6,10 +6,10 @@ struktura works on anything with a time axis. here's where people actually use D
 
 NASA JPL's MSL Curiosity team monitors temperatures, currents, voltages, and RF power with ML anomaly detection — reduced workload by 90%. DFA catches structural shifts their threshold system misses.
 
-**what we proved:** detected Voyager 1's 2022 AACS anomaly from public data. F1=0.755 on NASA SMAP/MSL benchmark (zero training).
+**what we proved:** F1=0.655 on NASA SMAP/MSL benchmark (no model training: a per-channel AR predictor is fit by closed-form ridge least squares on the train split; a detection counts as a hit anywhere inside the labeled anomaly window). On public Voyager 1 magnetometer data, α differs between 2021 and 2022 (0.989 vs 0.801 on the bundled demo slices, z=1.5, inconclusive by struktura's own subsampling test); the 2022 AACS anomaly window itself is not a DFA shift (during-vs-pre p=0.52), so this is a year-over-year structural comparison, not anomaly detection.
 
 ```
-struktura voyager     # Voyager 1 anomaly
+struktura voyager     # Voyager 1 magnetometer α, 2021 vs 2022
 struktura smap        # Mars rover benchmark
 struktura spacecraft  # multi-channel monitor
 ```

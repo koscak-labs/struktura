@@ -1,0 +1,26 @@
+$ struktura smap --ar 0 --dfa
+
+  NASA SMAP + MSL/CURIOSITY ANOMALY BENCHMARK
+  Real spacecraft telemetry, JPL-labeled anomalies (telemanom dataset).
+  Protocol: calibrate on the nominal train split, stream the test
+  split; a labeled sequence is DETECTED if any alarm lands inside it;
+  alarms outside every labeled sequence count as false positives.
+  ================================================================
+
+  | Spacecraft | Channels | Sequences | Detected | FP alarms | Precision | Recall |
+  |------------|----------|-----------|----------|-----------|-----------|--------|
+  | SMAP       |   54 (1sk) |        69 |       42 |         5 |     89.4% |  60.9% |
+  | MSL        |   26 (1sk) |        36 |       16 |         9 |     64.0% |  44.4% |
+  |------------|----------|-----------|----------|-----------|-----------|--------|
+  | TOTAL      |          |       105 |       58 |        14 |     80.6% |  55.2% |
+
+  Overall F1: 0.655   (JPL telemanom LSTM, same data: P=87.5% R=80.0%)
+  Recall by anomaly class:
+    [contextual]   9/17  =  52.9%
+    [point]       38/45  =  84.4%
+    contextual]"   8/30  =  26.7%
+    point]"        3/11  =  27.3%
+  Self-calibrated, no training, no GPU, ~4us/sample. Honest note: the
+  values are pre-scaled to (-1,1) by JPL and many channels saturate,
+  which auto-disables the repeated-value leg on those channels.
+

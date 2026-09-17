@@ -6,22 +6,27 @@ monitor, flight-software-grade, every claim reproducible in one command.**
 
 ## The one-liner (use everywhere)
 "A pure-Rust spacecraft health monitor that calibrates itself, quarantines
-its own dead sensors, and evolved its own detectors — 71%→92% fault
-coverage through adversarial self-play, zero false alarms in 200K samples,
-and it compiles to flight-ready C99. Every number: one command."
+its own dead sensors, and evolved its own detectors — 71%→97% fault
+coverage through adversarial self-play under a zero-clean-alarm acceptance
+law, and generates C99 that compiles clean under -Wall -Werror with a
+self-test (not mission-qualified). Every number: one command."
 
 ## Channel drafts (fire individually on Phil's word)
 
 ### 1. This Week in Rust nomination (lowest effort, high reach)
-> struktura 1.7: a no_std spacecraft telemetry monitor that calibrates its
-> own thresholds (extreme-value statistics), reconstructs dead sensors from
+> struktura 1.7: a no_std + alloc spacecraft telemetry monitor that calibrates
+> its own thresholds (extreme-value statistics), reconstructs dead sensors from
 > the surviving channels, and uses an adversarial RED/BLUE loop to evolve
-> new detector legs — measured 71%→92% fault coverage, 0 false alarms in
-> 200K clean samples. Reproducible: `cargo install struktura && struktura mission`.
+> new detector legs — measured 71%→97% fault coverage under a zero-clean-alarm
+> acceptance law (12 disjoint 1,400-sample clean seeds per round); separately,
+> the streaming monitor logged 0 false alarms on a single synthetic 200K-sample
+> clean stream (`struktura monitor-perf`, re-run 2026-09-17 on the current
+> binary, docs/evidence/monitor-perf-2026-09-17.md; one fixed seed, synthetic
+> data — say "0 observed alarms in 200K samples", never "zero false-alarm rate"). Reproducible: `cargo install struktura && struktura mission`.
 Submit at: github.com/rust-lang/this-week-in-rust (PR to Interesting Projects)
 
 ### 2. r/rust post (title options)
-- "My no_std telemetry monitor evolved its own detectors (71%→92% coverage, zero false alarms) — every claim is one command"
+- "My no_std + alloc telemetry monitor evolved its own detectors (71%→97% coverage under a zero-clean-alarm law) — every claim is one command"
 - "I built a spacecraft health monitor in Rust that quarantines dead sensors and survives double faults — then made it design its own detectors"
 Body: the mission log screenshot (struktura mission output), the evolution
 table, REPRODUCIBILITY.md link, honest-limits section (Rust crowd loves it).
@@ -34,7 +39,7 @@ drift-chasing autopilot, ill-conditioned reconstruction. Engineers share
 war stories, not feature lists.
 
 ### 4. Hacker News (Show HN) — only after TWiR/reddit validate the framing
-"Show HN: A telemetry monitor that evolved its own fault detectors (Rust, no_std)"
+"Show HN: A telemetry monitor that evolved its own fault detectors (Rust, no_std + alloc)"
 
 ## More space stuff — target map (ranked by fit x credibility)
 
