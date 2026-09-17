@@ -240,7 +240,7 @@ fn extract_f64(s: &str, key: &str) -> Option<f64> { extract_num(s, key)?.parse()
 
 fn extract_num<'a>(s: &'a str, key: &str) -> Option<&'a str> {
     let rest = &s[s.find(&format!("\"{}\":", key))? + key.len() + 3..];
-    Some(rest[..rest.find(|c: char| c == ',' || c == '}' || c == ']').unwrap_or(rest.len())].trim())
+    Some(rest[..rest.find([',', '}', ']']).unwrap_or(rest.len())].trim())
 }
 
 /// Raw text inside `"key":[ ... ]` (no nested arrays occur here, so the
