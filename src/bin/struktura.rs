@@ -4064,7 +4064,7 @@ fn cmd_investigate(args: &[String]) {
     // already ticked against recording rows, and per-row validity is
     // derived from the data (NaN/Inf -> invalid) instead of assuming every
     // row is valid.
-    let (incidents, _monitor_export) = match struktura::replay::run_investigation(&meas_data, baseline, &timeline) {
+    let (incidents, _monitor_export, _imputation) = match struktura::replay::run_investigation(&meas_data, baseline, &timeline) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("investigation failed: {}", e);
@@ -4156,7 +4156,7 @@ fn cmd_case(args: &[String]) {
 
             // Shared calibrate -> detect -> group-into-incidents pipeline
             // (also used by `investigate` and `replay`).
-            let (incidents, monitor_export) = match struktura::replay::run_investigation(&meas_data, baseline, &timeline) {
+            let (incidents, monitor_export, imputation) = match struktura::replay::run_investigation(&meas_data, baseline, &timeline) {
                 Ok(r) => r,
                 Err(e) => { eprintln!("investigation failed: {}", e); process::exit(2); }
             };
@@ -4169,7 +4169,7 @@ fn cmd_case(args: &[String]) {
             // Transpose column-major to row-major for Case::save
             let nsamples = meas_data[0].len();
             let rows: Vec<Vec<f64>> = (0..nsamples).map(|t| meas_data.iter().map(|c| c[t]).collect()).collect();
-            let config = struktura::case::CaseConfig { input_hash, monitor_export, column_schema };
+            let config = struktura::case::CaseConfig { input_hash, monitor_export, column_schema, imputation };
             match struktura::case::Case::save(&dir, &rows, &incidents, baseline, &name, &config, &timeline, &meas_names) {
                 Ok(c) => println!("case saved: {} ({} incidents, {} channels x {} samples)",
                     c.dir().display(), incidents.len(), meas_data.len(), nsamples),

@@ -2,6 +2,39 @@
 
 All notable changes to Struktura are documented here.
 
+## v1.8.0 (2026-09-18) — Telemetry debugger: investigate, case save, replay
+
+- New telemetry debugger CLI: `struktura investigate`, `struktura case save`, and
+  `struktura replay` — five new modules (`context`, `incident`, `case`, `replay`,
+  `report`) built on top of the existing detector.
+- Operating context (`--context` sidecar): mode/command/annotation columns are parsed
+  into a tick-indexed `ContextTimeline` and attached to incidents for narrative
+  context. Context **annotates evidence only** — it does not change detection.
+- Incidents: alarms are grouped by temporal proximity into `Incident` records (start/end
+  tick, evidence, involved channels, attached context) instead of being reported as
+  isolated alarms.
+- Case save/replay: `struktura case save` snapshots a recording, its investigation, and
+  the full detector configuration into a case directory; `struktura replay` re-runs the
+  detector on the saved recording and diffs the result against what was saved —
+  recording-fingerprint verification (`fingerprint_mismatch`), full saved-vs-fresh
+  configuration comparison (`threshold_diffs`), and matched/missed/new/evidence-changed
+  incident diffing.
+- Config validation on replay: a case's saved `config.json` is now required to parse for
+  any case with a `schema_version` — a `config.json` that exists but is corrupt (e.g.
+  overwritten with `{}`) is an error instead of being silently skipped; only a case with
+  no `config.json` at all (true legacy format) still warns and skips gracefully.
+  `ReplayDiff::config_valid` reports which path was taken.
+- NaN/Inf imputation policy for calibration windows: non-finite values are replaced with
+  the channel's own finite mean, the count is recorded per channel and printed to
+  stderr, and a channel with more than 20% of its calibration samples imputed (previously
+  50% — too permissive) is now rejected outright. Imputation counts are saved into a
+  case's `config.json` under `"imputation"` so replay can see how much of the original
+  investigation's calibration was fabricated.
+- Generated CLI fixtures for `investigate`/`case save`/`replay` are checked into CI
+  alongside the existing `docs/examples/*.cmd` fixtures.
+- ESA-ADB TimeEval adapter: the first Rust algorithm entry in the TimeEval anomaly
+  detection benchmark (scores pending upstream evaluation).
+
 ## v1.7.3 (2026-09-17) — no_std dependents build; every public number re-verified
 
 - Docs: full claims audit (`docs/CLAIMS-AUDIT-2026-09-17.md`). Corrected: IMS early

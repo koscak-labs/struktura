@@ -11,7 +11,7 @@ inputs:
   version:
     description: 'struktura version to install from crates.io.'
     required: false
-    default: '1.7.3'
+    default: '1.8.0'
   fail-on-fault:
     description: 'Fail the step (exit non-zero) when struktura reports a fault.'
     required: false

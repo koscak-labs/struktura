@@ -62,6 +62,14 @@ pub struct ReplayDiff {
     /// channel and field (Issue 4 — `saved_thresholds`/`fresh_thresholds`
     /// alone only ever compared the three global thresholds).
     pub threshold_diffs: Vec<String>,
+    /// Whether this case's `config.json` was successfully validated against
+    /// the fresh recalibration. `true` when the case has a `schema_version`
+    /// of "0.1" or later and `config.json` parsed into a full
+    /// `MonitorExport`; `false` when validation failed outright (an error
+    /// is also returned in that case — see [`replay`]); absent/unset
+    /// (`false`, the `Default`) only for true legacy cases with no
+    /// `schema_version` at all, where config validation is skipped.
+    pub config_valid: bool,
 }
 
 impl ReplayDiff {
@@ -155,7 +163,9 @@ impl ReplayDiff {
             }
             out.push_str(&format!("\"{}\"", json_escape_diff(d)));
         }
-        out.push_str("]}");
+        out.push_str("],\"config_valid\":");
+        out.push_str(if self.config_valid { "true" } else { "false" });
+        out.push('}');
         out
     }
 }
@@ -189,14 +199,23 @@ fn json_escape_diff(s: &str) -> String {
 /// how `timeline` (e.g. a context sidecar) ticks its events.
 ///
 /// `cols` is column-major: one `Vec<f64>` per channel, all the same
-/// length. Returns the finalized incidents plus the calibrated monitor's
+/// length. Returns the finalized incidents, the calibrated monitor's
 /// exported constants (for callers that persist the calibration, e.g.
-/// `case save`).
+/// `case save`), and per-channel imputation counts as `(channel_index,
+/// imputed_count)` pairs (one entry per channel, `0` when nothing was
+/// imputed on that channel) — see [`IMPUTATION_REJECT_FRACTION`].
+/// Rejection threshold for calibration-window imputation: a channel with
+/// more than this fraction of its calibration samples imputed is rejected
+/// outright rather than calibrated on mostly-fabricated data. 20%, not the
+/// old 50% — even 20% imputed is already enough to meaningfully distort a
+/// channel's mean/variance.
+const IMPUTATION_REJECT_FRACTION: f64 = 0.2;
+
 pub fn run_investigation(
     cols: &[Vec<f64>],
     baseline: usize,
     timeline: &ContextTimeline,
-) -> Result<(Vec<Incident>, MonitorExport), String> {
+) -> Result<(Vec<Incident>, MonitorExport, Vec<(usize, usize)>), String> {
     let channels = cols.len();
     if channels == 0 {
         return Err("case recording has no channels".to_string());
@@ -219,30 +238,47 @@ pub fn run_investigation(
     // filtering — this preserves row count and alignment, unlike dropping
     // rows would. A channel with *no* finite calibration samples can't be
     // imputed from and is rejected, naming the channel.
+    let mut imputation_counts: Vec<(usize, usize)> = Vec::with_capacity(calib.len());
     for (ci, c) in calib.iter_mut().enumerate() {
+        let total = c.len();
         let finite_count = c.iter().filter(|v| v.is_finite()).count();
         if finite_count == 0 {
             return Err(format!(
                 "channel {} has no finite values in the calibration window ({} samples)",
-                ci,
-                c.len()
+                ci, total
             ));
         }
-        if finite_count < c.len() {
+        let mut replaced = 0usize;
+        if finite_count < total {
             let finite_sum: f64 = c.iter().filter(|v| v.is_finite()).sum();
             let mean = finite_sum / finite_count as f64;
-            let mut replaced = 0usize;
             for v in c.iter_mut() {
                 if !v.is_finite() {
                     *v = mean;
                     replaced += 1;
                 }
             }
+            let fraction = replaced as f64 / total as f64;
             eprintln!(
-                "channel {}: {} non-finite values in calibration window replaced with channel mean",
-                ci, replaced
+                "channel {}: {} of {} calibration values imputed with channel mean ({:.1}%)",
+                ci,
+                replaced,
+                total,
+                fraction * 100.0
             );
+            if fraction > IMPUTATION_REJECT_FRACTION {
+                return Err(format!(
+                    "channel {} has {} of {} calibration values ({:.1}%) imputed — \
+                     exceeds the {:.0}% imputation rejection threshold",
+                    ci,
+                    replaced,
+                    total,
+                    fraction * 100.0,
+                    IMPUTATION_REJECT_FRACTION * 100.0
+                ));
+            }
         }
+        imputation_counts.push((ci, replaced));
     }
 
     let monitor = HybridMonitor::calibrate(&calib)
@@ -287,7 +323,7 @@ pub fn run_investigation(
     // post-hoc offset_ticks() is needed (and would double-shift them).
     let mut incidents = builder.finalize();
     crate::incident::attach_context(&mut incidents, timeline);
-    Ok((incidents, export))
+    Ok((incidents, export, imputation_counts))
 }
 
 /// Re-run the detector on a case's recording and diff the result against
@@ -312,7 +348,7 @@ pub fn replay(
     // ticks. Legacy cases with no context.json get an empty timeline, same
     // as before.
     let timeline = case.context()?;
-    let (new_incidents, export) = run_investigation(&cols, baseline, &timeline)?;
+    let (new_incidents, export, _imputation_counts) = run_investigation(&cols, baseline, &timeline)?;
 
     let saved_incidents = case.incidents()?;
     let mut diff = diff_incidents(&saved_incidents, &new_incidents);
@@ -322,16 +358,47 @@ pub fn replay(
     // `if let Ok(...)`, hiding real read errors. A *missing* config.json is
     // expected for cases saved before it existed (legacy format) and only
     // warns; anything else (corrupt file, permissions) propagates.
+    //
+    // Fix 1: for any case with a `schema_version` ("0.1" or later — i.e.
+    // any case saved by a version of this crate that writes
+    // `schema_version` at all), a *present* config.json MUST parse into a
+    // full `MonitorExport`. The old `if let Some(saved_export) = ...`
+    // silently skipped the whole saved-configuration comparison for a
+    // config.json that exists but doesn't parse (e.g. `{}`), which looks
+    // identical to "nothing to compare" instead of "this case's saved
+    // configuration is corrupt". Only a true legacy case — no
+    // `schema_version` at all — still warns and skips gracefully.
     let config_path = case.dir().join("config.json");
+    let has_schema_version = !case.manifest.schema_version.is_empty();
     if config_path.exists() {
         let config_json = case.config_json()?;
         diff.saved_thresholds = crate::case::parse_config_monitor_thresholds(&config_json);
         // Issue 4: compare every field of the saved MonitorExport against
         // the fresh recalibration, not just the three global thresholds.
-        if let Some(saved_export) = crate::case::parse_config_monitor_export(&config_json) {
-            diff.threshold_diffs = monitor_export_diffs(&saved_export, &export);
+        match crate::case::parse_config_monitor_export(&config_json) {
+            Some(saved_export) => {
+                diff.threshold_diffs = monitor_export_diffs(&saved_export, &export);
+                diff.config_valid = true;
+            }
+            None if has_schema_version => {
+                return Err(
+                    "config.json exists but monitor_export is missing or corrupt".to_string()
+                );
+            }
+            None => {
+                eprintln!(
+                    "warning: legacy case's config.json has no parseable monitor_export; skipping saved-configuration comparison"
+                );
+            }
         }
     } else {
+        // A *missing* config.json (the file itself absent) is the true
+        // legacy case Fix 1 leaves alone regardless of `schema_version` —
+        // `schema_version` defaults to "0.1" for every manifest (including
+        // ones from before `config.json` existed), so it can't distinguish
+        // "no config.json ever written" from "config.json written and then
+        // lost"; only a config.json that *exists* but fails to parse is
+        // treated as corruption.
         eprintln!(
             "warning: case has no config.json (legacy case format); skipping saved-configuration comparison"
         );
@@ -657,7 +724,7 @@ mod tests {
         let faulted = inject_fault(&clean, "regime_shift", 42);
 
         let timeline = ContextTimeline::new();
-        let (original_incidents, monitor_export) =
+        let (original_incidents, monitor_export, _imputation) =
             run_investigation(&faulted, baseline, &timeline).expect("investigates");
 
         // `Case::save` wants row-per-tick.
@@ -673,6 +740,7 @@ mod tests {
             input_hash: crate::case::fingerprint_content(b"rover_flow test fixture"),
             monitor_export,
             column_schema,
+            imputation: vec![],
         };
 
         let dir = std::env::temp_dir().join("struktura_replay_test_rover_flow");
@@ -711,7 +779,7 @@ mod tests {
         let faulted = inject_fault(&clean, "regime_shift", 42);
         let timeline = ContextTimeline::new();
 
-        let (incidents, _export) =
+        let (incidents, _export, _imputation) =
             run_investigation(&faulted, baseline, &timeline).expect("investigates");
 
         // Confirm this fixture actually exercises recalibration, or the
@@ -787,7 +855,7 @@ mod tests {
         let cols = vec![good, one_nan];
         let timeline = ContextTimeline::new();
 
-        let (_incidents, export) =
+        let (_incidents, export, _imputation) =
             run_investigation(&cols, baseline, &timeline).expect("a single NaN must not fail calibration");
         assert!(export.channels[1].alpha_mean.is_finite(), "imputed NaN must not propagate into calibration");
         assert!(export.channels[1].ar_a.is_finite());
@@ -807,7 +875,7 @@ mod tests {
         let cols = vec![good, one_inf];
         let timeline = ContextTimeline::new();
 
-        let (_incidents, export) =
+        let (_incidents, export, _imputation) =
             run_investigation(&cols, baseline, &timeline).expect("a single Inf must not fail calibration");
         assert!(export.channels[1].alpha_mean.is_finite(), "imputed Inf must not propagate into calibration");
     }
@@ -865,6 +933,7 @@ mod tests {
             input_hash: crate::case::fingerprint_content(b"original source file bytes, unrelated to recording.csv"),
             monitor_export: monitor.export(),
             column_schema: ColumnSchema::from_header(&["ch0"]),
+            imputation: vec![],
         };
 
         let dir = std::env::temp_dir().join("struktura_replay_test_fingerprint");
@@ -912,7 +981,7 @@ mod tests {
         // guessing one and hoping it lands inside an incident's lookback
         // window.
         let empty_timeline = ContextTimeline::new();
-        let (probe_incidents, _) =
+        let (probe_incidents, _, _) =
             run_investigation(&faulted, baseline, &empty_timeline).expect("investigates");
         assert!(!probe_incidents.is_empty(), "fixture must raise at least one incident");
         let anchor_tick = probe_incidents[0].start_tick;
@@ -920,7 +989,7 @@ mod tests {
         let mut timeline = ContextTimeline::new();
         timeline.push(ContextEvent::new(anchor_tick, "mode", "safe_hold"));
 
-        let (original_incidents, monitor_export) =
+        let (original_incidents, monitor_export, _imputation) =
             run_investigation(&faulted, baseline, &timeline).expect("investigates");
         assert!(
             original_incidents.iter().any(|inc| inc.context.iter().any(|c| c.value == "safe_hold")),
@@ -936,6 +1005,7 @@ mod tests {
             input_hash: crate::case::fingerprint_content(b"context round trip fixture"),
             monitor_export,
             column_schema: ColumnSchema::from_header(&names.iter().map(|s| s.as_str()).collect::<Vec<_>>()),
+            imputation: vec![],
         };
 
         let dir = std::env::temp_dir().join("struktura_replay_test_context_roundtrip");
@@ -991,6 +1061,7 @@ mod tests {
             input_hash: crate::case::fingerprint_content(b"config diff fixture"),
             monitor_export: monitor.export(),
             column_schema: ColumnSchema::from_header(&["ch0"]),
+            imputation: vec![],
         };
         let dir = std::env::temp_dir().join("struktura_replay_test_config_diff");
         let _ = std::fs::remove_dir_all(&dir);
@@ -1050,6 +1121,7 @@ mod tests {
             input_hash: crate::case::fingerprint_content(b"legacy fixture"),
             monitor_export: monitor.export(),
             column_schema: ColumnSchema::from_header(&["ch0"]),
+            imputation: vec![],
         };
         let dir = std::env::temp_dir().join("struktura_replay_test_legacy_no_config");
         let _ = std::fs::remove_dir_all(&dir);
@@ -1060,6 +1132,135 @@ mod tests {
         let (_incidents, diff) = replay(&case, None).expect("replay must tolerate a missing config.json");
         assert!(diff.saved_thresholds.is_none());
         assert!(diff.threshold_diffs.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Fix 4: full end-to-end regression test covering the whole
+    /// investigate -> save -> replay pipeline in one place, including
+    /// operating context, calibration-window imputation (Fix 2), and both
+    /// of replay's config-validation failure modes (Fix 1's corrupt-config
+    /// error, and a genuine recording.csv edit that must only warn).
+    #[test]
+    fn end_to_end_investigate_save_replay_with_context_and_damaged_data() {
+        use crate::case::CaseConfig;
+        use crate::context::ColumnSchema;
+        use crate::telemetry_bench::{synth_spacecraft, CHANNELS};
+
+        // Sized like the other full-pipeline fixtures in this file (the
+        // rover-flow and recalibration tests below): a short baseline lets
+        // a channel's naturally noisy calibration produce spurious alarms
+        // (and AutoPilot's guarded recalibration after one eats much of a
+        // short recording's remaining runway), which flaked this fixture
+        // at baseline=200/total=600. 1000/3000 is the scale already proven
+        // reliable elsewhere in this file.
+        let baseline = 1000;
+        let total = 3000;
+        let fault_start = 2000;
+        let mut cols = synth_spacecraft(total, 7);
+
+        // 5 NaNs injected into channel 1's calibration window (rows 10-14).
+        for t in 10..15 {
+            cols[1][t] = f64::NAN;
+        }
+
+        // Fault channel: channel 2 (temperature) is a continuous,
+        // unclamped, noise-driven process in `synth_spacecraft` -- unlike
+        // channel 0 (state of charge), which is clamped to [0.2, 0.98] and
+        // can naturally plateau at the clamp boundary for a run of ticks,
+        // which would otherwise trip the repeat detector on its own.
+        const FAULT_CHANNEL: usize = 2;
+
+        // Fault: the channel freezes at a strongly shifted constant from
+        // `fault_start` onward -- a level shift plus a stuck/repeat
+        // signature, well after both the baseline and the injected NaNs.
+        let window = &cols[FAULT_CHANNEL][..fault_start];
+        let mean: f64 = window.iter().sum::<f64>() / window.len() as f64;
+        let std: f64 =
+            (window.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / window.len() as f64).sqrt();
+        let stuck_value = mean + 6.0 * std.max(1e-6);
+        for v in cols[FAULT_CHANNEL].iter_mut().skip(fault_start) {
+            *v = stuck_value;
+        }
+
+        let mut timeline = ContextTimeline::new();
+        timeline.push(ContextEvent::new(1500, "mode", "science"));
+
+        let (incidents, monitor_export, imputation) =
+            run_investigation(&cols, baseline, &timeline).expect("investigates");
+
+        // The fault must be caught on the fault channel somewhere after
+        // `fault_start`.
+        assert!(
+            incidents
+                .iter()
+                .any(|inc| inc.evidence.iter().any(|e| e.channel == FAULT_CHANNEL && e.tick as usize >= fault_start)),
+            "expected a channel-{}-incident at/after tick {}, got: {:?}",
+            FAULT_CHANNEL,
+            fault_start,
+            incidents
+        );
+
+        // Channel 1's 5 injected NaNs must be recorded as imputed.
+        let ch1_imputed = imputation.iter().find(|(ch, _)| *ch == 1).map(|(_, n)| *n);
+        assert_eq!(ch1_imputed, Some(5), "imputation counts: {:?}", imputation);
+
+        let names: Vec<String> = (0..CHANNELS).map(|c| format!("ch{}", c)).collect();
+        let column_schema =
+            ColumnSchema::from_header(&names.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+        let config = CaseConfig {
+            input_hash: crate::case::fingerprint_content(b"end to end fixture"),
+            monitor_export,
+            column_schema,
+            imputation,
+        };
+
+        let mut rows: Vec<Vec<f64>> = Vec::with_capacity(total);
+        for t in 0..total {
+            rows.push((0..CHANNELS).map(|c| cols[c][t]).collect());
+        }
+
+        let dir = std::env::temp_dir().join("struktura_replay_test_end_to_end");
+        let _ = std::fs::remove_dir_all(&dir);
+        let case = Case::save(&dir, &rows, &incidents, baseline, "end_to_end", &config, &timeline, &names)
+            .expect("saves");
+
+        assert!(case.dir().join("context.json").exists());
+        assert!(case.dir().join("schema.json").exists());
+
+        // Untouched case: fingerprint clean, everything matched, config
+        // validated.
+        let (replayed_incidents, diff) = replay(&case, None).expect("replays");
+        assert!(diff.fingerprint_mismatch.is_none());
+        assert_eq!(replayed_incidents.len(), incidents.len());
+        assert_eq!(diff.matched.len(), incidents.len());
+        assert!(diff.missed.is_empty());
+        assert!(diff.new_alarms.is_empty());
+        assert!(diff.config_valid);
+
+        // Overwrite config.json with `{}`: replay must now error (Fix 1).
+        let config_path = case.dir().join("config.json");
+        let original_config = std::fs::read_to_string(&config_path).expect("reads config.json");
+        std::fs::write(&config_path, "{}").expect("overwrites config.json");
+        let err = replay(&case, None).unwrap_err();
+        assert!(err.contains("monitor_export"), "unexpected error: {}", err);
+
+        // Restore config.json, then modify one value in recording.csv:
+        // replay must succeed but warn (report a fingerprint mismatch).
+        std::fs::write(&config_path, &original_config).expect("restores config.json");
+        let recording_path = case.dir().join("recording.csv");
+        let text = std::fs::read_to_string(&recording_path).expect("reads recording.csv");
+        let mut lines: Vec<String> = text.lines().map(|s| s.to_string()).collect();
+        let row_line_idx = 51; // header (line 0) + row 50
+        let mut fields: Vec<String> = lines[row_line_idx].split(',').collect::<Vec<_>>().iter().map(|s| s.to_string()).collect();
+        let original_val: f64 = fields[0].parse().expect("first field is a float");
+        fields[0] = (original_val + 100.0).to_string();
+        lines[row_line_idx] = fields.join(",");
+        let edited = lines.join("\n") + "\n";
+        std::fs::write(&recording_path, &edited).expect("writes edited recording.csv");
+
+        let (_incidents3, diff3) = replay(&case, None).expect("replays after recording edit");
+        assert!(diff3.fingerprint_mismatch.is_some(), "edited recording.csv must report a fingerprint mismatch");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -94,6 +94,13 @@ pub struct CaseConfig {
     pub monitor_export: MonitorExport,
     /// The input CSV's column classification (measurement/mode/command/…).
     pub column_schema: ColumnSchema,
+    /// Per-channel calibration-window imputation counts from
+    /// `replay::run_investigation`, as `(channel_index, imputed_count)`
+    /// pairs — saved so a later `struktura replay` (or a human reading
+    /// `config.json`) can see how much of the original investigation's
+    /// calibration was fabricated from the channel mean rather than
+    /// observed.
+    pub imputation: Vec<(usize, usize)>,
 }
 
 /// A content fingerprint (FNV-1a, 64-bit) over the full byte content of an
@@ -134,6 +141,17 @@ fn channel_export_json(c: &ChannelExport) -> String {
          \"mean\":{},\"roll_thr\":{},\"max_run\":{},\"repeat_enabled\":{}}}",
         c.ar_a, c.ar_b, c.ar_sd, c.alpha_mean, c.alpha_sd, c.mean, c.roll_thr, c.max_run, c.repeat_enabled
     )
+}
+
+/// Serialize per-channel imputation counts (see [`CaseConfig::imputation`])
+/// to the `config.json` `imputation` array: `[{"channel":N,"count":M},...]`.
+fn imputation_json(counts: &[(usize, usize)]) -> String {
+    let entries = counts
+        .iter()
+        .map(|(ch, n)| format!("{{\"channel\":{},\"count\":{}}}", ch, n))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("[{}]", entries)
 }
 
 fn column_schema_json(schema: &ColumnSchema) -> String {
@@ -223,9 +241,10 @@ impl Case {
             format!("[{}]", incidents.iter().map(Incident::to_json).collect::<Vec<_>>().join(","));
         let config_json = format!(
             "{{\"baseline_samples\":{},\"detector_version\":\"{}\",\"input_hash\":\"{}\",\
-             \"monitor_export\":{},\"column_schema\":{}}}",
+             \"monitor_export\":{},\"column_schema\":{},\"imputation\":{}}}",
             baseline_samples, env!("CARGO_PKG_VERSION"), json_escape(&config.input_hash),
-            monitor_export_json(&config.monitor_export), column_schema_json(&config.column_schema)
+            monitor_export_json(&config.monitor_export), column_schema_json(&config.column_schema),
+            imputation_json(&config.imputation)
         );
         write_file(dir.join("manifest.json"), manifest.to_json())?;
         write_file(dir.join("recording.csv"), csv)?;
@@ -597,6 +616,7 @@ mod tests {
                 }],
             },
             column_schema: ColumnSchema::from_header(&["ch0", "ch1"]),
+            imputation: vec![],
         }
     }
 
