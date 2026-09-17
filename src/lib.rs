@@ -50,9 +50,9 @@ fn ln(x: f64) -> f64 { libm::log(x) }
 fn ln(x: f64) -> f64 { x.ln() }
 
 #[cfg(not(feature = "std"))]
-fn sqrt(x: f64) -> f64 { libm::sqrt(x) }
+pub(crate) fn sqrt(x: f64) -> f64 { libm::sqrt(x) }
 #[cfg(feature = "std")]
-fn sqrt(x: f64) -> f64 { x.sqrt() }
+pub(crate) fn sqrt(x: f64) -> f64 { x.sqrt() }
 
 #[cfg(not(feature = "std"))]
 fn powf(x: f64, y: f64) -> f64 { libm::pow(x, y) }
@@ -563,26 +563,40 @@ pub struct BootstrapCI {
     pub n_resamples: usize,
 }
 
+/// Subsampling confidence interval for α (Politis–Romano style).
+///
+/// α is a scaling exponent of the ORDERING, so neither an i.i.d.
+/// bootstrap (resampling values, which centres the interval near the
+/// shuffled ~0.5 rather than the estimate) nor a moving-block bootstrap
+/// (block joins destroy scaling above the block length; DFA boxes reach
+/// n/4) is valid. Both were tried on a 123K-sample rover force channel
+/// with α 0.728 and produced "intervals" of [0.39, 0.63] and [0.43, 0.66].
+///
+/// Instead, α is re-estimated on `n_resamples` overlapping contiguous
+/// windows of `n/4` samples spread across the signal, and the interval is
+/// `α ± 1.96 · sd(window α)`. Measured on 1/f noise, sd(α) does not fall
+/// with window length above ~1K samples (the log-log fit uses a fixed
+/// number of box sizes per decade), so the window spread is used
+/// unscaled. The interval is centred on the estimate by construction;
+/// its width is the signal's own α variability at quarter length.
 pub fn bootstrap_alpha(values: &[f64], n_resamples: usize) -> BootstrapCI {
     let n = values.len();
     let base = dfa(values);
-    let mut alphas = Vec::with_capacity(n_resamples);
-    for r in 0..n_resamples {
-        let mut state = (r as u64).wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-        let resampled: Vec<f64> = (0..n).map(|_| {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            let idx = (state >> 33) as usize % n;
-            values[idx]
-        }).collect();
-        let result = dfa(&resampled);
-        if result.r_squared > 0.3 {
-            alphas.push(result.alpha);
-        }
+    let m = (n / 4).max(64).min(n);
+    let k = n_resamples.max(2);
+    let mut alphas = Vec::with_capacity(k);
+    for i in 0..k {
+        let start = if n > m { (i * (n - m)) / (k - 1) } else { 0 };
+        let r = dfa(&values[start..start + m]);
+        if r.r_squared > 0.3 { alphas.push(r.alpha); }
     }
-    alphas.sort_by(|a, b| a.partial_cmp(b).unwrap_or(core::cmp::Ordering::Equal));
-    let lo = if alphas.len() > 4 { alphas[alphas.len() / 40] } else { base.alpha };
-    let hi = if alphas.len() > 4 { alphas[alphas.len() * 39 / 40] } else { base.alpha };
-    BootstrapCI { alpha: base.alpha, ci_low: lo, ci_high: hi, n_resamples }
+    if alphas.len() < 2 {
+        return BootstrapCI { alpha: base.alpha, ci_low: base.alpha, ci_high: base.alpha, n_resamples: alphas.len() };
+    }
+    let mean = alphas.iter().sum::<f64>() / alphas.len() as f64;
+    let var = alphas.iter().map(|a| (a - mean) * (a - mean)).sum::<f64>() / (alphas.len() - 1) as f64;
+    let half = 1.96 * sqrt(var);
+    BootstrapCI { alpha: base.alpha, ci_low: base.alpha - half, ci_high: base.alpha + half, n_resamples: alphas.len() }
 }
 
 impl fmt::Display for BootstrapCI {
