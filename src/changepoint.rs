@@ -153,7 +153,7 @@ pub fn find_changepoint(signal: &[f64], min_segment: usize) -> Option<Changepoin
     let blocks = block_alphas(signal);
     let alphas: Vec<f64> = blocks.iter().map(|b| b.1).collect();
     let k = alphas.len();
-    let min_side = min_segment.div_ceil(BLOCK).max(MIN_BLOCKS_PER_SIDE);
+    let min_side = ((min_segment + BLOCK - 1) / BLOCK).max(MIN_BLOCKS_PER_SIDE);
     if k < 2 * min_side { return None; }
 
     let sigma = noise_sigma(&alphas);
