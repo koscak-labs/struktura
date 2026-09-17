@@ -11,6 +11,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build struktura from this checkout
+        run: cargo build --release --bin struktura
+
       - name: Run struktura action on a known-fault CSV
         id: guard
         uses: ./

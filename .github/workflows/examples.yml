@@ -12,10 +12,10 @@ jobs:
       - name: check-examples.sh
         env:
           STRUKTURA_BIN: ${{ github.workspace }}/target/release/struktura
-        run: scripts/check-examples.sh
+        run: chmod +x scripts/check-examples.sh && scripts/check-examples.sh
       - name: render-examples.sh and diff README.md
         env:
           STRUKTURA_BIN: ${{ github.workspace }}/target/release/struktura
         run: |
-          scripts/render-examples.sh
+          chmod +x scripts/render-examples.sh && scripts/render-examples.sh
           git diff --exit-code README.md

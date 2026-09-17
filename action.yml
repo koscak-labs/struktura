@@ -45,7 +45,13 @@ runs:
     - name: Install struktura
       if: steps.cache-struktura.outputs.cache-hit != 'true'
       shell: bash
-      run: cargo install struktura --version ${{ inputs.version }} --locked
+      run: |
+        # If running from a local checkout (uses: ./), the binary may already be built
+        if [ -x "./target/release/struktura" ]; then
+          cp ./target/release/struktura ~/.cargo/bin/struktura
+        else
+          cargo install struktura --version ${{ inputs.version }} --locked
+        fi
 
     - name: Run struktura guard
       id: run-guard

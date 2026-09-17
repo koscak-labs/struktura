@@ -54,7 +54,7 @@ All notable changes to Struktura are documented here.
 - `guard` command: pipe any CSV and get live anomaly detection with `--watch` tail mode
 - `when` command: find WHERE and WHEN structure changed (changepoint detection)
 - `nasa` command: zero-setup NASA embedded demo
-- Dual-channel residual detector (magnitude + train-calibrated variance) — F1 0.788
+- Dual-channel residual detector (magnitude + train-calibrated variance) — F1 0.655 with `smap --ar 0 --dfa` (an earlier figure of 0.788 could not be reproduced; see v1.7.3 notes)
 - `--help` / `-h` / `help` now works (was broken, returned "Unknown command")
 - Doc comments on all major public functions
 - 80 tests (up from 73), mutation-tested coverage gaps closed
