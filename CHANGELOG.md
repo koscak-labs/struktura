@@ -2,6 +2,16 @@
 
 All notable changes to Struktura are documented here.
 
+## v1.8.1 (2026-09-18) — Copilot integration: copilot-compare + predictive monitoring pitch
+
+- New CLI command: `struktura copilot-compare <file.csv>` — side-by-side comparison
+  of DFA structural health vs boolean amplitude threshold. On IMS bearing data:
+  DFA fires 323 samples (~54 hours) before the boolean threshold trips.
+- New document: `docs/PREDICTIVE-RUNTIME-MONITORING.md` — 1-page pitch bridging
+  Copilot (reactive, onboard) and ProgPy (predictive, offline) with DFA structural
+  health monitoring for autonomous deep-space missions (Artemis/Gateway).
+- Suppress dead_code warnings for clean demo screen-sharing.
+
 ## v1.8.0 (2026-09-18) — Telemetry debugger: investigate, case save, replay
 
 - New telemetry debugger CLI: `struktura investigate`, `struktura case save`, and
