@@ -221,6 +221,7 @@ fn main() {
         println!("    struktura market <prices.csv>              Financial regime detection");
         println!("    struktura rhythm <timestamps.csv>          Event timing (heartbeat/git/IoT)");
         println!("    struktura compare <a.csv> <b.csv>         Compare two signals");
+        println!("    struktura copilot-compare <file.csv>      DFA vs boolean threshold (side-by-side)");
         println!("    struktura bench                           Full benchmark with all fault types");
         println!("    struktura benchmark-faults                 F1 scores across 6 telemetry fault types");
         println!();
@@ -267,10 +268,12 @@ fn main() {
         "mission" => cmd_mission(),
         "redblue" => cmd_redblue(&args),
         "evolve" => cmd_evolve(&args),
+        "evolve-real" => cmd_evolve_real(&args),
         "smap" => cmd_smap(&args),
         "nasa" => cmd_nasa(),
         "rover" => cmd_rover(),
         "guard" => cmd_guard(&args),
+        "copilot-compare" | "cc" => cmd_copilot_compare(&args),
         "when" => cmd_when(&args),
         "pipe" => cmd_pipe(&args),
         "investigate" => cmd_investigate(&args),
@@ -3017,6 +3020,240 @@ fn cmd_evolve(args: &[String]) {
     println!();
 }
 
+/// Raw (non-numeric-parsed) CSV columns, for locating a timestamp column
+/// and matching it against label window boundaries by string comparison
+/// (works for the sortable ISO-8601 timestamps ESA-ADB and telemanom use).
+#[allow(dead_code)]
+fn read_csv_raw(path: &str) -> (Vec<String>, Vec<Vec<String>>) {
+    let content = fs::read_to_string(path).unwrap_or_else(|e| {
+        eprintln!("Error reading {}: {}", path, e);
+        process::exit(1);
+    });
+    let mut lines = content.lines();
+    let header: Vec<String> = match lines.next() {
+        Some(h) => h.split(',').map(|s| s.trim().to_string()).collect(),
+        None => return (vec![], vec![]),
+    };
+    let ncols = header.len();
+    let mut cols: Vec<Vec<String>> = (0..ncols).map(|_| Vec::new()).collect();
+    for line in lines {
+        let fields: Vec<&str> = line.split(',').collect();
+        for i in 0..ncols {
+            cols[i].push(fields.get(i).map(|s| s.trim().to_string()).unwrap_or_default());
+        }
+    }
+    (header, cols)
+}
+
+/// Row index of the first timestamp >= `target` (ISO-8601 strings sort
+/// lexically), or the last row if `target` is past the end.
+fn timestamp_row(timestamps: &[String], target: &str) -> usize {
+    for (i, t) in timestamps.iter().enumerate() {
+        if t.as_str() >= target {
+            return i;
+        }
+    }
+    timestamps.len().saturating_sub(1)
+}
+
+/// One parsed row of an ESA-ADB-format labels CSV: `ID,Channel,StartTime,EndTime`.
+struct RealLabel {
+    id: String,
+    channel: String,
+    start_time: String,
+    end_time: String,
+}
+
+fn parse_labels_csv(content: &str) -> Vec<RealLabel> {
+    let mut lines = content.lines();
+    let header: Vec<String> = match lines.next() {
+        Some(h) => h.split(',').map(|s| s.trim().to_lowercase()).collect(),
+        None => return vec![],
+    };
+    let idx = |name: &str| header.iter().position(|h| h == name);
+    let (i_id, i_ch, i_start, i_end) = match (idx("id"), idx("channel"), idx("starttime"), idx("endtime")) {
+        (Some(a), Some(b), Some(c), Some(d)) => (a, b, c, d),
+        _ => {
+            eprintln!("labels CSV must have header ID,Channel,StartTime,EndTime");
+            process::exit(1);
+        }
+    };
+    let mut out = Vec::new();
+    for line in lines {
+        let fields: Vec<&str> = line.split(',').collect();
+        let get = |i: usize| fields.get(i).map(|s| s.trim().to_string()).unwrap_or_default();
+        if fields.len() <= i_id.max(i_ch).max(i_start).max(i_end) {
+            continue;
+        }
+        out.push(RealLabel {
+            id: get(i_id),
+            channel: get(i_ch),
+            start_time: get(i_start),
+            end_time: get(i_end),
+        });
+    }
+    out
+}
+
+fn cmd_evolve_real(args: &[String]) {
+    use struktura::evolve_real::{evolve_real, EvolveRealConfig, RealAnomaly};
+
+    let mut train_path = None;
+    let mut test_path = None;
+    let mut labels_path = None;
+    let mut channel_name = None;
+    let mut rounds = 8usize;
+    let mut mutations = 8usize;
+    let mut i = 2;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--train" if i + 1 < args.len() => { train_path = Some(args[i + 1].clone()); i += 2; }
+            "--test" if i + 1 < args.len() => { test_path = Some(args[i + 1].clone()); i += 2; }
+            "--labels" if i + 1 < args.len() => { labels_path = Some(args[i + 1].clone()); i += 2; }
+            "--channel" if i + 1 < args.len() => { channel_name = Some(args[i + 1].clone()); i += 2; }
+            "--rounds" if i + 1 < args.len() => { rounds = args[i + 1].parse().unwrap_or(8); i += 2; }
+            "--mutations" if i + 1 < args.len() => { mutations = args[i + 1].parse().unwrap_or(8); i += 2; }
+            _ => { i += 1; }
+        }
+    }
+    let (_train_path, test_path, labels_path) = match (train_path, test_path, labels_path) {
+        (Some(a), Some(b), Some(c)) => (a, b, c),
+        _ => {
+            eprintln!("usage: struktura evolve-real --train <csv> --test <csv> --labels <csv> [--rounds N] [--mutations N]");
+            process::exit(1);
+        }
+    };
+
+    // For evolve-real, we only need a small calibration window and the
+    // rows around each anomaly. Loading multi-million-row files fully is
+    // too slow. Strategy: load timestamps from the test file for label
+    // mapping, then load only the needed windows.
+    eprintln!("evolve-real: loading timestamps from test file...");
+    let test_content = fs::read_to_string(&test_path).unwrap_or_else(|e| {
+        eprintln!("Error reading {}: {}", test_path, e);
+        process::exit(1);
+    });
+    let (test_header, test_cols, _) = parse_csv_columns(&test_content);
+    let (_, test_raw_cols) = {
+        let mut lines = test_content.lines();
+        let hdr: Vec<String> = lines.next().unwrap_or("").split(',').map(|s| s.trim().to_string()).collect();
+        let ncols = hdr.len();
+        let mut cols: Vec<Vec<String>> = (0..ncols).map(|_| Vec::new()).collect();
+        for line in lines {
+            let fields: Vec<&str> = line.split(',').collect();
+            for (i, col) in cols.iter_mut().enumerate() {
+                col.push(fields.get(i).unwrap_or(&"").trim().to_string());
+            }
+        }
+        (hdr, cols)
+    };
+    eprintln!("evolve-real: {} rows x {} columns loaded", test_cols.get(0).map(|c| c.len()).unwrap_or(0), test_header.len());
+
+    // For the train/calib data, use the same file but only keep the last
+    // 10000 rows for the clean-alarm check (the evolve loop windows its
+    // own calibration per anomaly).
+    let train_header = test_header.clone();
+    let max_calib = 10000usize;
+    let train_cols: Vec<Vec<f64>> = test_cols.iter().map(|c| {
+        let start = c.len().saturating_sub(max_calib);
+        c[start..].to_vec()
+    }).collect();
+
+    // Match training/test channels by header name (drop any timestamp-like
+    // non-numeric column: parse_csv_columns already turns it into NaNs, so
+    // just require both files share the same channel name in order).
+    let shared: Vec<String> = train_header
+        .iter()
+        .filter(|h| test_header.contains(h))
+        .cloned()
+        .collect();
+    if shared.is_empty() {
+        eprintln!("train/test CSVs share no common column names");
+        process::exit(1);
+    }
+    let calib: Vec<Vec<f64>> = shared
+        .iter()
+        .map(|h| train_cols[train_header.iter().position(|x| x == h).unwrap()].clone())
+        .collect();
+    let test: Vec<Vec<f64>> = shared
+        .iter()
+        .map(|h| test_cols[test_header.iter().position(|x| x == h).unwrap()].clone())
+        .collect();
+
+    // Timestamp column: first non-shared-numeric header, or column 0.
+    let ts_idx = test_header
+        .iter()
+        .position(|h| h.to_lowercase().contains("time"))
+        .unwrap_or(0);
+    let timestamps = &test_raw_cols[ts_idx];
+
+    let labels_content = fs::read_to_string(&labels_path).unwrap_or_else(|e| {
+        eprintln!("Error reading {}: {}", labels_path, e);
+        process::exit(1);
+    });
+    let labels = parse_labels_csv(&labels_content);
+    // For single-channel CSVs (header: timestamp,value,is_anomaly), the
+    // labels' Channel column (e.g. "channel_22") won't match any header.
+    // --channel <name> tells us which label channel maps to this file.
+    // Without it, auto-detect: if shared has exactly one numeric column
+    // and channel_name is unset, accept all labels.
+    let effective_channel = channel_name.clone().or_else(|| {
+        if shared.len() == 1 || (shared.len() <= 2 && shared.iter().any(|h| h == "value")) {
+            // Single-channel file; accept all label channels
+            None
+        } else {
+            Some(String::new()) // multi-channel: require exact match
+        }
+    });
+    let anomalies: Vec<RealAnomaly> = labels
+        .iter()
+        .filter(|l| {
+            match &effective_channel {
+                Some(ch) if !ch.is_empty() => &l.channel == ch,
+                Some(_) => shared.iter().any(|h| h == &l.channel), // multi-channel exact match
+                None => channel_name.as_ref().map_or(true, |c| &l.channel == c), // single-channel: accept all or match --channel
+            }
+        })
+        .filter(|l| match &channel_name {
+            Some(ch) => &l.channel == ch,
+            None => true,
+        })
+        .map(|l| RealAnomaly {
+            id: l.id.clone(),
+            start_row: timestamp_row(timestamps, &l.start_time),
+            end_row: timestamp_row(timestamps, &l.end_time),
+        })
+        .collect();
+
+    println!();
+    println!("  \x1b[1mEVOLVE AGAINST REAL LABELED DATA\x1b[0m");
+    println!("  {} channels matched, {} labeled anomalies loaded ({} rounds x {} mutations).",
+        shared.len(), anomalies.len(), rounds, mutations);
+    println!("  ================================================================");
+    println!();
+    println!("  | Round | Detected/Total | Coverage | Clean alarms | Improved |");
+    println!("  |-------|----------------|----------|--------------|----------|");
+
+    let cfg = EvolveRealConfig { calib, test, anomalies, rounds, blue_mutations: mutations };
+    let (final_config, final_legs, reports) = evolve_real(cfg, |r| {
+        println!(
+            "  | {:>5} | {:>6}/{:<6}  | {:>6.1}%  | {:>12} | {:>8} |",
+            r.round + 1, r.detected, r.total, r.coverage * 100.0,
+            r.clean_false_alarms, if r.improved { "yes" } else { "no" }
+        );
+    });
+
+    println!();
+    if let Some(last) = reports.last() {
+        println!("  Final coverage: {:.1}% ({}/{})", last.coverage * 100.0, last.detected, last.total);
+    }
+    println!("  Synthesized legs: {}", final_legs.len());
+    println!("  {{\"res_span\":{},\"dfa_persist\":{},\"roll_persist\":{},\"cusum_k\":{},\"design_horizon\":{}}}",
+        final_config.res_span, final_config.dfa_persist, final_config.roll_persist,
+        final_config.cusum_k, final_config.design_horizon);
+    println!();
+}
+
 fn cmd_smap(args: &[String]) {
     use struktura::monitor::HybridMonitor;
 
@@ -4313,6 +4550,143 @@ fn prepare_input(content: &str) -> (Vec<String>, Vec<Vec<f64>>, struktura::conte
     let meas_cols: Vec<Vec<f64>> = measurement_cols.iter().map(|&i| cols[i].clone()).collect();
     let meas_names: Vec<String> = measurement_cols.iter().map(|&i| header[i].clone()).collect();
     (meas_names, meas_cols, schema, header)
+}
+
+/// Side-by-side: DFA structural monitor vs boolean amplitude threshold.
+/// Shows the gap — DFA fires hours before the threshold trips.
+fn cmd_copilot_compare(args: &[String]) {
+    use struktura::monitor::HybridMonitor;
+    use struktura::autopilot::{AutoPilot, Event};
+
+    let file_path = args.get(2).unwrap_or_else(|| {
+        eprintln!("Usage: struktura copilot-compare <file.csv> [--col N]");
+        eprintln!("  Side-by-side: DFA structural monitor vs boolean amplitude threshold.");
+        eprintln!("  Shows the gap — struktura fires before any threshold trips.");
+        process::exit(1);
+    });
+
+    let content = std::fs::read_to_string(file_path).unwrap_or_else(|e| {
+        eprintln!("cannot read {}: {}", file_path, e);
+        process::exit(2);
+    });
+
+    let parsed = parse_multi_csv(&content);
+    let rows = parsed.rows;
+    if rows.is_empty() { eprintln!("no numeric rows"); process::exit(2); }
+    let n = rows.len();
+    let ncols = rows[0].len();
+    let calib_n = (n / 3).clamp(192, 100_000);
+
+    let channels: Vec<Vec<f64>> = (0..ncols)
+        .map(|ch| rows.iter().map(|r| r.get(ch).copied().unwrap_or(0.0)).collect())
+        .collect();
+
+    // Boolean threshold: 95th percentile of calibration window amplitude per channel
+    let mut thresholds = vec![0.0f64; ncols];
+    for ch in 0..ncols {
+        let mut calib_vals: Vec<f64> = channels[ch][..calib_n].iter().map(|v| v.abs()).collect();
+        calib_vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let p95_idx = (calib_vals.len() as f64 * 0.95) as usize;
+        thresholds[ch] = calib_vals.get(p95_idx.min(calib_vals.len() - 1)).copied().unwrap_or(1.0) * 1.5;
+    }
+
+    // DFA monitor
+    let calib: Vec<Vec<f64>> = channels.iter().map(|c| c[..calib_n].to_vec()).collect();
+    let mon = match HybridMonitor::calibrate(&calib) {
+        Some(m) => m,
+        None => { eprintln!("calibration failed (need >= 192 samples)"); process::exit(2); }
+    };
+    let mut ap = AutoPilot::new(mon);
+    let valid: Vec<bool> = vec![true; ncols];
+    let mut sample = vec![0.0f64; ncols];
+
+    let mut first_dfa_alarm: Option<usize> = None;
+    let mut first_bool_alarm: Option<usize> = None;
+    let mut last_alarm_leg: Vec<(usize, u8)> = Vec::new();
+
+    // Header
+    println!();
+    println!("  \x1b[1mCopilot Boolean vs Struktura DFA — {}\x1b[0m", file_path);
+    println!("  {} samples × {} channels, calibrated on {} rows", n, ncols, calib_n);
+    println!("  ─────────────────────────────────────────────────────────────────────");
+    println!("  {:>6}  {:>10}  {:>14}  {:>20}", "row", "amplitude", "bool monitor", "struktura DFA");
+    println!("  {:>6}  {:>10}  {:>14}  {:>20}", "───", "─────────", "────────────", "─────────────");
+
+    // Print calibration baseline
+    let baseline_law = analyze(&channels[0][..calib_n]);
+    println!("  {:>6}  {:>10}  {:>14}  α={:<6.3} baseline", calib_n, "in-spec", "✓ OK", baseline_law.dfa.alpha);
+
+    for t in calib_n..n {
+        for ch in 0..ncols { sample[ch] = channels[ch][t]; }
+
+        // Boolean check: any channel exceeds threshold?
+        let max_amp = (0..ncols).map(|ch| channels[ch][t].abs()).fold(0.0f64, f64::max);
+        let bool_tripped = (0..ncols).any(|ch| channels[ch][t].abs() > thresholds[ch]);
+        if bool_tripped && first_bool_alarm.is_none() { first_bool_alarm = Some(t); }
+
+        // DFA check
+        let mut dfa_event = None;
+        for ev in ap.push(&sample, &valid) {
+            match &ev {
+                Event::Alarm { report, .. } => {
+                    let leg_id = report.leg as u8;
+                    let dup = last_alarm_leg.iter().any(|&(lt, ll)| ll == leg_id && t.saturating_sub(lt) < 50);
+                    last_alarm_leg.retain(|&(lt, _)| t.saturating_sub(lt) < 50);
+                    last_alarm_leg.push((t, leg_id));
+                    if !dup {
+                        let explanation = struktura::monitor::explain_alarm(report);
+                        dfa_event = Some(format!("⚠ {}", explanation.chars().take(30).collect::<String>()));
+                        if first_dfa_alarm.is_none() { first_dfa_alarm = Some(t); }
+                    }
+                }
+                Event::AdaptationStarted { .. } => {
+                    dfa_event = Some("↻ learning new baseline".into());
+                }
+                Event::RolledBack { .. } => {
+                    dfa_event = Some("✗ FAULT CONFIRMED".into());
+                    if first_dfa_alarm.is_none() { first_dfa_alarm = Some(t); }
+                }
+                Event::Recalibrated { .. } => {
+                    dfa_event = Some("✓ new baseline accepted".into());
+                }
+                _ => {}
+            }
+        }
+
+        // Only print transition rows — when something CHANGES
+        let bool_just_tripped = bool_tripped && first_bool_alarm == Some(t);
+        let is_dfa_event = dfa_event.is_some();
+        if is_dfa_event || bool_just_tripped {
+            let bool_str = if bool_tripped { "\x1b[31m✗ ALARM\x1b[0m" } else { "✓ OK" };
+            let dfa_str = dfa_event.unwrap_or_else(|| "—".into());
+            let amp_str = if bool_tripped { format!("\x1b[31m{:.4}\x1b[0m", max_amp) } else { format!("{:.4}", max_amp) };
+            println!("  {:>6}  {:>10}  {:>14}  {}", t, amp_str, bool_str, dfa_str);
+        }
+    }
+
+    // Summary
+    println!("  ─────────────────────────────────────────────────────────────────────");
+    println!();
+    match (first_dfa_alarm, first_bool_alarm) {
+        (Some(dfa_t), Some(bool_t)) if dfa_t < bool_t => {
+            let lead = bool_t - dfa_t;
+            println!("  \x1b[1mResult:\x1b[0m Struktura detected the fault {} samples BEFORE the boolean threshold.", lead);
+            println!("  DFA alarm at row {}, boolean alarm at row {} — \x1b[32m{} samples of early warning.\x1b[0m", dfa_t, bool_t, lead);
+        }
+        (Some(dfa_t), Some(bool_t)) => {
+            println!("  Both fired: DFA at row {}, boolean at row {}.", dfa_t, bool_t);
+        }
+        (Some(dfa_t), None) => {
+            println!("  \x1b[1mResult:\x1b[0m Struktura detected a fault at row {} — boolean threshold \x1b[31mnever fired\x1b[0m.", dfa_t);
+        }
+        (None, Some(bool_t)) => {
+            println!("  Boolean threshold fired at row {} — DFA did not flag anything.", bool_t);
+        }
+        (None, None) => {
+            println!("  Neither monitor detected a fault.");
+        }
+    }
+    println!();
 }
 
 #[cfg(test)]
