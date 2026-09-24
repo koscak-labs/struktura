@@ -8,7 +8,15 @@ All notable changes to Struktura are documented here.
   a regular timestamp). On a CSV with a `t,value` layout, 1.8.5 monitored `t`,
   raised a fault on it and declared it dead; now it prints a note and the result
   equals the value-only file. Columns with uneven increments (counters) are still
-  monitored, and a file's only column is always kept.
+  monitored, and a file's only column is always kept. This includes epoch
+  timestamps with sub-second steps (the tolerance scales with the values).
+- GitHub Action: `@v1` now moves to a release only after the action has run
+  against that release's published binaries on Linux, Windows and macOS
+  (download, SHA-256 check, faults found on a known-fault CSV).
+- OPS-SAT-AD (ESA satellite telemetry) result in the README and ledger:
+  `dfa_short` AUC-ROC 0.943, 0.554 with shuffled samples. Segment
+  classification with a nominal reference from the training labels, not the
+  streaming `guard`. Re-checked weekly in CI against the SHA-256-pinned data.
 - The residual-CUSUM alarm text no longer says "a step or a drift": it also
   fires on a change in how values follow each other (seen on white noise that
   turns AR(0.9) at the same variance). New text: "the signal keeps deviating

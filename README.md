@@ -92,6 +92,12 @@ Most of `guard`'s remaining false alarms come from its drift (residual-CUSUM) le
 
 Reproduce: clone NAB (commit `ea702d7`) and run `NAB_DIR=path/to/NAB cargo run --release --example nab_eval` for `guard` and the limit check (weekly in CI), or `cargo run --release` in [bench/compare](bench/compare/) for every detector above ([RESULTS.md](bench/compare/RESULTS.md)).
 
+## 🛰️ On real satellite telemetry: OPS-SAT-AD
+
+[OPS-SAT-AD](https://doi.org/10.5281/zenodo.12588359) is telemetry from ESA's OPS-SAT satellite, cut into 2,123 segments that KP Labs labelled nominal or anomalous. Scoring each test segment by how far its `dfa_short` α sits from the median of its channel's nominal training segments gives **AUC-ROC 0.943** (AUC-PR 0.882) on the 529 test segments. Shuffling the values inside each segment drops that to 0.554, so the score comes from the order of the samples, not their spread or count (segment length alone: 0.734; log variance: 0.590). On segments shorter than 64 samples the shuffled control still reaches 0.743, so there only part of the signal is structure.
+
+Two limits: this is segment classification (one score per labelled segment), not the streaming `guard`; and the nominal reference per channel comes from the training labels, so it is not fully unsupervised. Details: [docs/scoreboard/opssat.md](docs/scoreboard/opssat.md). Reproduce with `OPSSAT_DIR=path/to/data cargo run --release --example opssat_eval` (weekly in CI, data pinned by SHA-256).
+
 ## 🎯 Who it is for
 
 You have a time series and no labelled faults to train on:

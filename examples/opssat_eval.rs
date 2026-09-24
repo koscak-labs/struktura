@@ -1,10 +1,13 @@
 //! OPS-SAT-AD (ESA OPS-SAT telemetry, KP Labs; Zenodo 12588359): does
 //! struktura's own DFA alpha separate anomalous segments from nominal ones?
 //!
-//! Protocol (unsupervised, labels only used for scoring): for each segment,
-//! alpha = struktura::dfa(values).alpha. Per channel, take the median and
-//! std of alpha over the nominal TRAIN segments; the test score is
-//! |alpha - median| / std. Report AUC-ROC and AUC-PR on the 529 test segments.
+//! Protocol: for each segment, alpha = struktura::dfa_short(values).alpha
+//! (struktura::dfa is reported too; it has no alpha below 64 samples). Per
+//! channel, take the median and std of alpha over the nominal TRAIN
+//! segments; the test score is |alpha - median| / std. The train labels pick
+//! that nominal reference, so this is not fully unsupervised; test labels
+//! are used only for scoring. Report AUC-ROC and AUC-PR on the 529 test
+//! segments. This is segment classification, not the streaming guard.
 //!
 //! Controls on the same segments and scoring:
 //! - shuffled: values shuffled within each segment before DFA (keeps

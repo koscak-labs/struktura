@@ -24,10 +24,19 @@ jobs:
           git remote add origin https://github.com/numenta/NAB.git
           git fetch -q --depth 1 origin ea702d75cc2258d9d7dd35ca8e5e2539d71f3140
           git checkout -q FETCH_HEAD
+      # OPS-SAT-AD segments (examples/opssat_eval.rs), Zenodo 12588359,
+      # pinned by hash to the file the published numbers came from.
+      - name: fetch OPS-SAT-AD
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: |
+          mkdir -p "$RUNNER_TEMP/opssat"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/opssat/segments.csv" "https://zenodo.org/records/12588359/files/segments.csv?download=1"
+          echo "dab2e01e873c93590692b50a7cc312d9cce4d5ba7e69ce8015603c47a8ffb97b  $RUNNER_TEMP/opssat/segments.csv" | sha256sum -c -
       - name: check-claims.sh
         env:
           STRUKTURA_BIN: ${{ github.workspace }}/target/release/struktura
           NAB_DIR: ${{ runner.temp }}/nab
+          OPSSAT_DIR: ${{ runner.temp }}/opssat
         run: |
           chmod +x scripts/check-claims.sh
           if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
