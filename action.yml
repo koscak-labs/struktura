@@ -1,5 +1,5 @@
 name: 'struktura'
-description: 'Run struktura DFA anomaly guard on a CSV in CI — zero-config drift/fault detection.'
+description: 'Run struktura DFA anomaly guard on a CSV in CI: zero-config drift/fault detection.'
 branding:
   icon: 'activity'
   color: 'orange'
@@ -9,9 +9,9 @@ inputs:
     description: 'Path to the CSV file to check (one column per channel).'
     required: true
   version:
-    description: 'struktura version to install from crates.io.'
+    description: 'struktura version to use. The prebuilt release binary for this exact version is downloaded; runners without one (e.g. Linux ARM64) build it with cargo install --locked.'
     required: false
-    default: '1.8.0'
+    default: '1.8.4'
   fail-on-fault:
     description: 'Fail the step (exit non-zero) when struktura reports a fault.'
     required: false
@@ -28,30 +28,64 @@ outputs:
   report:
     description: 'Path to the raw struktura JSON report written by this action.'
     value: ${{ steps.run-guard.outputs.report }}
+  source:
+    description: 'Where the struktura binary came from: local (./target/release), release (prebuilt download) or cargo (built with cargo install).'
+    value: ${{ steps.resolve.outputs.source }}
 
 runs:
   using: 'composite'
   steps:
+    # Order: a binary built in this checkout (uses: ./), then the prebuilt
+    # GitHub release binary for the pinned version, then cargo install.
+    # The release binaries have no published checksums yet; the download
+    # is over HTTPS from this repository's own release of that exact version.
+    - name: Resolve struktura binary
+      id: resolve
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        if [ -x "./target/release/struktura" ] || [ -x "./target/release/struktura.exe" ]; then
+          echo "$PWD/target/release" >> "$GITHUB_PATH"
+          echo "source=local" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        case "${RUNNER_OS}-${RUNNER_ARCH}" in
+          Linux-X64)   asset=struktura-linux-x86_64 ;;
+          macOS-ARM64) asset=struktura-macos-aarch64 ;;
+          macOS-X64)   asset=struktura-macos-x86_64 ;;
+          Windows-X64) asset=struktura-windows-x86_64.exe ;;
+          *)           asset= ;;
+        esac
+        exe=struktura; [ "$RUNNER_OS" = "Windows" ] && exe=struktura.exe
+        dir="$RUNNER_TEMP/struktura-bin"; mkdir -p "$dir"
+        url="https://github.com/koscak-labs/struktura/releases/download/v${VERSION}/${asset}"
+        if [ -n "$asset" ] && curl -fsSL --retry 3 -o "$dir/$exe" "$url"; then
+          chmod +x "$dir/$exe"
+          echo "$dir" >> "$GITHUB_PATH"
+          echo "source=release" >> "$GITHUB_OUTPUT"
+          echo "struktura ${VERSION}: downloaded ${asset}"
+        else
+          echo "source=cargo" >> "$GITHUB_OUTPUT"
+          echo "struktura ${VERSION}: no release binary for ${RUNNER_OS}-${RUNNER_ARCH}, building with cargo"
+        fi
+
     - name: Install Rust toolchain
+      if: steps.resolve.outputs.source == 'cargo'
       uses: dtolnay/rust-toolchain@stable
 
     - name: Cache struktura binary
+      if: steps.resolve.outputs.source == 'cargo'
       id: cache-struktura
       uses: actions/cache@v4
       with:
-        path: ~/.cargo/bin
-        key: struktura-cargo-bin-${{ runner.os }}-${{ inputs.version }}
+        path: ~/.cargo/bin/struktura*
+        key: struktura-cargo-bin-${{ runner.os }}-${{ runner.arch }}-${{ inputs.version }}
 
-    - name: Install struktura
-      if: steps.cache-struktura.outputs.cache-hit != 'true'
+    - name: Install struktura with cargo
+      if: steps.resolve.outputs.source == 'cargo' && steps.cache-struktura.outputs.cache-hit != 'true'
       shell: bash
-      run: |
-        # If running from a local checkout (uses: ./), the binary may already be built
-        if [ -x "./target/release/struktura" ]; then
-          cp ./target/release/struktura ~/.cargo/bin/struktura
-        else
-          cargo install struktura --version ${{ inputs.version }} --locked
-        fi
+      run: cargo install struktura --version "${{ inputs.version }}" --locked
 
     - name: Run struktura guard
       id: run-guard
@@ -84,7 +118,7 @@ runs:
         } >> "$GITHUB_STEP_SUMMARY"
 
         if [ "$EXIT_CODE" -eq 2 ]; then
-          echo "::error::struktura guard errored (exit 2) — see report above"
+          echo "::error::struktura guard errored (exit 2), see report above"
           exit 2
         fi
 
