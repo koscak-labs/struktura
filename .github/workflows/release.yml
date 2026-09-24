@@ -2,7 +2,9 @@ name: Release
 
 on:
   push:
-    tags: ['v*']
+    # Full versions only. `v*` also matched the floating `v1` Action tag, so
+    # moving v1 started a release named "v1" (2026-09-24, cancelled).
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
 
 permissions:
   contents: write
@@ -71,3 +73,43 @@ jobs:
         with:
           files: dist/*
           generate_release_notes: true
+
+  # Users run `uses: koscak-labs/struktura@v1`. Before v1 moves to this release,
+  # run the action the way they do, against the binaries just published:
+  # download, sha256 check, faults found on a known-fault CSV, on each OS.
+  action-release-check:
+    needs: github-release
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - id: guard
+        uses: ./
+        with:
+          file: data/sylv_spike.csv
+          version: ${{ steps.v.outputs.version }}
+          fail-on-fault: false
+      - shell: bash
+        run: |
+          SRC="${{ steps.guard.outputs.source }}"; FAULTS="${{ steps.guard.outputs.faults }}"
+          echo "version=${{ steps.v.outputs.version }} source=$SRC faults=$FAULTS"
+          [ "$SRC" = release ] || { echo "::error::expected source=release, got '$SRC'"; exit 1; }
+          [ -n "$FAULTS" ] && [ "$FAULTS" -gt 0 ] || { echo "::error::expected faults > 0, got '$FAULTS'"; exit 1; }
+
+  # Only after every OS passed. A push made with GITHUB_TOKEN starts no new
+  # workflow runs, and the tag filter above excludes v1 anyway.
+  move-v1:
+    needs: action-release-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          git tag -f v1 "$GITHUB_SHA"
+          git push -f origin refs/tags/v1
+          echo "v1 -> $GITHUB_SHA (${GITHUB_REF_NAME})"
