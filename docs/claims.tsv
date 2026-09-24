@@ -27,3 +27,5 @@ limitation-quiet-spike	fast	1	struktura guard data/sylv_spike.csv --quiet-drift	
 nab-default	slow	0	cargo run -q --release --example nab_eval	TOTAL                      58     116        36        35       0.12   |          48       240       0.80
 nab-quiet	slow	0	QUIET=1 cargo run -q --release --example nab_eval	TOTAL                      58     116        35        33       0.11   |          48       240       0.80
 control-nab-clean	slow	0	QUIET=1 cargo run -q --release --example nab_eval	artificialNoAnomaly         5       0         0         0       0.00
+control-calib-selfcheck-synthetic	fast	0	cargo run -q --release --example calib_selfcheck_eval	warnings white 0/30, AR(0.7) 1/30, AR(0.95) 0/30
+calib-selfcheck-nab	slow	0	cargo run -q --release --example calib_selfcheck_eval	| contains a labelled anomaly | 6 | 4 | && | no labelled anomaly | 2 | 6 | && check skipped (calibration half < 768): 40

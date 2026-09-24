@@ -3691,6 +3691,7 @@ fn run_guard_watch(path: &str, baseline_n: usize, json: bool, poll_ms: u64, quie
         eprintln!("struktura guard --watch: {} ch, calibrated on {} rows, tailing {} (poll {}ms, Ctrl-C to stop)",
             ncols, calib_n, path, poll_ms);
         short_calibration_note(calib_n);
+        calibration_self_check_note(calibration_self_check(&calib, guard_config(quiet)), calib_n);
     }
 
     // Tail loop
@@ -3885,6 +3886,41 @@ fn short_calibration_note(calib_n: usize) {
     }
 }
 
+/// guard assumes its calibration rows are healthy. If they contain a fault,
+/// the fault becomes "normal" and later faults like it go unreported (NAB
+/// machine_temperature_system_failure: default calibration spans a labelled
+/// failure window and guard reported the series healthy). Check it with the
+/// monitor itself: calibrate on the first half of the calibration rows and
+/// stream the second half through. Returns the first row that alarms, or
+/// None. Skipped when a half would be shorter than MIN_RELIABLE_CALIB.
+fn calibration_self_check(calib: &[Vec<f64>], config: struktura::monitor::MonitorConfig) -> Option<usize> {
+    use struktura::monitor::HybridMonitor;
+    let n = calib.first()?.len();
+    let half = n / 2;
+    if half < MIN_RELIABLE_CALIB {
+        return None;
+    }
+    let first: Vec<Vec<f64>> = calib.iter().map(|c| c[..half].to_vec()).collect();
+    let mut mon = HybridMonitor::calibrate_with(&first, config)?;
+    let mut sample = vec![0.0f64; calib.len()];
+    for t in half..n {
+        for (ch, c) in calib.iter().enumerate() {
+            sample[ch] = c[t];
+        }
+        if mon.push(&sample).is_some() {
+            return Some(t);
+        }
+    }
+    None
+}
+
+fn calibration_self_check_note(row: Option<usize>, calib_n: usize) {
+    if let Some(row) = row {
+        eprintln!("  warning: the calibration rows (0..{}) may contain a fault: calibrating on their first half, row {} already alarms.", calib_n, row);
+        eprintln!("           guard treats calibration rows as healthy. Pass --baseline N with a stretch you know is healthy.");
+    }
+}
+
 fn emit_event(t: usize, ev: &struktura::autopilot::Event, json: bool) {
     use struktura::autopilot::Event;
     use struktura::monitor::explain_alarm;
@@ -3962,6 +3998,10 @@ fn run_guard(content: &str, baseline_n: usize, json: bool, quiet: bool) -> i32 {
                 n, ncols, col_names.join(", "), calib_n);
         }
         short_calibration_note(calib_n);
+    }
+    let calib_suspect = calibration_self_check(&calib, guard_config(quiet));
+    if !json {
+        calibration_self_check_note(calib_suspect, calib_n);
     }
 
     // Alarm strength is reported as the monitor's own observed/threshold
@@ -4042,11 +4082,14 @@ fn run_guard(content: &str, baseline_n: usize, json: bool, quiet: bool) -> i32 {
     }
 
     if json {
-        println!("{{\"summary\":true,\"samples\":{},\"channels\":{},\"baseline\":{},\"alarms\":{},\"adaptations\":{},\"quarantines\":{},\"verdict\":\"{}\"}}",
+        println!("{{\"summary\":true,\"samples\":{},\"channels\":{},\"baseline\":{},\"alarms\":{},\"adaptations\":{},\"quarantines\":{},\"verdict\":\"{}\",\"calibration_suspect_row\":{}}}",
             n, ncols, calib_n, alarm_count, adapt_count, quarantine_count,
-            if alarm_count == 0 { "healthy" } else { "fault_detected" });
+            if alarm_count == 0 { "healthy" } else { "fault_detected" },
+            calib_suspect.map_or("null".to_string(), |r| r.to_string()));
     } else {
-        if alarm_count == 0 {
+        if alarm_count == 0 && calib_suspect.is_some() {
+            eprintln!("  no anomalies in the {} samples after calibration, but see the calibration warning above", n - calib_n);
+        } else if alarm_count == 0 {
             eprintln!("  HEALTHY, {} samples, no anomalies", n - calib_n);
         } else {
             eprintln!("  {} faults detected across {} samples ({} adaptations, {} quarantines)",

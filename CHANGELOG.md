@@ -2,6 +2,17 @@
 
 All notable changes to Struktura are documented here.
 
+## Unreleased
+
+- `guard` checks its own calibration: it calibrates on the first half of the
+  calibration rows and warns when the second half already alarms (the rows it
+  assumes are healthy may contain a fault). JSON output gains
+  `calibration_suspect_row`. Exit codes are unchanged. NAB, default
+  calibration: warned on 6/10 series whose calibration contains a labelled
+  anomaly and 2/8 whose calibration is clean; skipped below 1,536 calibration
+  rows. Found because guard called NAB's machine-temperature failure series
+  healthy (examples/calib_selfcheck_eval.rs).
+
 ## v1.8.4 (2026-09-24): dfa_short, fair NAB comparison, head-to-head bench, claims cleanup
 
 - Known bug, not fixed in this release: `generate-hybrid` emits DFA box sizes
