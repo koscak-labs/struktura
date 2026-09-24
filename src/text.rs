@@ -46,7 +46,9 @@ pub fn sentence_lengths(text: &str) -> Vec<usize> {
     let mut lengths = Vec::new();
     let mut current_len = 0;
 
-    let chars: Vec<char> = text.chars().collect();
+    // '\r' from CRLF files must not count toward sentence length, or the
+    // same corpus gives a different alpha on Windows checkouts.
+    let chars: Vec<char> = text.chars().filter(|&c| c != '\r').collect();
     let n = chars.len();
 
     for i in 0..n {
@@ -105,6 +107,13 @@ mod tests {
         let text = "Hello world. This is a test! Is it working? Yes it is.";
         let lens = sentence_lengths(text);
         assert_eq!(lens.len(), 4);
+    }
+
+    #[test]
+    fn crlf_and_lf_give_identical_lengths() {
+        let lf = "First line of a sentence\nthat wraps. Second one\nhere.";
+        let crlf = lf.replace('\n', "\r\n");
+        assert_eq!(sentence_lengths(lf), sentence_lengths(&crlf));
     }
 
     #[test]

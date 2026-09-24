@@ -280,7 +280,7 @@ $ struktura text data/austen_shuffled.txt data/mechanical_text.txt
   Reference: human prose α≈0.7-0.8 | shuffled/mechanical α≈0.5
 
   #################............. data/austen_shuffled.txt
-                                 sentences=18049  mean_len=125  α=0.572  R²=0.9851
+                                 sentences=18049  mean_len=124  α=0.573  R²=0.9851
                                  MODERATE RHYTHM
 
   ################.............. data/mechanical_text.txt
