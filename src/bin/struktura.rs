@@ -3682,6 +3682,7 @@ fn run_guard_watch(path: &str, baseline_n: usize, json: bool, poll_ms: u64) -> !
     if !json {
         eprintln!("struktura guard --watch: {} ch, calibrated on {} rows, tailing {} (poll {}ms, Ctrl-C to stop)",
             ncols, calib_n, path, poll_ms);
+        short_calibration_note(calib_n);
     }
 
     // Tail loop
@@ -3864,6 +3865,18 @@ fn cmd_rover() {
     println!();
 }
 
+/// Below this many calibration rows the level-shift leg false-alarmed on
+/// 3-6 of 30 clean synthetic streams, and on none from here on
+/// (examples/structure_vs_amplitude.rs, CALIB=512 vs 768).
+const MIN_RELIABLE_CALIB: usize = 768;
+
+fn short_calibration_note(calib_n: usize) {
+    if calib_n < MIN_RELIABLE_CALIB {
+        eprintln!("  note: {} calibration rows is short; use --baseline {} or more if the data allows (fewer raises level-shift false alarms)",
+            calib_n, MIN_RELIABLE_CALIB);
+    }
+}
+
 fn emit_event(t: usize, ev: &struktura::autopilot::Event, json: bool) {
     use struktura::autopilot::Event;
     use struktura::monitor::explain_alarm;
@@ -3940,6 +3953,7 @@ fn run_guard(content: &str, baseline_n: usize, json: bool) -> i32 {
             eprintln!("struktura guard: {} samples x {} channels ({}), calibrated on {} rows",
                 n, ncols, col_names.join(", "), calib_n);
         }
+        short_calibration_note(calib_n);
     }
 
     // Alarm strength is reported as the monitor's own observed/threshold
