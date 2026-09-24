@@ -65,7 +65,20 @@ jobs:
           assert r is not None and 0.3 < r.alpha < 0.7, r
           m = struktura.Monitor([[random.gauss(0, 1) for _ in range(2000)]])
           assert all(m.push([random.gauss(0, 1)]) is None for _ in range(200))
-          print("ok", struktura.__version__, round(r.alpha, 3))
+          print("ok without numpy", struktura.__version__, round(r.alpha, 3))
+          EOF
+          python -m pip install numpy
+          python - <<'EOF'
+          import numpy as np, struktura
+          x = np.random.default_rng(0).standard_normal(4096)
+          a, b = struktura.dfa(x), struktura.dfa(x.tolist())
+          assert (a.alpha, a.r_squared) == (b.alpha, b.r_squared), (a, b)
+          c = struktura.dfa(x[::2])            # non-contiguous: generic path
+          d = struktura.dfa(x[::2].copy())     # contiguous copy: fast path
+          assert (c.alpha, c.r_squared) == (d.alpha, d.r_squared), (c, d)
+          e = struktura.dfa(x.astype(np.float32))  # other dtype: generic path
+          assert abs(e.alpha - a.alpha) < 1e-3, (e, a)
+          print("ok numpy paths agree", round(a.alpha, 3))
           EOF
       - uses: actions/upload-artifact@v4
         with:

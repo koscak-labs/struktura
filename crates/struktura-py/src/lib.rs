@@ -1,9 +1,43 @@
 //! Python bindings for struktura. Every function converts its arguments and
 //! calls the Rust crate; no computation lives here.
 
+use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use stk::monitor::{HybridMonitor, Leg};
+
+/// A 1-D float series from Python. A C-contiguous float64 numpy array is read
+/// in place (no copy); anything else goes through the generic sequence path.
+/// numpy is only touched when the object already is an ndarray, so the
+/// package works without numpy installed.
+enum Series<'py> {
+    Numpy(PyReadonlyArray1<'py, f64>),
+    Owned(Vec<f64>),
+}
+
+impl<'py> FromPyObject<'py> for Series<'py> {
+    fn extract_bound(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
+        if ob.get_type().name()?.to_string() == "ndarray" {
+            if let Ok(arr) = ob.downcast::<PyArray1<f64>>() {
+                if let Ok(ro) = arr.try_readonly() {
+                    if ro.as_slice().is_ok() {
+                        return Ok(Series::Numpy(ro));
+                    }
+                }
+            }
+        }
+        Ok(Series::Owned(ob.extract::<Vec<f64>>()?))
+    }
+}
+
+impl Series<'_> {
+    fn as_slice(&self) -> &[f64] {
+        match self {
+            Series::Numpy(a) => a.as_slice().expect("contiguity checked at extraction"),
+            Series::Owned(v) => v,
+        }
+    }
+}
 
 /// Result of detrended fluctuation analysis.
 #[pyclass(frozen, get_all)]
@@ -31,15 +65,15 @@ impl From<stk::DfaResult> for DfaResult {
 /// DFA of a series. Below 64 samples this returns the placeholder
 /// alpha 0.5 with r_squared 0.0, which is not a measurement: use dfa_short.
 #[pyfunction]
-fn dfa(values: Vec<f64>) -> DfaResult {
-    stk::dfa(&values).into()
+fn dfa(values: Series) -> DfaResult {
+    stk::dfa(values.as_slice()).into()
 }
 
 /// DFA for short series (from about 24 samples). None when the series cannot
 /// be measured (too short, constant, or too few usable box sizes).
 #[pyfunction]
-fn dfa_short(values: Vec<f64>) -> Option<DfaResult> {
-    stk::dfa_short(&values).map(Into::into)
+fn dfa_short(values: Series) -> Option<DfaResult> {
+    stk::dfa_short(values.as_slice()).map(Into::into)
 }
 
 /// Structural summary of a series.
@@ -64,8 +98,8 @@ impl Analysis {
 }
 
 #[pyfunction]
-fn analyze(values: Vec<f64>) -> Analysis {
-    let law = stk::analyze(&values);
+fn analyze(values: Series) -> Analysis {
+    let law = stk::analyze(values.as_slice());
     Analysis {
         alpha: law.dfa.alpha,
         r_squared: law.dfa.r_squared,
@@ -80,18 +114,18 @@ fn analyze(values: Vec<f64>) -> Analysis {
 
 /// Human-readable comparison of two series' structure.
 #[pyfunction]
-fn compare(baseline: Vec<f64>, current: Vec<f64>) -> String {
-    stk::compare(&baseline, &current).to_string()
+fn compare(baseline: Series, current: Series) -> String {
+    stk::compare(baseline.as_slice(), current.as_slice()).to_string()
 }
 
 #[pyfunction]
-fn is_degraded(baseline: Vec<f64>, current: Vec<f64>) -> bool {
-    stk::is_degraded(&baseline, &current)
+fn is_degraded(baseline: Series, current: Series) -> bool {
+    stk::is_degraded(baseline.as_slice(), current.as_slice())
 }
 
 #[pyfunction]
-fn anomaly_scores(values: Vec<f64>, window: usize, step: usize, threshold: f64) -> Vec<f64> {
-    stk::anomaly_scores(&values, window, step, threshold)
+fn anomaly_scores(values: Series, window: usize, step: usize, threshold: f64) -> Vec<f64> {
+    stk::anomaly_scores(values.as_slice(), window, step, threshold)
 }
 
 fn leg_name(leg: Leg) -> &'static str {
