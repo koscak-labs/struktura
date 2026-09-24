@@ -1,0 +1,24 @@
+[package]
+name = "struktura-wasm"
+version = "1.8.4"
+edition = "2021"
+rust-version = "1.70"
+description = "JavaScript/WebAssembly bindings for struktura. All computation runs in the Rust crate; this crate only converts arguments."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/koscak-labs/struktura"
+publish = false
+
+# Standalone like crates/struktura-py and playground/wasm: the core crate stays
+# rlib-only for no_std dependents, and wasm-pack needs a cdylib.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+stk = { package = "struktura", path = "../.." }
+wasm-bindgen = "0.2"
+
+[profile.release]
+opt-level = "s"
+lto = true
