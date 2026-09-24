@@ -1,0 +1,137 @@
+name: WebAssembly package
+
+# crates/struktura-wasm (wasm-bindgen over the Rust crate) as two npm packages:
+#   struktura      nodejs target (CommonJS)  - Node, CI, servers
+#   struktura-web  web target (ES module)    - browsers, bundlers
+# Both are smoke-tested in Node before release. On a wasm-v<version> tag the
+# tarballs are attached to a GitHub release, installable with no npm account:
+#   npm install https://github.com/koscak-labs/struktura/releases/download/wasm-vX.Y.Z/struktura-X.Y.Z.tgz
+# npm publishing runs only when the repository variable NPM_READY is "true".
+
+on:
+  push:
+    tags: ['wasm-v*']
+  pull_request:
+    paths: ['crates/struktura-wasm/**', 'src/**', 'Cargo.toml', '.github/workflows/wasm-package.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Version check (tags only)
+        if: startsWith(github.ref, 'refs/tags/wasm-v')
+        run: |
+          v=$(grep -m1 '^version' crates/struktura-wasm/Cargo.toml | cut -d'"' -f2)
+          test "${GITHUB_REF_NAME}" = "wasm-v${v}" || { echo "tag ${GITHUB_REF_NAME} != wasm-v${v}"; exit 1; }
+      - name: Build nodejs and web packages
+        working-directory: crates/struktura-wasm
+        run: |
+          wasm-pack build --release --target nodejs --out-dir pkg-node --out-name struktura
+          wasm-pack build --release --target web --out-dir pkg-web --out-name struktura
+          for d in pkg-node pkg-web; do
+            name=struktura; [ "$d" = pkg-web ] && name=struktura-web
+            jq --arg n "$name" '.name = $n
+              | .description = "Time-series anomaly detection with no training data (DFA and a self-calibrating streaming monitor), Rust compiled to WebAssembly"
+              | .repository = {"type":"git","url":"https://github.com/koscak-labs/struktura"}
+              | .keywords = ["anomaly-detection","time-series","dfa","telemetry","webassembly"]' \
+              "$d/package.json" > "$d/p.json" && mv "$d/p.json" "$d/package.json"
+            cp README.md "$d/README.md"
+          done
+          ls -la pkg-node pkg-web
+      - name: Smoke test (nodejs build)
+        working-directory: crates/struktura-wasm
+        run: node tests/smoke.mjs pkg-node
+      - name: Smoke test (web build, loaded in Node)
+        working-directory: crates/struktura-wasm
+        run: |
+          node --input-type=module -e "
+            import fs from 'node:fs';
+            import { initSync, dfaShort } from './pkg-web/struktura.js';
+            initSync({ module: fs.readFileSync('./pkg-web/struktura_bg.wasm') });
+            const x = Float64Array.from({ length: 512 }, (_, i) => Math.sin(i * 0.7) + ((i * 7919) % 97) / 97);
+            const r = dfaShort(x);
+            if (!r || !Number.isFinite(r.alpha)) throw new Error('web build: dfaShort failed');
+            console.log('ok web build', r.alpha.toFixed(3));
+          "
+      - name: Pack tarballs
+        working-directory: crates/struktura-wasm
+        run: |
+          (cd pkg-node && npm pack --pack-destination ..)
+          (cd pkg-web && npm pack --pack-destination ..)
+          ls -la *.tgz
+      - name: Install the packed tarball like a user and run the smoke test
+        working-directory: crates/struktura-wasm
+        run: |
+          mkdir -p "$RUNNER_TEMP/consumer" && cd "$RUNNER_TEMP/consumer"
+          npm init -y >/dev/null
+          npm install "$GITHUB_WORKSPACE"/crates/struktura-wasm/struktura-[0-9]*.tgz
+          node "$GITHUB_WORKSPACE/crates/struktura-wasm/tests/smoke.mjs" node_modules/struktura
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-tarballs
+          path: crates/struktura-wasm/*.tgz
+
+  github-release:
+    if: startsWith(github.ref, 'refs/tags/wasm-v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-tarballs
+          path: dist
+      - id: v
+        run: |
+          echo "version=${GITHUB_REF_NAME#wasm-v}" >> "$GITHUB_OUTPUT"
+          ls dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: struktura ${{ github.ref_name }} (JavaScript / WebAssembly)
+          make_latest: false
+          body: |
+            struktura compiled to WebAssembly. No npm account or Rust toolchain needed.
+
+            Node:
+
+                npm install https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/struktura-${{ steps.v.outputs.version }}.tgz
+
+            Browsers and bundlers (ES module):
+
+                npm install https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/struktura-web-${{ steps.v.outputs.version }}.tgz
+          files: dist/*.tgz
+
+  npm-publish:
+    if: startsWith(github.ref, 'refs/tags/wasm-v') && vars.NPM_READY == 'true'
+    needs: build
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-tarballs
+          path: dist
+      - run: for t in dist/*.tgz; do npm publish "$t" --provenance --access public; done
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
