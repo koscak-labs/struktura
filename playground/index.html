@@ -3,300 +3,200 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>struktura playground</title>
+<title>struktura playground: anomaly detection a limit check misses</title>
+<meta name="description" content="Run struktura's time-series anomaly monitor in your browser (Rust compiled to WebAssembly). See a correlation change a limit check misses, or paste your own data. No install, no training data.">
+<meta property="og:title" content="struktura playground">
+<meta property="og:description" content="The real Rust anomaly monitor, in your browser. Compare it with a limit check on the same stream.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&family=JetBrains+Mono:wght@400;700&display=swap">
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 :root {
-  --bg: #0f0f12;
-  --surface: #1a1a22;
-  --border: rgba(255,255,255,0.08);
-  --text: #fff;
-  --dim: rgba(255,255,255,0.55);
-  --green: #a8ff38;
-  --red: #ff5e57;
-  --mono: 'JetBrains Mono', monospace;
-  --sans: 'Inter', sans-serif;
+  --bg: #0f0f12; --surface: #1a1a22; --border: rgba(255,255,255,0.08);
+  --text: #fff; --dim: rgba(255,255,255,0.6);
+  --green: #a8ff38; --amber: #ffba3a; --red: #ff5e57; --blue: #6cb6ff;
+  --mono: 'JetBrains Mono', monospace; --sans: 'Inter', sans-serif;
 }
-body { background: var(--bg); color: var(--text); font-family: var(--sans); padding: 24px; max-width: 900px; margin: 0 auto; }
-h1 { font-size: 28px; font-weight: 900; letter-spacing: -1px; margin-bottom: 8px; }
+body { background: var(--bg); color: var(--text); font-family: var(--sans); padding: 24px 16px; max-width: 960px; margin: 0 auto; line-height: 1.5; }
+h1 { font-size: 30px; font-weight: 900; letter-spacing: -1px; }
 h1 span { color: var(--green); }
-.sub { color: var(--dim); font-size: 14px; margin-bottom: 24px; }
-textarea {
-  width: 100%; height: 180px; background: var(--surface); color: var(--text);
-  border: 1px solid var(--border); border-radius: 8px; padding: 12px;
-  font-family: var(--mono); font-size: 13px; resize: vertical;
-}
-textarea:focus { outline: none; border-color: var(--green); }
-.actions { display: flex; gap: 12px; margin: 16px 0; align-items: center; }
-button {
-  background: var(--green); color: #000; border: none; padding: 10px 24px;
-  border-radius: 6px; font-family: var(--sans); font-weight: 700; font-size: 14px;
-  cursor: pointer;
-}
-button:hover { opacity: 0.9; }
-button.secondary { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
-.results { margin-top: 16px; }
-.card {
-  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
-  padding: 16px; margin-bottom: 12px;
-}
-.card h3 { font-size: 14px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
-.stat { font-family: var(--mono); font-size: 24px; font-weight: 700; color: var(--green); }
-.stat.warn { color: #ffba3a; }
-.stat.crit { color: var(--red); }
-.stat-label { font-size: 12px; color: var(--dim); }
-.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
-.footer { margin-top: 32px; text-align: center; color: var(--dim); font-size: 12px; }
-.footer a { color: var(--green); text-decoration: none; }
-canvas { width: 100%; height: 200px; background: var(--surface); border-radius: 8px; margin-top: 12px; }
-#status { font-family: var(--mono); font-size: 12px; color: var(--dim); }
-.demo-btn { font-size: 12px; padding: 6px 12px; }
+.sub { color: var(--dim); font-size: 15px; margin: 6px 0 20px; }
+.tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+button { background: var(--surface); color: var(--text); border: 1px solid var(--border); padding: 8px 14px; border-radius: 6px; font: 600 13px var(--sans); cursor: pointer; }
+button:hover { border-color: var(--green); }
+button.on { background: var(--green); color: #000; border-color: var(--green); }
+button.primary { background: var(--green); color: #000; border: none; }
+.scenario { color: var(--dim); font-size: 14px; min-height: 42px; }
+canvas { width: 100%; height: 260px; background: var(--surface); border-radius: 8px; display: block; margin: 10px 0; }
+.legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 12px; color: var(--dim); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin: 16px 0; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
+.card h3 { font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: .6px; margin-bottom: 6px; }
+.big { font: 700 22px var(--mono); }
+.good { color: var(--green); } .bad { color: var(--red); } .meh { color: var(--amber); }
+.small { font-size: 13px; color: var(--dim); margin-top: 4px; }
+.row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 10px 0; }
+.tally { font: 700 15px var(--mono); }
+textarea { width: 100%; height: 120px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font: 13px var(--mono); }
+input[type=number] { width: 90px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font: 13px var(--mono); }
+details { margin-top: 18px; color: var(--dim); font-size: 13px; }
+details p { margin: 6px 0; }
+a { color: var(--green); }
+.footer { margin-top: 28px; color: var(--dim); font-size: 12px; text-align: center; }
+code { font-family: var(--mono); font-size: 12px; background: var(--surface); padding: 1px 5px; border-radius: 4px; }
 </style>
 </head>
 <body>
 
 <h1><span>struktura</span> playground</h1>
-<p class="sub">paste numbers (one per line, or CSV) and see DFA anomaly detection live. runs in your browser via WebAssembly.</p>
+<p class="sub">The real Rust monitor (<code>struktura guard</code>), compiled to WebAssembly and running in your browser, next to a plain limit check on the same stream.</p>
 
-<textarea id="input" placeholder="paste your data here — one number per line, or CSV (uses last column)
+<div class="tabs" id="tabs">
+  <button data-k="matched" class="on">🔀 correlation change</button>
+  <button data-k="wander">🌊 healthy slow wander</button>
+  <button data-k="amp">📈 amplitude grows</button>
+  <button data-k="walk">🚶 random walk</button>
+  <button data-k="paste">📋 your data</button>
+</div>
+<p class="scenario" id="scenario"></p>
 
-or click a demo below ↓"></textarea>
-
-<div class="actions">
-  <button onclick="runAnalysis()">analyze</button>
-  <button class="secondary demo-btn" onclick="loadDemo('noise')">white noise</button>
-  <button class="secondary demo-btn" onclick="loadDemo('bearing')">bearing fault</button>
-  <button class="secondary demo-btn" onclick="loadDemo('shift')">regime shift</button>
-  <span id="status"></span>
+<div id="pastebox" hidden>
+  <textarea id="paste" placeholder="one number per line, or CSV (last column is used)"></textarea>
+  <div class="row">calibration rows <input type="number" id="calib" min="192" value="768"> <button class="primary" id="runpaste">run</button> <span class="small" id="pastemsg"></span></div>
 </div>
 
-<div class="results" id="results"></div>
+<canvas id="chart" width="1200" height="320"></canvas>
+<div class="legend">
+  <span><i style="background:rgba(108,182,255,.25)"></i>calibration (learned as healthy)</span>
+  <span id="lg-change"><i style="background:var(--dim)"></i>where the stream changes</span>
+  <span><i style="background:var(--green)"></i>struktura alarm</span>
+  <span><i style="background:var(--amber)"></i>limit-check alarm</span>
+</div>
+
+<div class="cards">
+  <div class="card"><h3>struktura guard</h3><div class="big" id="g-big">…</div><div class="small" id="g-small"></div></div>
+  <div class="card"><h3>limit check (1.5 × p95, 3 in a row)</h3><div class="big" id="l-big">…</div><div class="small" id="l-small"></div></div>
+</div>
+
+<div class="row" id="seedrow">
+  seed <button id="prev">‹</button><span class="tally" id="seed"></span><button id="next">›</button>
+  <button id="all">re-run all 30 seeds</button>
+  <span class="tally" id="tally"></span>
+</div>
+
+<details>
+  <summary>what this shows, and what it doesn't</summary>
+  <p>Streams are synthetic: 2,000 samples, the change at sample 1,000, calibration on the first 768. They show the kind of change each method can see, not performance on a real system.</p>
+  <p>A limit check alarms when a value leaves a band learned from healthy data. It is fast when a fault makes values bigger, blind when a fault changes how values follow each other at the same spread, and it false-alarms on healthy signals that wander slowly.</p>
+  <p>In the correlation-change case struktura mostly alarms on its residual-CUSUM leg, not on DFA. With fewer than 768 calibration rows its level-shift leg raises more false alarms.</p>
+  <p>Same generator and seeds as <a href="https://github.com/koscak-labs/struktura/blob/master/examples/structure_vs_amplitude.rs">examples/structure_vs_amplitude.rs</a>, whose 30-seed numbers are checked in CI (<a href="https://github.com/koscak-labs/struktura/blob/master/docs/claims.tsv">claims.tsv</a>).</p>
+</details>
 
 <div class="footer">
-  <a href="https://github.com/koscak-labs/struktura">github</a> ·
-  <a href="https://crates.io/crates/struktura">crates.io</a> ·
-  <code>cargo add struktura</code>
+  <a href="https://github.com/koscak-labs/struktura">GitHub</a> · <a href="https://crates.io/crates/struktura">crates.io</a> · <code>cargo install struktura</code> · <code>struktura guard file.csv</code>
 </div>
 
-<script>
-// pure JS DFA implementation (no WASM dependency — works standalone)
-function dfa(values) {
-  const n = values.length;
-  if (n < 64) return { alpha: 0.5, r_squared: 0.0 };
+<script type="module">
+import init, { guard, limit_check, demo_stream } from './pkg/struktura_playground.js';
 
-  const mean = values.reduce((a, b) => a + b, 0) / n;
-  const profile = [];
-  let cum = 0;
-  for (let i = 0; i < n; i++) { cum += values[i] - mean; profile.push(cum); }
+const TEXT = {
+  matched: 'Healthy white noise, then at sample 1,000 the values start following each other (AR 0.9) at the same variance. Nothing gets bigger.',
+  wander: 'Healthy the whole time: a signal that drifts slowly (AR 0.95), like temperature or battery voltage. Any alarm is a false alarm.',
+  amp: 'At sample 1,000 the values start following each other and get 2.3× bigger. Both methods should see this.',
+  walk: 'At sample 1,000 white noise turns into a random walk. Both methods should see this.',
+  paste: 'Paste a column of numbers. The first rows are treated as healthy calibration.',
+};
+const CLEAN = { wander: true };
+const CALIB = 768, CHANGE = 1000;
+let kind = 'matched', seed = 0;
+const $ = id => document.getElementById(id);
+const baseSeed = () => CLEAN[kind] ? 0 : 1000;
 
-  const sMin = Math.max(16, Math.floor(n / 50));
-  const sMax = Math.floor(n / 4);
-  const ratio = Math.pow(sMax / sMin, 1 / 11);
+function firstAlarm(res) { const a = res.events.find(e => e.kind === 'alarm'); return a || null; }
 
-  const logS = [], logF = [];
-  let prevS = 0;
-  for (let step = 0; step < 12; step++) {
-    const s = Math.floor(sMin * Math.pow(ratio, step));
-    if (s === prevS || s > sMax || s < 4) continue;
-    prevS = s;
-
-    let sumF2 = 0;
-    const numSegs = Math.floor(n / s);
-    for (let seg = 0; seg < numSegs; seg++) {
-      const start = seg * s;
-      let sy = 0, sj = 0, sj2 = 0, sjy = 0;
-      for (let j = 0; j < s; j++) {
-        const y = profile[start + j];
-        sy += y; sj += j; sj2 += j * j; sjy += j * y;
-      }
-      const denom = s * sj2 - sj * sj;
-      if (Math.abs(denom) < 1e-15) continue;
-      const slope = (s * sjy - sj * sy) / denom;
-      const intercept = (sy - slope * sj) / s;
-      let resid = 0;
-      for (let j = 0; j < s; j++) {
-        const d = profile[start + j] - (intercept + slope * j);
-        resid += d * d;
-      }
-      sumF2 += resid / s;
-    }
-    if (numSegs > 0) {
-      logS.push(Math.log(s));
-      logF.push(Math.log(Math.sqrt(sumF2 / numSegs)));
-    }
-  }
-
-  if (logS.length < 3) return { alpha: 0.5, r_squared: 0.0 };
-
-  // linear regression
-  const nPts = logS.length;
-  const sx = logS.reduce((a, b) => a + b, 0);
-  const sy2 = logF.reduce((a, b) => a + b, 0);
-  const sxx = logS.reduce((a, b) => a + b * b, 0);
-  const sxy = logS.reduce((a, b, i) => a + b * logF[i], 0);
-  const alpha = (nPts * sxy - sx * sy2) / (nPts * sxx - sx * sx);
-  const ybar = sy2 / nPts;
-  const ssTot = logF.reduce((a, b) => a + (b - ybar) ** 2, 0);
-  const ssRes = logF.reduce((a, b, i) => {
-    const pred = (sy2 - alpha * sx) / nPts + alpha * logS[i];
-    return a + (b - pred) ** 2;
-  }, 0);
-  const r2 = ssTot > 0 ? 1 - ssRes / ssTot : 0;
-
-  return { alpha, r_squared: r2 };
+function draw(v, calib, change, gAt, lAt) {
+  const c = $('chart'), x = c.getContext('2d'), W = c.width, H = c.height, P = 14;
+  x.clearRect(0, 0, W, H);
+  let lo = Infinity, hi = -Infinity; for (const y of v) { if (y < lo) lo = y; if (y > hi) hi = y; }
+  if (hi === lo) { hi += 1; lo -= 1; }
+  const X = i => P + (W - 2 * P) * i / (v.length - 1), Y = y => H - P - (H - 2 * P) * (y - lo) / (hi - lo);
+  x.fillStyle = 'rgba(108,182,255,.12)'; x.fillRect(X(0), 0, X(calib) - X(0), H);
+  if (change !== null) { x.strokeStyle = 'rgba(255,255,255,.35)'; x.setLineDash([6, 6]); x.beginPath(); x.moveTo(X(change), 0); x.lineTo(X(change), H); x.stroke(); x.setLineDash([]); }
+  x.strokeStyle = 'rgba(255,255,255,.75)'; x.lineWidth = 1; x.beginPath();
+  v.forEach((y, i) => i ? x.lineTo(X(i), Y(y)) : x.moveTo(X(i), Y(y))); x.stroke();
+  const mark = (i, col, row) => { if (i === null) return; x.strokeStyle = col; x.lineWidth = 3; x.beginPath(); x.moveTo(X(i), 0); x.lineTo(X(i), H); x.stroke(); x.fillStyle = col; x.font = 'bold 22px Inter, sans-serif'; x.fillText(row, Math.min(X(i) + 6, W - 150), 26 + (row.startsWith('limit') ? 28 : 0)); x.lineWidth = 1; };
+  mark(gAt, '#a8ff38', 'struktura'); mark(lAt, '#ffba3a', 'limit check');
 }
 
-function parseData(text) {
-  return text.trim().split('\n')
-    .map(l => {
-      const parts = l.trim().split(/[,\t;]/);
-      return parseFloat(parts[parts.length - 1]);
-    })
-    .filter(v => !isNaN(v) && isFinite(v));
+function describe(at, change, clean) {
+  if (at === null) return clean || change === null ? ['no alarm', 'good'] : ['missed', 'bad'];
+  if (clean) return ['false alarm at ' + at, 'bad'];
+  if (change !== null && at < change) return ['false alarm at ' + at, 'bad'];
+  return change === null ? ['alarm at ' + at, 'meh'] : ['caught, +' + (at - change) + ' samples', 'good'];
 }
 
-function lcg(seed) {
-  let s = seed;
-  return () => {
-    s = (s * 6364136223846793005n + 1442695040888963407n) & 0xFFFFFFFFFFFFFFFFn;
-    return Number(s >> 33n) / (1 << 31) - 0.5;
-  };
+function show(v, calib, change, clean) {
+  const res = JSON.parse(guard(new Float64Array(v), calib));
+  if (!res.ok) { $('g-big').textContent = 'error'; $('g-small').textContent = res.error; return; }
+  const a = firstAlarm(res), gAt = a ? a.t : null;
+  const l = limit_check(new Float64Array(v), calib), lAt = l >= 0 ? l : null;
+  draw(v, calib, change, gAt, lAt);
+  const [gt, gc] = describe(gAt, change, clean), [lt, lc] = describe(lAt, change, clean);
+  $('g-big').textContent = gt; $('g-big').className = 'big ' + gc;
+  $('g-small').textContent = a ? `leg: ${a.leg}, ${a.ratio}× threshold. ${a.text}` : `${res.events.length} events`;
+  $('l-big').textContent = lt; $('l-big').className = 'big ' + lc;
+  $('l-small').textContent = 'alarm when |x − median| > 1.5 × p95 of calibration deviations, 3 samples in a row';
 }
 
-function loadDemo(type) {
-  const rng = lcg(42n);
-  let data = [];
-  if (type === 'noise') {
-    for (let i = 0; i < 2048; i++) data.push(rng());
-  } else if (type === 'bearing') {
-    // healthy then degraded
-    for (let i = 0; i < 1024; i++) data.push(rng() * 0.5 + Math.sin(i * 0.1) * 0.3);
-    for (let i = 0; i < 1024; i++) data.push(rng() * 2.0 + Math.sin(i * 0.5) * 0.1);
-  } else if (type === 'shift') {
-    // regime shift at midpoint
-    let s = 0;
-    for (let i = 0; i < 1024; i++) { s += rng() * 0.1; data.push(s); }
-    for (let i = 0; i < 1024; i++) data.push(rng());
-  }
-  document.getElementById('input').value = data.map(v => v.toFixed(6)).join('\n');
-  runAnalysis();
+function runDemo() {
+  const v = Array.from(demo_stream(kind, baseSeed() + seed));
+  $('seed').textContent = ` ${baseSeed() + seed} `;
+  show(v, CALIB, CLEAN[kind] ? null : CHANGE, !!CLEAN[kind]);
 }
 
-function runAnalysis() {
-  const text = document.getElementById('input').value;
-  const values = parseData(text);
-  const status = document.getElementById('status');
-
-  if (values.length < 64) {
-    status.textContent = 'need at least 64 data points';
-    return;
+function runAll() {
+  let g = 0, l = 0;
+  for (let s = 0; s < 30; s++) {
+    const v = new Float64Array(demo_stream(kind, baseSeed() + s));
+    const a = firstAlarm(JSON.parse(guard(v, CALIB))), b = limit_check(v, CALIB);
+    if (CLEAN[kind]) { if (a) g++; if (b >= 0) l++; }
+    else { if (a && a.t >= CHANGE) g++; if (b >= CHANGE) l++; }
   }
-  status.textContent = `analyzing ${values.length} points...`;
-
-  const t0 = performance.now();
-  const result = dfa(values);
-  const elapsed = (performance.now() - t0).toFixed(2);
-
-  // compute anomaly scores (sliding window)
-  const windowSize = Math.min(256, Math.floor(values.length / 4));
-  const step = Math.floor(windowSize / 2);
-  const scores = [];
-  for (let i = 0; i + windowSize <= values.length; i += step) {
-    const w = values.slice(i, i + windowSize);
-    scores.push(dfa(w).alpha);
-  }
-
-  let verdict = 'HEALTHY';
-  let verdictClass = '';
-  if (scores.length > 3) {
-    const baseline = scores.slice(0, Math.floor(scores.length / 3)).reduce((a, b) => a + b, 0) / Math.floor(scores.length / 3);
-    const lastAlpha = scores[scores.length - 1];
-    const shift = Math.abs(lastAlpha - baseline);
-    if (shift > 0.15) { verdict = 'CRITICAL'; verdictClass = 'crit'; }
-    else if (shift > 0.08) { verdict = 'WARNING'; verdictClass = 'warn'; }
-    else if (shift > 0.03) { verdict = 'WATCH'; verdictClass = 'warn'; }
-  }
-
-  status.textContent = `${elapsed}ms`;
-
-  document.getElementById('results').innerHTML = `
-    <div class="grid">
-      <div class="card">
-        <h3>scaling exponent</h3>
-        <div class="stat">${result.alpha.toFixed(4)}</div>
-        <div class="stat-label">α (DFA)</div>
-      </div>
-      <div class="card">
-        <h3>fit quality</h3>
-        <div class="stat">${result.r_squared.toFixed(4)}</div>
-        <div class="stat-label">R²</div>
-      </div>
-      <div class="card">
-        <h3>verdict</h3>
-        <div class="stat ${verdictClass}">${verdict}</div>
-        <div class="stat-label">${values.length} samples</div>
-      </div>
-      <div class="card">
-        <h3>signal type</h3>
-        <div class="stat" style="font-size:16px">${result.alpha < 0.4 ? 'anti-correlated' : result.alpha < 0.6 ? 'white noise' : result.alpha < 1.1 ? 'correlated (healthy)' : 'brownian / drift'}</div>
-      </div>
-    </div>
-    <canvas id="plot"></canvas>
-  `;
-
-  drawPlot(scores);
+  $('tally').textContent = CLEAN[kind]
+    ? `false alarms: struktura ${g}/30 · limit check ${l}/30`
+    : `caught: struktura ${g}/30 · limit check ${l}/30`;
 }
 
-function drawPlot(scores) {
-  const canvas = document.getElementById('plot');
-  if (!canvas || scores.length < 2) return;
-  const ctx = canvas.getContext('2d');
-  canvas.width = canvas.offsetWidth * 2;
-  canvas.height = 400;
-  ctx.scale(2, 2);
-  const w = canvas.offsetWidth, h = 200;
-
-  ctx.fillStyle = '#1a1a22';
-  ctx.fillRect(0, 0, w, h);
-
-  const min = Math.min(...scores) - 0.05;
-  const max = Math.max(...scores) + 0.05;
-
-  // grid
-  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
-  for (let i = 0; i < 5; i++) {
-    const y = 20 + (h - 40) * i / 4;
-    ctx.beginPath(); ctx.moveTo(40, y); ctx.lineTo(w - 10, y); ctx.stroke();
-  }
-
-  // line
-  ctx.strokeStyle = '#a8ff38';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  for (let i = 0; i < scores.length; i++) {
-    const x = 40 + (w - 50) * i / (scores.length - 1);
-    const y = 20 + (h - 40) * (1 - (scores[i] - min) / (max - min));
-    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-  }
-  ctx.stroke();
-
-  // dots
-  ctx.fillStyle = '#a8ff38';
-  for (let i = 0; i < scores.length; i++) {
-    const x = 40 + (w - 50) * i / (scores.length - 1);
-    const y = 20 + (h - 40) * (1 - (scores[i] - min) / (max - min));
-    ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fill();
-  }
-
-  // labels
-  ctx.fillStyle = 'rgba(255,255,255,0.4)';
-  ctx.font = '10px "JetBrains Mono"';
-  ctx.fillText(`α=${max.toFixed(2)}`, 2, 25);
-  ctx.fillText(`α=${min.toFixed(2)}`, 2, h - 15);
-  ctx.fillText('window →', w / 2 - 20, h - 3);
+function parse(text) {
+  return text.split(/\r?\n/).map(r => r.split(/[,;\t ]+/).filter(Boolean).pop()).map(Number).filter(Number.isFinite);
 }
+
+function runPaste() {
+  const v = parse($('paste').value), calib = Math.max(192, +$('calib').value || 0);
+  $('pastemsg').textContent = `${v.length} values` + (calib < 768 ? ' · under 768 calibration rows raises false alarms' : '');
+  if (v.length <= calib) { $('g-big').textContent = 'need more data'; $('g-small').textContent = `got ${v.length} values, calibration needs ${calib} plus some after`; return; }
+  show(v, calib, null, false);
+}
+
+function select(k) {
+  kind = k; seed = 0; $('tally').textContent = '';
+  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.k === k));
+  $('scenario').textContent = TEXT[k];
+  const paste = k === 'paste';
+  $('pastebox').hidden = !paste; $('seedrow').hidden = paste; $('lg-change').hidden = paste || !!CLEAN[k];
+  if (paste) {
+    if (!$('paste').value) $('paste').value = Array.from(demo_stream('matched', 1000)).map(v => v.toFixed(4)).join('\n');
+    runPaste();
+  } else { runDemo(); runAll(); }
+}
+
+await init();
+document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => select(b.dataset.k));
+$('prev').onclick = () => { seed = (seed + 29) % 30; runDemo(); };
+$('next').onclick = () => { seed = (seed + 1) % 30; runDemo(); };
+$('all').onclick = runAll;
+$('runpaste').onclick = runPaste;
+select('matched');
 </script>
-<script>loadDemo('bearing');</script>
 </body>
 </html>

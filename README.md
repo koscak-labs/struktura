@@ -13,6 +13,8 @@
   <a href="https://docs.rs/struktura"><img src="https://docs.rs/struktura/badge.svg" alt="docs.rs"></a>
 </p>
 
+<p align="center"><b>▶ <a href="https://koscak-labs.github.io/struktura/playground/">Try it in your browser</a></b>: the real monitor compiled to WebAssembly (76 KB), next to a limit check on the same stream. Or paste your own data.</p>
+
 ---
 
 ## ⚡ Quick start
@@ -67,7 +69,7 @@ What this does and does not show:
 - With only 512 calibration samples, `guard`'s level-shift leg raises 3-6/30 false alarms on these clean streams. Calibrate on at least 768 samples.
 - Use a limit check and struktura together. They see different things.
 
-Reproduce with `cargo run --release --example structure_vs_amplitude` (0.4 s). The rows are checked in CI ([docs/claims.tsv](docs/claims.tsv)).
+Reproduce with `cargo run --release --example structure_vs_amplitude` (0.4 s), or step through the seeds in the [browser playground](https://koscak-labs.github.io/struktura/playground/). The rows are checked in CI ([docs/claims.tsv](docs/claims.tsv)).
 
 ## 🎯 Who it is for
 

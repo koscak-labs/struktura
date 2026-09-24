@@ -18,8 +18,21 @@ jobs:
         run: cargo install mdbook
       - name: Build docs
         run: cd docs && mdbook build
+      # The playground runs the real monitor: build it to WebAssembly.
+      - run: rustup target add wasm32-unknown-unknown
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+      - name: Build playground wasm
+        run: cd playground/wasm && wasm-pack build --target web --release --out-dir ../pkg
+      - name: Playground numbers match the claims ledger
+        run: node scripts/check-playground.mjs playground/pkg
       - name: Copy playground into docs
-        run: cp -r playground docs/book/playground
+        run: |
+          mkdir -p docs/book/playground
+          cp playground/index.html docs/book/playground/
+          cp -r playground/pkg docs/book/playground/pkg
+          rm -f docs/book/playground/pkg/.gitignore
       - name: Setup Pages
         uses: actions/configure-pages@v5
       - name: Upload artifact

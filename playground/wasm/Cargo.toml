@@ -1,0 +1,22 @@
+[package]
+name = "struktura-playground"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Browser build of struktura guard for the docs playground"
+
+# Kept out of the main crate: struktura is `crate-type = ["lib"]` on purpose
+# (cdylib broke no_std dependents in 1.7.2), and wasm-pack needs a cdylib.
+[lib]
+crate-type = ["cdylib"]
+path = "lib.rs"
+
+[dependencies]
+struktura = { path = "../.." }
+wasm-bindgen = "0.2"
+
+[workspace]
+
+[profile.release]
+opt-level = "s"
+lto = true
