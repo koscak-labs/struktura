@@ -45,7 +45,10 @@ export function analyze(s, values, { calibRows } = {}) {
     if (r) out.rolling.push({ at: i + win, alpha: r.alpha });
   }
 
-  const calib = calibRows ?? Math.min(Math.max(Math.floor(n * 0.3), Math.min(SAFE_CALIB, n)), 5000);
+  // 30% of the rows, at least SAFE_CALIB when half the data allows it, at most 5000,
+  // and always leaving 20 rows to check.
+  const auto = Math.min(Math.max(Math.floor(n * 0.3), Math.min(SAFE_CALIB, Math.floor(n / 2)), MIN_CALIB), 5000, n - 20);
+  const calib = calibRows ?? auto;
   if (calib < MIN_CALIB || n - calib < 20) {
     out.error = `Need at least ${MIN_CALIB + 20} rows (${MIN_CALIB} to learn what normal looks like, then some to check); this column has ${n}.`;
     return out;
@@ -54,6 +57,22 @@ export function analyze(s, values, { calibRows } = {}) {
     out.warnings.push(`Learned "normal" from only ${calib} rows. Under ${SAFE_CALIB} rows the level-shift detector can raise false alarms.`);
   }
   out.calib = calib;
+  // Self-check of the "calibration rows are healthy" assumption: learn from the
+  // first half of them and run the second half. An alarm there means the
+  // calibration window itself may contain the problem.
+  const half = Math.floor(calib / 2);
+  if (half >= MIN_CALIB) {
+    try {
+      const probe = new s.Monitor(values.subarray(0, half), 1);
+      for (let i = half; i < calib; i++) {
+        if (probe.push(values.subarray(i, i + 1)) !== undefined) {
+          out.calibrationSuspectRow = i;
+          out.warnings.push(`Row ${i + 1} already looks different from rows 1 to ${half}, inside the part used to learn "normal". If that part is not healthy, alarms below can be missing or wrong.`);
+          break;
+        }
+      }
+    } catch (_) { /* the full calibration below reports its own error */ }
+  }
   let m;
   try {
     m = new s.Monitor(values.subarray(0, calib), 1);

@@ -41,7 +41,14 @@ assert.ok(short.error && short.error.includes('Need at least'), short.error);
 
 // Short calibration warns.
 const w = analyze(s, Float64Array.from({ length: 700 }, gauss));
-assert.ok(w.warnings.length === 1, 'expected a short-calibration warning');
+assert.equal(w.error, null, w.error);
+assert.ok(w.warnings.some((t) => t.includes('Learned "normal" from only')), 'expected a short-calibration warning');
+
+// Problem inside the calibration window: the self-check warns.
+const early = Float64Array.from({ length: 4000 }, (_, i) => gauss() + (i >= 700 ? 6 : 0));
+const e = analyze(s, early);
+assert.ok(e.calibrationSuspectRow >= 600, `calibration self-check: ${e.calibrationSuspectRow}`);
+assert.equal(a.calibrationSuspectRow, undefined, 'clean stream flagged its calibration');
 
 // The page's own example must be flagged after its change at row 2200.
 const ex = parseCsv(exampleCsv());
