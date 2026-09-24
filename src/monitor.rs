@@ -205,9 +205,10 @@ pub fn explain_alarm(r: &AlarmReport) -> &'static str {
         }
         Leg::RepeatedValue => "sensor appears stuck: the same value keeps repeating",
         Leg::Dfa => "the signal's pattern is changing slowly (structural drift)",
-        // CUSUM accumulates any sustained offset, so a step fires it as
-        // readily as a slow drift; the text must not assume which one.
-        Leg::ResidualCusum => "the signal has moved away from its baseline and stayed there (a step or a drift)",
+        // CUSUM accumulates any sustained one-sided prediction error, so a
+        // step, a slow drift, or a change in how values follow each other can
+        // all fire it; the text must not assume which one.
+        Leg::ResidualCusum => "the signal keeps deviating from what its baseline predicts (a step, a drift, or a change in its pattern)",
         Leg::LevelShift => {
             if r.observed > 2.0 * r.threshold {
                 "sudden jump: the signal shifted to a new level abruptly"

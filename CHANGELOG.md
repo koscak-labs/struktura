@@ -2,6 +2,18 @@
 
 All notable changes to Struktura are documented here.
 
+## Unreleased
+
+- `guard` no longer monitors a column that rises in even steps (a row index or
+  a regular timestamp). On a CSV with a `t,value` layout, 1.8.5 monitored `t`,
+  raised a fault on it and declared it dead; now it prints a note and the result
+  equals the value-only file. Columns with uneven increments (counters) are still
+  monitored, and a file's only column is always kept.
+- The residual-CUSUM alarm text no longer says "a step or a drift": it also
+  fires on a change in how values follow each other (seen on white noise that
+  turns AR(0.9) at the same variance). New text: "the signal keeps deviating
+  from what its baseline predicts (a step, a drift, or a change in its pattern)".
+
 ## v1.8.5 (2026-09-24): generated C matches Rust, --sensitivity high, calibration self-check
 
 - `guard` checks its own calibration: it calibrates on the first half of the

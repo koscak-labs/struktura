@@ -139,6 +139,35 @@ impl ParsedCsv {
     fn ch_name(&self, idx: usize) -> String {
         self.col_names.get(idx).cloned().unwrap_or_else(|| format!("ch{}", idx))
     }
+
+    /// Indices of columns to monitor. A column that rises in exactly even steps
+    /// is a row index or a regular timestamp, not a sensor: monitored, it
+    /// "drifts" by construction and got a CSV's `t` column declared dead. Such
+    /// columns are left out, unless it is the only column.
+    fn sensor_columns(&self) -> (Vec<usize>, Vec<String>) {
+        let n = self.rows.len();
+        let mut keep = Vec::new();
+        let mut dropped = Vec::new();
+        for ch in 0..self.ncols {
+            let col: Vec<f64> = self.rows.iter().map(|r| r.get(ch).copied().unwrap_or(f64::NAN)).collect();
+            let step = if n >= 3 { col[1] - col[0] } else { 0.0 };
+            let evenly_rising = n >= 3
+                && step > 0.0
+                && col.windows(2).all(|w| ((w[1] - w[0]) - step).abs() <= 1e-9 * step.abs().max(1.0));
+            if evenly_rising && self.ncols > 1 {
+                dropped.push(self.ch_name(ch));
+            } else {
+                keep.push(ch);
+            }
+        }
+        (keep, dropped)
+    }
+}
+
+fn index_columns_note(dropped: &[String]) {
+    if !dropped.is_empty() {
+        eprintln!("  note: not monitoring {} (rises in even steps, looks like an index or timestamp)", dropped.join(", "));
+    }
 }
 
 fn quality_str(q: LawQuality) -> &'static str {
@@ -3674,9 +3703,14 @@ fn run_guard_watch(path: &str, baseline_n: usize, json: bool, poll_ms: u64, cfg:
     });
 
     let parsed = parse_multi_csv(&initial);
-    let rows = parsed.rows;
+    let (keep, dropped_cols) = parsed.sensor_columns();
+    let rows: Vec<Vec<f64>> = parsed
+        .rows
+        .iter()
+        .map(|r| keep.iter().map(|&c| r.get(c).copied().unwrap_or(0.0)).collect())
+        .collect();
     if rows.is_empty() { eprintln!("no numeric rows"); process::exit(2); }
-    let ncols = parsed.ncols;
+    let ncols = keep.len();
     let calib_n = if baseline_n > 0 { baseline_n.min(rows.len()) } else { rows.len() };
 
     let channels: Vec<Vec<f64>> = (0..ncols)
@@ -3717,6 +3751,7 @@ fn run_guard_watch(path: &str, baseline_n: usize, json: bool, poll_ms: u64, cfg:
     if !json {
         eprintln!("struktura guard --watch: {} ch, calibrated on {} rows, tailing {} (poll {}ms, Ctrl-C to stop)",
             ncols, calib_n, path, poll_ms);
+        index_columns_note(&dropped_cols);
         short_calibration_note(calib_n);
         calibration_self_check_note(calibration_self_check(&calib, cfg), calib_n);
     }
@@ -3735,7 +3770,7 @@ fn run_guard_watch(path: &str, baseline_n: usize, json: bool, poll_ms: u64, cfg:
         for line in new_lines {
             let vals: Vec<f64> = line.split(',').filter_map(|s| s.trim().parse().ok()).collect();
             if !vals.is_empty() {
-                for ch in 0..ncols { sample[ch] = vals.get(ch).copied().unwrap_or(0.0); }
+                for (ch, &col) in keep.iter().enumerate() { sample[ch] = vals.get(col).copied().unwrap_or(0.0); }
                 for ev in ap.push(&sample, &valid) {
                     emit_dedup(t, &ev, json);
                 }
@@ -3986,8 +4021,17 @@ fn run_guard(content: &str, baseline_n: usize, json: bool, cfg: struktura::monit
     use struktura::autopilot::{AutoPilot, Event};
 
     let parsed = parse_multi_csv(content);
-    let rows = parsed.rows;
-    let col_names = parsed.col_names;
+    let (keep, dropped_cols) = parsed.sensor_columns();
+    let col_names: Vec<String> = if parsed.col_names.is_empty() {
+        Vec::new()
+    } else {
+        keep.iter().map(|&c| parsed.ch_name(c)).collect()
+    };
+    let rows: Vec<Vec<f64>> = parsed
+        .rows
+        .iter()
+        .map(|r| keep.iter().map(|&c| r.get(c).copied().unwrap_or(0.0)).collect())
+        .collect();
     if rows.is_empty() {
         if json {
             println!("{{\"error\":\"no numeric rows\"}}");
@@ -4024,6 +4068,7 @@ fn run_guard(content: &str, baseline_n: usize, json: bool, cfg: struktura::monit
             eprintln!("struktura guard: {} samples x {} channels ({}), calibrated on {} rows",
                 n, ncols, col_names.join(", "), calib_n);
         }
+        index_columns_note(&dropped_cols);
         short_calibration_note(calib_n);
     }
     let calib_suspect = calibration_self_check(&calib, cfg);

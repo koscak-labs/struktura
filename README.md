@@ -25,7 +25,7 @@ $ cargo install struktura
 $ struktura guard data/sylv_spike.csv
 struktura guard: 1000 samples x 1 channels, calibrated on 333 rows
   note: 333 calibration rows is short; use --baseline 768 or more if the data allows (fewer raises level-shift false alarms)
-  row    500  ⚠ ch0 (4.6x threshold): the signal has moved away from its baseline and stayed there (a step or a drift)
+  row    500  ⚠ ch0 (4.6x threshold): the signal keeps deviating from what its baseline predicts (a step, a drift, or a change in its pattern)
   row    551  ⚠ ch0 (1.7x threshold): the signal's pattern is changing slowly (structural drift)
   2 faults detected across 667 samples (0 adaptations, 0 quarantines)
 $ echo $?
@@ -130,11 +130,11 @@ It started while contributing to [NASA F´](https://github.com/nasa/fprime). Eve
 $ struktura guard examples/rover.csv --baseline 1000
 struktura guard: 3000 samples x 5 channels (motor_current_A, wheel_rpm, imu_accel_g, battery_soc, temp_motor_C), calibrated on 1000 rows
   row   1644  ⚠ wheel_rpm (1.3x threshold): the signal's behavior changed and predictions are failing
-  row   1715  ⚠ imu_accel_g (1.1x threshold): the signal has moved away from its baseline and stayed there (a step or a drift)
+  row   1715  ⚠ imu_accel_g (1.1x threshold): the signal keeps deviating from what its baseline predicts (a step, a drift, or a change in its pattern)
   row   1725  ⚠ imu_accel_g (1.2x threshold): the signal shifted to a new operating level
   row   1725  ↻ environment may have changed, learning new baseline...
   row   2200  ✗ not a real environment change, fault confirmed
-  row   2201  ⚠ motor_current_A (15.1x threshold): the signal has moved away from its baseline and stayed there (a step or a drift)
+  row   2201  ⚠ motor_current_A (15.1x threshold): the signal keeps deviating from what its baseline predicts (a step, a drift, or a change in its pattern)
   row   2211  ⚠ motor_current_A (1.7x threshold): this channel disagrees with what the other channels' physics says it should be
   row   2211  ✗ motor_current_A declared dead, using reconstructed values
   row   2215  ⚠ wheel_rpm (2.0x threshold): the signal's behavior changed and predictions are failing

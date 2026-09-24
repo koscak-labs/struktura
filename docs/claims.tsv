@@ -35,3 +35,4 @@ nab-sensitivity-high	slow	0	HORIZON=1e5 cargo run -q --release --example nab_eva
 control-nab-clean-high	slow	0	HORIZON=1e5 cargo run -q --release --example nab_eval	artificialNoAnomaly         5       0         0         0       0.00
 generated-hybrid-c-equals-rust	fast	0	cargo test -q --test hybrid_c_matches_rust -- --nocapture	hybrid_c_matches_rust: STRUKTURA_DIFF_SEED= && hybrid_c_matches_rust: compared 200 windows && test result: ok. 1 passed
 generated-c-monitor-and-cfs-equal-rust	fast	0	cargo test -q --test c_monitor_matches_rust -- --nocapture	c_monitor_matches_rust: window 512 compared && c_monitor_matches_rust: window 64 compared && c_monitor_matches_rust: window 72 compared && cfs_app_time_order: compared && test result: ok. 2 passed
+control-index-column-ignored	fast	1	awk 'BEGIN{print "t,value"} {print NR-1","$0}' data/sylv_spike.csv | struktura guard -	not monitoring t && 2 faults detected across 667 samples (0 adaptations, 0 quarantines)
