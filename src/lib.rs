@@ -196,7 +196,10 @@ impl HealthVerdict {
 ///
 /// Below 64 samples this returns the placeholder `alpha: 0.5, r_squared: 0.0`,
 /// which is not a measurement. Check `r_squared`, or use [`dfa_short`] for
-/// short series.
+/// short series. From 64 to roughly 128 samples the box sizes (from 16 to
+/// n/4, see [`dfa_box_sizes`]) span a narrow range and α is noisy (values
+/// near 10 have been seen on 72-sample random walks); prefer [`dfa_short`]
+/// there too.
 #[must_use]
 pub fn dfa(values: &[f64]) -> DfaResult {
     let n = values.len();

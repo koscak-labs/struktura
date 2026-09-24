@@ -1,6 +1,6 @@
 [package]
 name = "struktura-wasm"
-version = "1.8.4"
+version = "1.8.5"
 edition = "2021"
 rust-version = "1.70"
 description = "JavaScript/WebAssembly bindings for struktura. All computation runs in the Rust crate; this crate only converts arguments."

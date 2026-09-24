@@ -2,7 +2,7 @@
 
 All notable changes to Struktura are documented here.
 
-## Unreleased
+## v1.8.5 (2026-09-24): generated C matches Rust, --sensitivity high, calibration self-check
 
 - `guard` checks its own calibration: it calibrates on the first half of the
   calibration rows and warns when the second half already alarms (the rows it
@@ -24,6 +24,15 @@ All notable changes to Struktura are documented here.
   (shared `dfa_box_sizes`); in 1.8.4 the C α differed by 0.1-0.2 on average,
   worst 0.85 (1.69 α_sd); now max |Δα| 2.9e-11 (tests/hybrid_c_matches_rust.rs,
   found by a differential test; PR #28).
+- Fix: `struktura codegen` (standalone C monitor) and `generate --cfs` computed
+  DFA on their ring buffer in storage order once it had wrapped, and
+  `codegen` used box sizes different from Rust. Against Rust `dfa()` at a
+  512-sample window, 1.8.4 matched on 0/1537 windows (max |Δα| 0.51 random
+  walk, 0.20 AR(1) 0.9, 0.76 ramp+noise). Now the ring is unrolled into time
+  order and `codegen` emits `dfa_box_sizes(window)`: equal within 1e-10 after
+  every sample at windows 512, 64 and 72 (tests/c_monitor_matches_rust.rs,
+  PR #29). Regenerate DFA monitors made with 1.8.4 or earlier.
+- `dfa()` docs: α is noisy between 64 and ~128 samples; use `dfa_short` there.
 - Releases publish `SHA256SUMS`; the GitHub Action verifies the downloaded
   binary against it.
 
