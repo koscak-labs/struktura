@@ -32,4 +32,35 @@ jobs:
             echo "::error::expected faults > 0 for data/sylv_spike.csv, got '$FAULTS'"
             exit 1
           fi
-          echo "OK: $FAULTS fault(s) detected as expected"
+          test "${{ steps.guard.outputs.source }}" = "local" || { echo "::error::expected source=local, got '${{ steps.guard.outputs.source }}'"; exit 1; }
+          echo "OK: $FAULTS fault(s) detected as expected (source=local)"
+
+  # How users run it: no Rust toolchain, no local build. The action fetches the
+  # pinned release binary, or builds with cargo where no binary exists.
+  release-binary:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, source: release }
+          - { os: windows-latest, source: release }
+          - { os: macos-14, source: release }
+          - { os: ubuntu-24.04-arm, source: cargo }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run struktura action on a known-fault CSV
+        id: guard
+        uses: ./
+        with:
+          file: data/sylv_spike.csv
+          fail-on-fault: false
+      - name: Assert faults and binary source
+        shell: bash
+        run: |
+          FAULTS="${{ steps.guard.outputs.faults }}"
+          SRC="${{ steps.guard.outputs.source }}"
+          echo "faults=$FAULTS source=$SRC"
+          [ -n "$FAULTS" ] && [ "$FAULTS" -gt 0 ] || { echo "::error::expected faults > 0, got '$FAULTS'"; exit 1; }
+          [ "$SRC" = "${{ matrix.source }}" ] || { echo "::error::expected source=${{ matrix.source }}, got '$SRC'"; exit 1; }
+          echo "OK"
