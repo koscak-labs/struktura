@@ -19,5 +19,5 @@ $ struktura spacecraft
 
   ====================================================================
   Each channel: first half = baseline, second half = current period.
-  Structural (DFA) monitoring catches degradation threshold-based
-  monitors miss — the mean can look normal while the structure shifts.
+  DFA reads structure, not level: the mean can look normal while
+  alpha shifts. Whether that shift is a fault needs a control run.

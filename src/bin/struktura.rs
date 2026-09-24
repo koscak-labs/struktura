@@ -1580,8 +1580,8 @@ fn cmd_spacecraft() {
 
     println!("  ====================================================================");
     println!("  Each channel: first half = baseline, second half = current period.");
-    println!("  Structural (DFA) monitoring catches degradation threshold-based");
-    println!("  monitors miss — the mean can look normal while the structure shifts.");
+    println!("  DFA reads structure, not level: the mean can look normal while");
+    println!("  alpha shifts. Whether that shift is a fault needs a control run.");
     println!();
 }
 
@@ -2673,8 +2673,8 @@ fn cmd_monitor_real() {
                         let lead_hours = lead_recs as f64 * 10.0 / 60.0;
                         println!("  ALARM at recording {} via {:?}", idx, leg);
                         println!("  Failure at recording {} (test termination)", n - 1);
-                        println!("  \x1b[32mLEAD TIME: {} recordings = {:.1} hours before failure\x1b[0m",
-                            lead_recs, lead_hours);
+                        println!("  alarm {} recordings ({:.1} h) before the test ended", lead_recs, lead_hours);
+                        println!("  (a plain RMS amplitude threshold on this bearing trips earlier)");
                     }
                     None => println!("  \x1b[31mNo alarm raised — detection failed\x1b[0m"),
                 }
@@ -3858,7 +3858,7 @@ fn cmd_rover() {
     }
     println!();
     println!("  {} anomalies, {} channels quarantined. all decisions autonomous.", alarm_count, q_count);
-    println!("  Spirit's right-front wheel failed sol 779. this catches it early.");
+    println!("  simulated rover, scripted faults above; not Spirit or other flight data.");
     println!();
 }
 
@@ -4553,7 +4553,7 @@ fn prepare_input(content: &str) -> (Vec<String>, Vec<Vec<f64>>, struktura::conte
 }
 
 /// Side-by-side: DFA structural monitor vs boolean amplitude threshold.
-/// Shows the gap — DFA fires hours before the threshold trips.
+/// Prints the first alarm row of each method; it does not decide which is a detection.
 fn cmd_copilot_compare(args: &[String]) {
     use struktura::monitor::HybridMonitor;
     use struktura::autopilot::{AutoPilot, Event};
@@ -4561,7 +4561,7 @@ fn cmd_copilot_compare(args: &[String]) {
     let file_path = args.get(2).unwrap_or_else(|| {
         eprintln!("Usage: struktura copilot-compare <file.csv> [--col N]");
         eprintln!("  Side-by-side: DFA structural monitor vs boolean amplitude threshold.");
-        eprintln!("  Shows the gap — struktura fires before any threshold trips.");
+        eprintln!("  Prints the first alarm row of each; run a healthy-period control before calling either a detection.");
         process::exit(1);
     });
 

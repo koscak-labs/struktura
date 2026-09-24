@@ -134,8 +134,10 @@ broke through.
   reported on four stationary controls (shuffled, AR 0.7, AR 0.95, 1/f
   noise, 123K samples each); the white|walk|white positive control lands
   at exactly 8192 and 16384
-- **NASA IMS bearing run-to-failure: structural warning ~2 hours before
-  failure** (recording 970 of 984, α spikes from 0.17 to 0.53)
+- **NASA IMS bearing run-to-failure: alarm at recording 970 of 984**
+  (about 2 h before the test ended; α spikes from 0.17 to 0.53). A plain
+  RMS amplitude threshold trips earlier on the same bearing, so this is
+  not an early-warning result
 - **generated C99 that compiles clean under `-Wall -Werror`** with a
   self-test: `struktura generate-hybrid` bakes your calibration into a
   dependency-free monitor that detects a stuck sensor in its own
@@ -320,8 +322,8 @@ $ struktura spacecraft
 
   ====================================================================
   Each channel: first half = baseline, second half = current period.
-  Structural (DFA) monitoring catches degradation threshold-based
-  monitors miss — the mean can look normal while the structure shifts.
+  DFA reads structure, not level: the mean can look normal while
+  alpha shifts. Whether that shift is a fault needs a control run.
 <!-- /example -->
 ```
 
