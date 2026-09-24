@@ -84,12 +84,16 @@ fn check_c_monitor(cc: &str, window: usize) {
         rust[i],
         c[i]
     );
+    // Printed only on this path, after the C was compiled and compared.
+    println!(
+        "c_monitor_matches_rust: window {window} compared {} windows, max |dalpha| {worst:e}",
+        c.len()
+    );
 }
 
 #[test]
 fn c_monitor_alpha_matches_rust_dfa() {
     let Some(cc) = c_compiler() else {
-        eprintln!("skipping: no C compiler found");
         return;
     };
     for window in [512, 64, 72] {
@@ -100,7 +104,6 @@ fn c_monitor_alpha_matches_rust_dfa() {
 #[test]
 fn cfs_app_passes_the_window_in_time_order() {
     let Some(cc) = c_compiler() else {
-        eprintln!("skipping: no C compiler found");
         return;
     };
     let window = 96;
@@ -157,4 +160,9 @@ fn cfs_app_passes_the_window_in_time_order() {
             "call {k}: window not in time order"
         );
     }
+    // Printed only on this path, after the C was compiled and checked.
+    println!(
+        "cfs_app_time_order: compared {} calls, each on the last {window} samples in time order",
+        calls.len()
+    );
 }

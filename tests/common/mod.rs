@@ -1,4 +1,6 @@
 //! Helpers for the tests that compile generated C and compare it with Rust.
+// Each test binary uses only some of these helpers.
+#![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -39,8 +41,12 @@ impl Rng {
     }
 }
 
-/// A C compiler: $CC, then cc, gcc, clang. On Linux, where CI always has one,
-/// a missing compiler is a failure; elsewhere the caller skips.
+/// A C compiler: $CC, then cc, gcc, clang.
+///
+/// A missing compiler fails the test on CI (`CI` set) and on Linux, so a
+/// comparison can never pass there without running. Elsewhere the test prints
+/// `SKIPPED` and returns; the tests print a `compared ...` line only when the
+/// C was compiled and compared, and the claims rows require that line.
 pub fn c_compiler() -> Option<String> {
     let mut candidates: Vec<String> = std::env::var("CC").into_iter().collect();
     candidates.extend(["cc", "gcc", "clang"].iter().map(|s| s.to_string()));
@@ -51,8 +57,11 @@ pub fn c_compiler() -> Option<String> {
             .map(|o| o.status.success())
             .unwrap_or(false)
     });
-    if found.is_none() && cfg!(target_os = "linux") {
-        panic!("no C compiler found (tried $CC, cc, gcc, clang)");
+    if found.is_none() {
+        if cfg!(target_os = "linux") || std::env::var_os("CI").is_some() {
+            panic!("no C compiler found (tried $CC, cc, gcc, clang)");
+        }
+        println!("SKIPPED: no C compiler found (tried $CC, cc, gcc, clang)");
     }
     found
 }

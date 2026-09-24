@@ -8,6 +8,8 @@
 //! `monitor::WINDOW` samples (white noise, random walk, AR(1), sine plus noise,
 //! ramp plus noise).
 
+mod common;
+
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
@@ -73,27 +75,10 @@ fn window(rng: &mut Rng, family: usize) -> Vec<f64> {
     v
 }
 
-/// A C compiler: $CC, then cc, gcc, clang.
-fn c_compiler() -> Option<String> {
-    let mut candidates: Vec<String> = std::env::var("CC").into_iter().collect();
-    candidates.extend(["cc", "gcc", "clang"].iter().map(|s| s.to_string()));
-    candidates.into_iter().find(|c| {
-        Command::new(c)
-            .arg("--version")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    })
-}
-
 #[test]
 fn hybrid_c_dfa_alpha_matches_rust() {
-    let Some(cc) = c_compiler() else {
-        // Linux CI always has a C compiler, so the check cannot be skipped there.
-        if cfg!(target_os = "linux") {
-            panic!("no C compiler found (tried $CC, cc, gcc, clang)");
-        }
-        eprintln!("skipping: no C compiler found");
+    // Fails on CI and Linux without a C compiler; prints SKIPPED elsewhere.
+    let Some(cc) = common::c_compiler() else {
         return;
     };
 
@@ -192,5 +177,10 @@ fn hybrid_c_dfa_alpha_matches_rust() {
         "window {i}: Rust alpha {} vs C alpha {} (|d| = {worst:e})",
         rust[i],
         c[i]
+    );
+    // Printed only on this path, after the C was compiled and compared.
+    println!(
+        "hybrid_c_matches_rust: compared {} windows, max |dalpha| {worst:e}",
+        c.len()
     );
 }
