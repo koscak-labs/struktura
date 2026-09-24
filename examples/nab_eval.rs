@@ -355,20 +355,21 @@ fn eval_series(category: &str, name: &str, rows: Vec<(i64, f64)>, windows: Vec<(
     let config = MonitorConfig { quiet_drift: env::var("QUIET").is_ok_and(|v| v == "1"), ..MonitorConfig::default() };
     let mon = HybridMonitor::calibrate_with(&[calib_slice.to_vec()], config)?;
     let mut ap = AutoPilot::new(mon);
+    // Every detector is scored in EPISODES: alarms less than ALARM_COOLDOWN
+    // ticks after the previous raw alarm belong to the same episode, which
+    // counts once (a pager sees one incident). The same rule is applied to
+    // the limit check below, so the two are counted the same way.
     let mut guard_alarms: Vec<(usize, i64, Leg)> = Vec::new();
-    let mut last_alarm: Vec<(usize, u8)> = Vec::new();
+    let mut last_raw: Option<usize> = None;
     for t in calib_n..total_rows {
         let sample = [values[t]];
         for ev in ap.push(&sample, &[true]) {
             if let Event::Alarm { report, .. } = &ev {
-                let leg_tag = leg_idx(report.leg) as u8;
-                let dup = last_alarm.iter().any(|&(lt, ll)| ll == leg_tag && t.saturating_sub(lt) < ALARM_COOLDOWN);
-                last_alarm.retain(|&(lt, _)| t.saturating_sub(lt) < ALARM_COOLDOWN);
-                last_alarm.push((t, leg_tag));
-                if dup {
-                    continue;
+                let new_episode = last_raw.map_or(true, |l| t - l >= ALARM_COOLDOWN);
+                last_raw = Some(t);
+                if new_episode {
+                    guard_alarms.push((t, rows[t].0, report.leg));
                 }
-                guard_alarms.push((t, rows[t].0, report.leg));
             }
         }
     }
@@ -389,9 +390,10 @@ fn eval_series(category: &str, name: &str, rows: Vec<(i64, f64)>, windows: Vec<(
         .count();
 
     // ---- baseline limit-check detector on the same post-calib data ----
+    // Raw alarm on every tick with 3+ consecutive exceedances; episodes as above.
     let mut limit_alarms: Vec<(usize, i64)> = Vec::new();
     let mut streak = 0usize;
-    let mut last_fire: Option<usize> = None;
+    let mut last_raw: Option<usize> = None;
     for t in calib_n..total_rows {
         let dev = (values[t] - calib_median).abs();
         if dev > 1.5 * calib_p95.max(1e-12) {
@@ -399,11 +401,11 @@ fn eval_series(category: &str, name: &str, rows: Vec<(i64, f64)>, windows: Vec<(
         } else {
             streak = 0;
         }
-        let armed = last_fire.map(|lf| t - lf >= ALARM_COOLDOWN).unwrap_or(true);
-        if streak >= 3 && armed {
-            limit_alarms.push((t, rows[t].0));
-            last_fire = Some(t);
-            streak = 0;
+        if streak >= 3 {
+            if last_raw.map_or(true, |l| t - l >= ALARM_COOLDOWN) {
+                limit_alarms.push((t, rows[t].0));
+            }
+            last_raw = Some(t);
         }
     }
     let limit_false = limit_alarms.iter().filter(|&&(_, ts)| !in_any_window(ts, &windows)).count();

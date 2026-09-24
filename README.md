@@ -25,7 +25,7 @@ $ cargo install struktura
 $ struktura guard data/sylv_spike.csv
 struktura guard: 1000 samples x 1 channels, calibrated on 333 rows
   note: 333 calibration rows is short; use --baseline 768 or more if the data allows (fewer raises level-shift false alarms)
-  row    500  ⚠ ch0 (4.6x threshold): gradual drift — the signal is trending away from its baseline
+  row    500  ⚠ ch0 (4.6x threshold): the signal has moved away from its baseline and stayed there (a step or a drift)
   row    551  ⚠ ch0 (1.7x threshold): the signal's pattern is changing slowly (structural drift)
   2 faults detected across 667 samples (0 adaptations, 0 quarantines)
 $ echo $?
@@ -73,20 +73,23 @@ Reproduce with `cargo run --release --example structure_vs_amplitude` (0.4 s), o
 
 ## 📈 On real data: the Numenta Anomaly Benchmark
 
-[NAB](https://github.com/numenta/NAB) has 58 real, labelled series: AWS CloudWatch metrics, server CPU and disk, machine temperatures, traffic, ad clicks, tweet volume. The same limit check runs on the same series. Calibration is the first 15% of each series, at least 768 rows.
+[NAB](https://github.com/numenta/NAB) has 58 real, labelled series: AWS CloudWatch metrics, server CPU and disk, machine temperatures, traffic, ad clicks, tweet volume. Every detector gets the same data and the same rules: thresholds come only from the first 15% of each series (at least 768 rows), never from the labels, and alarms less than 50 samples apart count as one episode.
 
-| 58 series, 116 labelled anomaly windows | `guard` | `guard --quiet-drift` | limit check |
-|---|---|---|---|
-| windows caught | 37 (32%) | 36 (31%) | 52 (45%) |
-| false alarms | 50 | **39** | 420 |
-| false alarms per 1,000 samples | 0.17 | **0.13** | 1.40 |
-| clean control series (no anomalies) | 0 | 0 | 0 |
+| detector (116 labelled windows) | windows caught | false alarms | per 1,000 samples | streaming | builds for Cortex-M |
+|---|---|---|---|---|---|
+| **struktura `guard`** | 36 | **35** | **0.12** | yes | **yes** |
+| extended-isolation-forest 0.2.3 | 47 | 182 | 0.61 | no (batch) | no |
+| limit check (1.5 × p95, 3 in a row) | 48 | 240 | 0.80 | yes | trivial |
+| EWMA chart (λ 0.2, 3σ) | 68 | 758 | 2.53 | yes | trivial |
+| CUSUM on raw values (k 0.5σ, h 5σ) | 66 | 860 | 2.87 | yes | trivial |
+| ankane STL (anomaly_detection 0.4.0) | 69 | 954 | 3.19 | no (batch) | no |
+| grafana augurs BOCPD (augurs-changepoint 0.10.2) | 77 | 1,461 | 4.88 | no (batch) | no |
 
-On real data `guard` is about 8x quieter than a limit check and catches fewer labelled windows. That trade suits paging a person, where false alarms are what gets a monitor switched off; if you need to catch every window, a limit check or a tuned model catches more.
+`guard` raises by far the fewest false alarms and catches the fewest windows. That trade suits paging a person, where false alarms are what gets a monitor switched off. If you need to catch every labelled window and can triage many alarms, BOCPD, STL or even an EWMA chart catch more. The isolation forest timed out on 10 of the 58 series (quantized values) and those count as no alarms, so its row understates it. On the clean control series every detector here is silent.
 
-Most remaining false alarms come from the drift (residual-CUSUM) leg on daily cycles and on flat metrics with occasional spikes. `--quiet-drift` clips each residual the drift leg sees and rescales residuals that are autocorrelated in calibration. Its cost: a spike that only the drift leg caught is found later or not at all (on `data/sylv_spike.csv` the row-500 alarm disappears). It is off by default; the setting was chosen from four variants tried on this same benchmark, so treat the 39 as optimistic.
+Most of `guard`'s remaining false alarms come from its drift (residual-CUSUM) leg on daily cycles and on flat metrics with occasional spikes. The opt-in `--quiet-drift` changes little (35 → 33 false alarms, 36 → 35 windows).
 
-Reproduce: clone NAB (commit `ea702d7`) and run `NAB_DIR=path/to/NAB cargo run --release --example nab_eval` (add `QUIET=1` for quiet mode). These rows are re-run weekly in CI.
+Reproduce: clone NAB (commit `ea702d7`) and run `NAB_DIR=path/to/NAB cargo run --release --example nab_eval` for `guard` and the limit check (weekly in CI), or `cargo run --release` in [bench/compare](bench/compare/) for every detector above ([RESULTS.md](bench/compare/RESULTS.md)).
 
 ## 🎯 Who it is for
 
@@ -125,15 +128,15 @@ It started while contributing to [NASA F´](https://github.com/nasa/fprime). Eve
 <!-- example:guard-rover -->
 $ struktura guard examples/rover.csv --baseline 1000
 struktura guard: 3000 samples x 5 channels (motor_current_A, wheel_rpm, imu_accel_g, battery_soc, temp_motor_C), calibrated on 1000 rows
-  row   1644  ⚠ wheel_rpm (1.3x threshold): the signal's behavior changed — predictions are failing
-  row   1715  ⚠ imu_accel_g (1.1x threshold): gradual drift — the signal is trending away from its baseline
+  row   1644  ⚠ wheel_rpm (1.3x threshold): the signal's behavior changed and predictions are failing
+  row   1715  ⚠ imu_accel_g (1.1x threshold): the signal has moved away from its baseline and stayed there (a step or a drift)
   row   1725  ⚠ imu_accel_g (1.2x threshold): the signal shifted to a new operating level
   row   1725  ↻ environment may have changed, learning new baseline...
   row   2200  ✗ not a real environment change, fault confirmed
-  row   2201  ⚠ motor_current_A (15.1x threshold): gradual drift — the signal is trending away from its baseline
+  row   2201  ⚠ motor_current_A (15.1x threshold): the signal has moved away from its baseline and stayed there (a step or a drift)
   row   2211  ⚠ motor_current_A (1.7x threshold): this channel disagrees with what the other channels' physics says it should be
   row   2211  ✗ motor_current_A declared dead, using reconstructed values
-  row   2215  ⚠ wheel_rpm (2.0x threshold): the signal's behavior changed — predictions are failing
+  row   2215  ⚠ wheel_rpm (2.0x threshold): the signal's behavior changed and predictions are failing
   6 faults detected across 2000 samples (0 adaptations, 1 quarantines)
 <!-- /example -->
 ```
@@ -225,7 +228,9 @@ let mut rwa = SpacecraftMonitor::new(Subsystem::ReactionWheel, "RWA_current");
 // push samples, get verdicts
 ```
 
-`dfa_into()` writes into a caller-supplied buffer, and `dfa_scratch(&[f64], &mut [f64])` does not allocate. No embedded flight computer has run this library yet.
+`dfa_into()` writes into a caller-supplied buffer, and `dfa_scratch(&[f64], &mut [f64])` does not allocate.
+
+**On a microcontroller (emulated).** The C99 monitor from `struktura generate-hybrid` was built bare-metal for an ARM Cortex-M3 (no FPU) and run in QEMU (`mps2-an385`). On a 3,000-sample, 6-channel stream with a stuck sensor injected at sample 1,500, it alarms at sample 1,504 on the stuck-value leg, the same sample and leg as the Rust monitor and as the same C built for x86, and identically on repeated runs. It uses 7,120 bytes of flash and 9,520 bytes of RAM, with no heap (`malloc`/`free` absent; links with `-nostdlib`). What is not shown yet: it has not run on physical hardware; cycle counts are not measured (QEMU does not model them); `-O2` currently faults in this bare-metal setup, so the ARM numbers use `-O1`; and the C covers 5 of the Rust monitor's 7 legs (no missingness or parity). Reproduce with [bench/flight/run.sh](bench/flight/) in WSL/Linux.
 
 ## 📊 Measured α on bundled data
 
@@ -430,9 +435,9 @@ The run is deterministic (seeded; two runs gave byte-identical output) and takes
 # docker
 docker build -t struktura . && docker run -v ./data:/data struktura guard /data/sensor.csv
 
-# python bindings
-pip install maturin && maturin develop --features python
-python -c "import struktura; print(struktura.py_dfa([1.0]*256))"
+# python bindings (crates/struktura-py; not on PyPI yet, build from source)
+cd crates/struktura-py && pip install maturin && maturin develop --release
+python -c "import struktura, random; print(struktura.dfa_short([random.random() for _ in range(70)]).alpha)"
 
 # stream anything through DFA
 tail -f /var/log/metrics.csv | struktura pipe --json
@@ -447,7 +452,7 @@ More in `examples/devops_integration.sh`.
 ## ⚠️ Limitations
 
 - **DFA sees structural shifts, not point anomalies.** A single spike barely moves α; pair DFA with a residual detector for spikes and outliers (`guard` already does).
-- **Daily cycles and flat, spiky metrics cause most false alarms on real data** (NAB). `--quiet-drift` removes about a fifth of them at the cost of slower spike detection by the drift leg. There is no seasonal model yet: an attempt to learn daily shapes from the calibration window made NAB results worse and was not shipped.
+- **Daily cycles and flat, spiky metrics cause most false alarms on real data** (NAB). `--quiet-drift` barely changes that (35 → 33). There is no seasonal model yet: an attempt to learn daily shapes from the calibration window made NAB results worse and was not shipped.
 - **Short calibration raises false alarms.** With 512 calibration samples the level-shift leg raised 3-6/30 false alarms on clean synthetic streams; from 768 samples on it raised none (`CALIB=512 cargo run --release --example structure_vs_amplitude`).
 - **Preprocessing changes α.** A new filter upstream (notch, bandpass, artifact rejection) invalidates the baseline; recalibrate after any change ([#8](https://github.com/koscak-labs/struktura/issues/8)).
 - **α alone is not a decision.** The `HealthVerdict` thresholds (0.03 / 0.08 / 0.15) are defaults, not universal constants.

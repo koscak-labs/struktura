@@ -1,0 +1,9 @@
+# Build outputs and generated fixtures; run.sh regenerates them.
+*.elf
+*.o
+harness_native
+*.log
+stream.csv
+stream_data.h
+alarms_rust.csv
+hybrid_monitor.c

@@ -11,14 +11,13 @@ homepage = "https://koscak-labs.github.io/struktura"
 keywords = ["anomaly-detection", "time-series", "hurst", "telemetry", "changepoint"]
 categories = ["science", "algorithms", "no-std", "aerospace", "embedded"]
 readme = "README.md"
-exclude = ["data/genome/", "data/heliopause/", "data/ims/", "data/ims_2nd_*", "data/ims_monitor_*", "data/ims/extracted/", "data/smap_msl/", "data/austen_shuffled.txt", "data/voyager1_2021_healthy.csv", "data/bench_*", "data/_bench_*", "data/sylv_*", "data/esa-adb/", "docs/", "test-ogma-*", "node_modules/", "*.dat", "*.zip", "assets/", "social-preview.*", "PROMOTION_*", "PROMO_*", "DRAFT_*", "ogma-template/", "examples/rover.csv", "PAPER_DRAFT.md", "esa-adb/", "playground/", "DFA_DISCOVERIES.md", "RIEMANN_FINDING.md"]
+exclude = ["data/genome/", "data/heliopause/", "data/ims/", "data/ims_2nd_*", "data/ims_monitor_*", "data/ims/extracted/", "data/smap_msl/", "data/austen_shuffled.txt", "data/voyager1_2021_healthy.csv", "data/bench_*", "data/_bench_*", "data/sylv_*", "data/esa-adb/", "docs/", "test-ogma-*", "node_modules/", "*.dat", "*.zip", "assets/", "social-preview.*", "PROMOTION_*", "PROMO_*", "DRAFT_*", "ogma-template/", "examples/rover.csv", "PAPER_DRAFT.md", "esa-adb/", "playground/", "crates/", "bench/", "DFA_DISCOVERIES.md", "RIEMANN_FINDING.md"]
 
 [features]
 default = ["std"]
 std = []
 serde = ["dep:serde"]
 wasm = ["dep:wasm-bindgen"]
-python = ["dep:pyo3"]
 
 [lib]
 # rlib only. Observed in 1.7.2 with crate-type = ["lib", "cdylib", "staticlib"]:
@@ -34,7 +33,6 @@ crate-type = ["lib"]
 [dependencies]
 serde = { version = "1", features = ["derive"], optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
-pyo3 = { version = "0.23", features = ["extension-module"], optional = true }
 libm = "0.2"
 
 [dev-dependencies]

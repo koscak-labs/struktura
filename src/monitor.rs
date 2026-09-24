@@ -120,10 +120,10 @@ pub struct MonitorConfig {
     /// Quiet mode for the drift (residual-CUSUM) leg: clip each residual at
     /// `CUSUM_CLIP` sigmas so a single spike cannot trip a drift alarm, and
     /// rescale residuals that are clearly autocorrelated in calibration
-    /// (see `cusum_residual_scale`). Off by default. On the NAB real-data
-    /// series it cut guard's false alarms from 50 to 39 and detected windows
-    /// from 37 to 36 (examples/nab_eval.rs); spikes that only the drift leg
-    /// caught are found later or by other legs.
+    /// (see `cusum_residual_scale`). Off by default. The effect is small: on
+    /// the NAB real-data series, counted in alarm episodes, false alarms go
+    /// from 35 to 33 and detected windows from 36 to 35 (examples/nab_eval.rs).
+    /// Spikes that only the drift leg caught are found later or by other legs.
     pub quiet_drift: bool,
 }
 
@@ -198,26 +198,28 @@ pub fn explain_alarm(r: &AlarmReport) -> &'static str {
         Leg::Missingness => "data stopped arriving on this channel",
         Leg::Parity => {
             if r.observed > 2.0 * r.threshold {
-                "sudden spike — this channel jumped far outside what the other channels predict"
+                "sudden spike: this channel jumped far outside what the other channels predict"
             } else {
                 "this channel disagrees with what the other channels' physics says it should be"
             }
         }
-        Leg::RepeatedValue => "sensor appears stuck — same value repeating",
+        Leg::RepeatedValue => "sensor appears stuck: the same value keeps repeating",
         Leg::Dfa => "the signal's pattern is changing slowly (structural drift)",
-        Leg::ResidualCusum => "gradual drift — the signal is trending away from its baseline",
+        // CUSUM accumulates any sustained offset, so a step fires it as
+        // readily as a slow drift; the text must not assume which one.
+        Leg::ResidualCusum => "the signal has moved away from its baseline and stayed there (a step or a drift)",
         Leg::LevelShift => {
             if r.observed > 2.0 * r.threshold {
-                "sudden jump — the signal shifted to a new level abruptly"
+                "sudden jump: the signal shifted to a new level abruptly"
             } else {
                 "the signal shifted to a new operating level"
             }
         }
         Leg::Residual => {
             if r.hit_gap >= 8 {
-                "sudden spike — a sharp transient the predictor didn't expect"
+                "sudden spike: a sharp transient the predictor didn't expect"
             } else {
-                "the signal's behavior changed — predictions are failing"
+                "the signal's behavior changed and predictions are failing"
             }
         }
     }

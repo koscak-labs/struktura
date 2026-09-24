@@ -1,9 +1,9 @@
 #![allow(clippy::needless_range_loop, clippy::type_complexity, clippy::large_enum_variant, clippy::useless_vec, clippy::map_clone)]
-//! Predict failure before it happens.
+//! Time-series anomaly detection with no training data.
 //!
-//! Struktura detects when the *structure* of a signal changes, before
-//! averages, thresholds, or ML models notice. One function, one number,
-//! works on anything with a time dimension.
+//! Struktura detects when the *structure* of a signal changes: detrended
+//! fluctuation analysis (DFA) for the correlation structure, plus a streaming
+//! monitor that calibrates itself on the first rows of your data.
 //!
 //! # Quick start
 //!
@@ -193,6 +193,10 @@ impl HealthVerdict {
 /// let result = dfa(&noise);
 /// assert!(result.r_squared >= 0.0);
 /// ```
+///
+/// Below 64 samples this returns the placeholder `alpha: 0.5, r_squared: 0.0`,
+/// which is not a measurement. Check `r_squared`, or use [`dfa_short`] for
+/// short series.
 #[must_use]
 pub fn dfa(values: &[f64]) -> DfaResult {
     let n = values.len();
@@ -201,6 +205,96 @@ pub fn dfa(values: &[f64]) -> DfaResult {
     }
     let mut buf = Vec::with_capacity(n);
     dfa_into(values, &mut buf)
+}
+
+/// DFA for short series (from about 24 samples), or `None` when the series
+/// cannot be measured (too short, constant, or fewer than 3 usable box sizes).
+///
+/// Box sizes are up to 10 log-spaced integers from 4 to n/4. Boxes are laid
+/// from the start and again from the end of the profile (Kantelhardt et al.,
+/// Physica A 316, 2002), so the tail is used; each box is linearly detrended and
+/// F(s) is the root mean square over all 2 * (n / s) boxes. [`dfa`] uses
+/// boxes of at least 16 samples from the start only, which leaves too few
+/// sizes below a few hundred samples.
+///
+/// On the ESA OPS-SAT-AD test split (529 segments, median 70 samples),
+/// per-channel |z| of this alpha against nominal training segments gives
+/// AUC-ROC 0.943; `dfa` gives 0.770 because half the segments are under 64
+/// samples. Shuffling each segment's values drops it to 0.554 overall, but
+/// only to 0.743 on the segments under 64 samples, so there part of the
+/// separation is not order structure (examples/opssat_eval.rs).
+///
+/// ```
+/// use struktura::dfa_short;
+/// let x: Vec<f64> = (0..70).map(|i| (i as f64 * 0.37).sin() + (i % 7) as f64 * 0.1).collect();
+/// assert!(dfa_short(&x).is_some());
+/// assert!(dfa_short(&[1.0; 70]).is_none());
+/// assert!(dfa_short(&x[..10]).is_none());
+/// ```
+#[must_use]
+pub fn dfa_short(values: &[f64]) -> Option<DfaResult> {
+    let n = values.len();
+    if n < 16 {
+        return None;
+    }
+    let mean = values.iter().sum::<f64>() / n as f64;
+    if values.iter().all(|&v| v == values[0]) {
+        return None;
+    }
+    let mut profile = Vec::with_capacity(n);
+    let mut cum = 0.0f64;
+    for &v in values {
+        cum += v - mean;
+        profile.push(cum);
+    }
+
+    let hi = (n / 4).max(5);
+    let ratio = powf(hi as f64 / 4.0, 1.0 / 9.0);
+    let mut log_s = [0.0f64; 10];
+    let mut log_f = [0.0f64; 10];
+    let mut pts = 0usize;
+    let mut prev_s = 0usize;
+    for step in 0..10 {
+        let s = (4.0 * powi(ratio, step) + 1e-9) as usize;
+        if s == prev_s || s < 4 || s > hi {
+            continue;
+        }
+        prev_s = s;
+        let nb = n / s;
+        if nb == 0 {
+            continue;
+        }
+        let k = s as f64;
+        let sx = k * (k - 1.0) / 2.0;
+        let sx2 = k * (k - 1.0) * (2.0 * k - 1.0) / 6.0;
+        let det = k * sx2 - sx * sx;
+        let box_msr = |seg: &[f64]| {
+            let (mut sy, mut sxy, mut sy2) = (0.0f64, 0.0f64, 0.0f64);
+            for (j, &y) in seg.iter().enumerate() {
+                sy += y;
+                sxy += j as f64 * y;
+                sy2 += y * y;
+            }
+            let a0 = (sx2 * sy - sx * sxy) / det;
+            let a1 = (k * sxy - sx * sy) / det;
+            (sy2 - a0 * sy - a1 * sxy).max(0.0) / k
+        };
+        let mut f2 = 0.0f64;
+        for b in 0..nb {
+            f2 += box_msr(&profile[b * s..(b + 1) * s]);
+            f2 += box_msr(&profile[n - (b + 1) * s..n - b * s]);
+        }
+        let f = sqrt(f2 / (2 * nb) as f64);
+        if f > 0.0 {
+            log_s[pts] = ln(s as f64);
+            log_f[pts] = ln(f);
+            pts += 1;
+        }
+    }
+    if pts < 3 {
+        return None;
+    }
+    Some(linreg(&log_s[..pts], &log_f[..pts]))
 }
 
 #[must_use]
@@ -821,6 +915,28 @@ mod tests {
         walk
     }
 
+    #[test]
+    fn dfa_short_separates_white_noise_from_random_walk_at_70_samples() {
+        // Mean over seeds: white noise ~0.5, random walk ~1.5. The ranges are
+        // wide because 70 samples is short; the point is that short series
+        // get a real estimate where `dfa` returns the 0.5 placeholder.
+        let (mut w, mut b) = (0.0, 0.0);
+        for seed in 0..50 {
+            w += dfa_short(&white_noise(70, seed)).expect("white").alpha;
+            b += dfa_short(&brownian(70, seed)).expect("walk").alpha;
+        }
+        let (w, b) = (w / 50.0, b / 50.0);
+        assert!((0.35..0.7).contains(&w), "white mean alpha {w}");
+        assert!((1.25..1.75).contains(&b), "walk mean alpha {b}");
+    }
+
+    #[test]
+    fn dfa_short_refuses_what_it_cannot_measure() {
+        assert!(dfa_short(&white_noise(15, 1)).is_none(), "too short");
+        assert!(dfa_short(&[3.0; 200]).is_none(), "constant");
+        assert!(dfa_short(&white_noise(24, 1)).is_some(), "24 samples gives 3 box sizes");
+    }
+
     /// Analytic standard deviation of the DFA α estimator at window n.
     ///
     /// Model: F²(s) averages W/s per-segment residual variances, each with
@@ -1428,8 +1544,6 @@ pub mod rover_flight;
 pub mod conformal;
 #[cfg(feature = "wasm")]
 pub mod wasm;
-#[cfg(feature = "python")]
-pub mod python;
 
 /// Solve A x = b in place (Gauss–Jordan, partial pivoting). Shared by the
 /// reconstruction and autoregression fitters. Returns false if singular.

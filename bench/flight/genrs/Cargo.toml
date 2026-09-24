@@ -1,0 +1,11 @@
+[package]
+name = "genrs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+struktura = { path = "../../..", default-features = false, features = ["std"] }
+
+[[bin]]
+name = "genrs"
+path = "src/main.rs"

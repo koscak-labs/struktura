@@ -5,12 +5,27 @@ All notable changes to Struktura are documented here.
 ## Unreleased
 
 - Real-data evaluation: `examples/nab_eval.rs` runs `guard` and a limit check
-  on the 58 labelled NAB series. guard: 37/116 windows, 50 false alarms
-  (0.17 per 1,000 samples); limit check: 52/116, 420 (1.40).
+  on the 58 labelled NAB series. Alarms are counted in episodes (alarms less
+  than 50 ticks apart count once), the same rule for every detector.
+  guard: 36/116 windows, 35 false alarms (0.12 per 1,000 samples); limit
+  check: 48/116, 240 (0.80). [Corrected before release: a first version
+  counted guard's alarms more leniently than the limit check's and reported
+  50 vs 420.]
 - New opt-in `MonitorConfig::quiet_drift` / `guard --quiet-drift`: the drift
   (residual-CUSUM) leg clips residuals at 4 sigma and rescales residuals that
-  are autocorrelated in calibration. NAB: 50 -> 39 false alarms, 37 -> 36
-  windows. Default behaviour is unchanged (all fixtures and claims identical).
+  are autocorrelated in calibration. Small effect: NAB 35 -> 33 false alarms,
+  36 -> 35 windows. Default behaviour is unchanged.
+- New `dfa_short`: DFA for series from about 24 samples, `None` instead of a
+  placeholder when a series cannot be measured. On ESA OPS-SAT-AD (529 test
+  segments) per-channel |z| gives AUC-ROC 0.943 vs 0.770 for `dfa`
+  (examples/opssat_eval.rs). `dfa` documents its 0.5/R² 0 placeholder below 64.
+- Alarm explanations: the residual-CUSUM leg no longer says "gradual drift"
+  (it fires on steps too); no em dashes in explanation text.
+- Python bindings moved out of the core crate into `crates/struktura-py`
+  (the `python` feature is gone); core stays `no_std`-friendly and rlib-only.
+- Docs: withdrawn slogans ("predict failure before it happens", "85x faster",
+  the Voyager AACS "detection") removed from the crate docs, the docs site,
+  ogma-template/ and the demo image; old drafts marked superseded.
 - `guard` prints a note when calibration is under 768 rows.
 - Browser playground runs the real monitor via WebAssembly.
 - New example `structure_vs_amplitude`: guard vs a limit check on synthetic

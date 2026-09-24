@@ -1,0 +1,19 @@
+[workspace]
+
+[package]
+name = "compare"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+struktura = { path = "../.." }
+changepoint = "0.15.0"
+augurs-changepoint = "0.10.2"
+augurs-outlier = "0.10.2"
+anomaly_detection = "0.4.0"
+extended-isolation-forest = "0.2.3"
+rand = "0.8"
+
+[profile.release]
+opt-level = 3

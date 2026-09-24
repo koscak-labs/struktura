@@ -1,0 +1,50 @@
+# struktura head-to-head comparison
+
+Date: 2026-09-24
+Machine: Intel(R) Core(TM) Ultra 9 185H (Windows 11), rustc 1.95.0
+
+## NAB (commit ea702d7, 58 series evaluated, 0 skipped <192 rows)
+
+| detector | windows caught | / total | false alarms | FA / 1000 samples |
+|---|---:|---:|---:|---:|
+| struktura guard (default) | 36 | 116 | 35 | 0.12 |
+| struktura guard (quiet_drift) | 35 | 116 | 33 | 0.11 |
+| augurs-changepoint BOCPD | 77 | 116 | 1461 | 4.88 |
+| ankane STL (anomaly_detection) | 69 | 116 | 954 | 3.19 |
+| extended-isolation-forest | 47 | 116 | 182 | 0.61 |
+| limit check (baseline) | 48 | 116 | 240 | 0.80 |
+| EWMA chart (baseline) | 68 | 116 | 758 | 2.53 |
+| CUSUM (baseline) | 66 | 116 | 860 | 2.87 |
+
+### Per-sample time & capability
+
+| detector | streaming | mean ns/sample (post-calib) |
+|---|---|---:|
+| struktura guard (default) | true | 784 |
+| struktura guard (quiet_drift) | true | 750 |
+| augurs-changepoint BOCPD | false | 77568 |
+| ankane STL (anomaly_detection) | false | 41061 |
+| extended-isolation-forest | false | 13184 |
+| limit check (baseline) | true | 3 |
+| EWMA chart (baseline) | true | 9 |
+| CUSUM (baseline) | true | 7 |
+
+## Synthetic suite (30 seeds, calibration on first 768 samples)
+
+### Clean streams: false alarms out of 30
+
+| stream | struktura guard (default) | struktura guard (quiet_drift) | augurs-changepoint BOCPD | ankane STL (anomaly_detection) | extended-isolation-forest | limit check (baseline) | EWMA chart (baseline) | CUSUM (baseline) |
+|---|---|---|---|---|---|---|---|---||
+| white | 0/30 | 0/30 | 0/30 | 4/30 | 17/30 | 0/30 | 26/30 | 28/30 |
+| AR(0.7) | 0/30 | 0/30 | 30/30 | 2/30 | 14/30 | 4/30 | 30/30 | 30/30 |
+| AR(0.95) | 0/30 | 0/30 | 30/30 | 0/30 | 17/30 | 15/30 | 30/30 | 30/30 |
+
+### Shifts at sample 1000: detected / early-false-alarm / median delay
+
+| shift | struktura guard (default) | struktura guard (quiet_drift) | augurs-changepoint BOCPD | ankane STL (anomaly_detection) | extended-isolation-forest | limit check (baseline) | EWMA chart (baseline) | CUSUM (baseline) |
+|---|---|---|---|---|---|---|---|---||
+| white -> brown (random walk) | 30/30, 0 early, median 13 | 30/30, 0 early, median 14 | 25/30, 5 early, median 7 | 5/30, 0 early, median 823 | 23/30, 7 early, median 46 | 30/30, 0 early, median 17 | 17/30, 13 early, median 7 | 16/30, 14 early, median 8 |
+| white -> AR(0.9), std x2.3 (amplitude growth) | 30/30, 0 early, median 16 | 30/30, 0 early, median 16 | 26/30, 4 early, median 8 | 16/30, 0 early, median 562 | 21/30, 7 early, median 97 | 30/30, 0 early, median 48 | 17/30, 13 early, median 8 | 16/30, 14 early, median 10 |
+| white -> AR(0.9), variance-matched (correlation change) | 30/30, 0 early, median 100 | 30/30, 0 early, median 100 | 15/30, 15 early, median 7 | 5/30, 1 early, median 833 | 0/30, 7 early, median - | 7/30, 0 early, median 371 | 17/30, 13 early, median 26 | 16/30, 14 early, median 20 |
+
+wall-clock runtime: 158.44s

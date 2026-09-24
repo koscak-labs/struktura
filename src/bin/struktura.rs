@@ -3599,8 +3599,8 @@ fn cmd_guard(args: &[String]) {
             "--help" | "-h" => {
                 println!("struktura guard <file.csv> [--baseline N] [--json] [--watch] [--webhook URL] [--quiet-drift]");
                 println!("  Monitor any CSV for anomalies. Exit: 0=healthy 1=fault 2=error");
-                println!("  --quiet-drift  Fewer false alarms on real ops data (NAB: 50 -> 39, 37 -> 36 windows);");
-                println!("                 a spike only the drift leg would catch is found later or not at all");
+                println!("  --quiet-drift  Clip what the drift leg sees; small effect (NAB: 35 -> 33 false alarms,");
+                println!("                 36 -> 35 windows); a spike only the drift leg catches is found later or not at all");
                 println!("  --watch        Follow the file (like tail -f), monitor new rows live");
                 println!("  --interval MS  Poll interval for --watch (default 1000ms)");
                 println!("  --webhook URL  POST anomaly alerts to a Slack/Discord/PagerDuty webhook");
