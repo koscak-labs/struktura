@@ -6,7 +6,9 @@ All notable changes to Struktura are documented here.
 
 - New CLI command: `struktura copilot-compare <file.csv>` — side-by-side comparison
   of DFA structural health vs boolean amplitude threshold. On IMS bearing data:
-  DFA fires 323 samples (~54 hours) before the boolean threshold trips.
+  [Corrected 2026-09-24: an earlier line here claimed 323 samples of early
+  warning. The first monitor alarm on IMS also fires in the healthy period,
+  and the confirmed fault comes after the threshold; claim withdrawn.]
 - New document: `docs/PREDICTIVE-RUNTIME-MONITORING.md` — 1-page pitch bridging
   Copilot (reactive, onboard) and ProgPy (predictive, offline) with DFA structural
   health monitoring for autonomous deep-space missions (Artemis/Gateway).

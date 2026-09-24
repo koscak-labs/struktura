@@ -4601,6 +4601,7 @@ fn cmd_copilot_compare(args: &[String]) {
     let mut sample = vec![0.0f64; ncols];
 
     let mut first_dfa_alarm: Option<usize> = None;
+    let mut first_confirmed: Option<usize> = None;
     let mut first_bool_alarm: Option<usize> = None;
     let mut last_alarm_leg: Vec<(usize, u8)> = Vec::new();
 
@@ -4644,7 +4645,7 @@ fn cmd_copilot_compare(args: &[String]) {
                 }
                 Event::RolledBack { .. } => {
                     dfa_event = Some("✗ FAULT CONFIRMED".into());
-                    if first_dfa_alarm.is_none() { first_dfa_alarm = Some(t); }
+                    if first_confirmed.is_none() { first_confirmed = Some(t); }
                 }
                 Event::Recalibrated { .. } => {
                     dfa_event = Some("✓ new baseline accepted".into());
@@ -4664,28 +4665,16 @@ fn cmd_copilot_compare(args: &[String]) {
         }
     }
 
-    // Summary
+    // Summary: report rows only. Which alarm is "early" depends on where the
+    // real fault starts, which this command cannot know; check the alarm rows
+    // against a healthy-period control before calling any of them a detection.
     println!("  ─────────────────────────────────────────────────────────────────────");
     println!();
-    match (first_dfa_alarm, first_bool_alarm) {
-        (Some(dfa_t), Some(bool_t)) if dfa_t < bool_t => {
-            let lead = bool_t - dfa_t;
-            println!("  \x1b[1mResult:\x1b[0m Struktura detected the fault {} samples BEFORE the boolean threshold.", lead);
-            println!("  DFA alarm at row {}, boolean alarm at row {} — \x1b[32m{} samples of early warning.\x1b[0m", dfa_t, bool_t, lead);
-        }
-        (Some(dfa_t), Some(bool_t)) => {
-            println!("  Both fired: DFA at row {}, boolean at row {}.", dfa_t, bool_t);
-        }
-        (Some(dfa_t), None) => {
-            println!("  \x1b[1mResult:\x1b[0m Struktura detected a fault at row {} — boolean threshold \x1b[31mnever fired\x1b[0m.", dfa_t);
-        }
-        (None, Some(bool_t)) => {
-            println!("  Boolean threshold fired at row {} — DFA did not flag anything.", bool_t);
-        }
-        (None, None) => {
-            println!("  Neither monitor detected a fault.");
-        }
-    }
+    let row = |r: Option<usize>| r.map_or_else(|| "none".to_string(), |t| t.to_string());
+    println!("  first struktura monitor alarm (any leg): row {}", row(first_dfa_alarm));
+    println!("  first confirmed fault (guarded rollback):  row {}", row(first_confirmed));
+    println!("  first amplitude-threshold trip:            row {}", row(first_bool_alarm));
+    println!("  threshold = 1.5 x the 95th percentile of |x| in the calibration rows, per channel");
     println!();
 }
 

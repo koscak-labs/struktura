@@ -20,16 +20,18 @@ NASA flight software has two monitoring approaches that have never been connecte
 **Copilot** (runtime verification) catches safety violations *after* they occur.
 **ProgPy** (prognostics) predicts degradation but runs offline in Python.
 
-No open-source tool provides **predictive health monitoring that runs embedded
-inside the flight software loop**. For Artemis Gateway and deep-space missions
+We have not found an open-source tool that provides **degradation monitoring
+that runs embedded inside the flight software loop** next to Copilot monitors. For Artemis Gateway and deep-space missions
 with 4–24 minute communication delays, autonomous onboard degradation detection
 is not optional — ground-based prognostics arrive too late.
 
 ## What struktura adds
 
-struktura detects structural degradation in telemetry using Detrended Fluctuation
-Analysis (DFA). It runs where Copilot runs — inside the flight loop — but catches
-faults *before* any amplitude threshold breaks.
+struktura watches the structure of telemetry (DFA scaling plus residual,
+level, CUSUM, stuck-value and cross-channel legs) without training. It is
+meant to run where Copilot runs, inside the flight loop. The aim is to
+flag changes a fixed amplitude bound misses; the measured results below
+say how far that aim is met today.
 
 ```
          GROUND                         SPACECRAFT
@@ -40,7 +42,7 @@ faults *before* any amplitude threshold breaks.
                                   │  └─────────────────────┘ │
                                   │  ┌─────────────────────┐ │
                                   │  │ STRUKTURA (DFA)     │ │  ← NEW
-                                  │  │ α drift → early     │ │
+                                  │  │ α drift → flag      │ │
                                   │  │ warning, no training │ │
                                   │  │ 103 lines C, 5.9 KB │ │
                                   │  └─────────────────────┘ │
@@ -49,21 +51,31 @@ faults *before* any amplitude threshold breaks.
 
 ## Measured results
 
-**IMS bearing prognostics dataset** (NASA, 984 recordings at 10-min intervals):
+**IMS bearing test 2** (984 recordings at 10-min intervals, 4 channels,
+`struktura copilot-compare data/ims_monitor_stream.csv`, calibration on rows 0-327):
 
-| Row | Amplitude | Copilot boolean | Struktura DFA α | Verdict |
-|-----|-----------|-----------------|-----------------|---------|
-| 328 | in-spec   | OK              | 0.69            | baseline |
-| 378 | in-spec   | OK              | drifting        | ⚠ early warning |
-| 925 | in-spec   | OK              | 0.95            | ✗ FAULT CONFIRMED |
-| 970 | spike     | ALARM           | 0.98            | warned 556 samples ago |
-| 984 | failure   | too late        | —               | ~10 hours early |
+| Row | Event |
+|-----|-------|
+| 378 | struktura monitor: 1.0x-threshold drift flag on ch1 |
+| 506 | struktura monitor: regime change suspected, re-learning baseline |
+| 701 | amplitude threshold (1.5 x p95 of calibration \|x\|) first trips |
+| 925 | struktura monitor: re-learned baseline rejected, fault confirmed |
 
-A boolean threshold fires at row 970 when the amplitude spikes.
-Struktura fires at row 925 — **~10 hours earlier** — while the amplitude
-is still within specification.
+**This run does not show earlier detection than a threshold.** The row-378
+flag also appears when only rows 0-500 are fed (healthy period by common
+IMS usage), so it is not evidence of early warning. The confirmed fault at
+row 925 comes after the threshold at row 701. An earlier version of this
+document claimed "~10 hours" and "323 samples" of early warning; both
+figures are withdrawn (2026-09-24).
 
-No training data. No labeled faults. No hyperparameters.
+A C-MAPSS turbofan run (FD001-FD004) was also withdrawn: `guard` alarmed on
+the healthy prefix of 35 of 36 engines, so its alarms on full runs carry
+no information about wear.
+
+What stands: the monitor needs no training, runs in constant memory, and
+builds as a C component next to generated monitors. Whether its alarms lead
+a threshold on real degradation is an open question this repo has not yet
+answered.
 
 ## Integration path
 
