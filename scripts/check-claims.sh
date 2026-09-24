@@ -37,7 +37,10 @@ while IFS=$'\t' read -r id speed want_exit cmd expect; do
   missing=()
   IFS=$'\n' read -r -d '' -a needles < <(printf '%s' "$expect" | sed 's/ && /\n/g'; printf '\0')
   for n in "${needles[@]}"; do
-    LC_ALL=C grep -qF -- "$n" <<<"$out" || missing+=("$n")
+    LC_ALL=C grep -qF -- "$n" <<<"$out"
+    s=$?
+    (( s >= 2 )) && { fail=1; echo "ERROR grep exited $s checking $id"; }
+    (( s == 0 )) || missing+=("$n")
   done
 
   if [[ "$got_exit" != "$want_exit" || ${#missing[@]} -gt 0 ]]; then
@@ -60,21 +63,34 @@ withdrawn=(
 # Match on lowercased text with plain `grep -F`: `grep -i` aborts in Git Bash
 # on this input (even with LC_ALL=C), and a grep that dies silently would let
 # every withdrawn claim through. The phrases are lowercase ASCII.
+# grep exit 0 = match, 1 = no match, >= 2 = grep itself failed. A failure must
+# fail the gate, never read as "no match".
 lower() { LC_ALL=C tr 'A-Z' 'a-z'; }
-out_lower="$(printf '%s' "$all_out" | lower)"
+work="$(mktemp -d)"
+printf '%s' "$all_out" | lower > "$work/output"
+while IFS= read -r file; do
+  mkdir -p "$work/$(dirname "$file")"
+  lower < "$file" > "$work/$file"
+done < <(find README.md src -type f)
 for w in "${withdrawn[@]}"; do
   hits=""
   while IFS= read -r file; do
-    h="$(lower < "$file" | LC_ALL=C grep -nF -- "$w" | cut -c1-120)"
-    [[ -n "$h" ]] && hits+="$file: $h"$'\n'
+    LC_ALL=C grep -nF -- "$w" "$work/$file" > "$work/hit"
+    s=$?
+    if (( s >= 2 )); then fail=1; echo "ERROR grep exited $s on $file"; fi
+    (( s == 0 )) && hits+="$file: $(cut -c1-120 "$work/hit")"$'\n'
   done < <(find README.md src -type f)
-  LC_ALL=C grep -qF -- "$w" <<<"$out_lower" && hits+="(in command output)"
+  LC_ALL=C grep -qF -- "$w" "$work/output"
+  s=$?
+  if (( s >= 2 )); then fail=1; echo "ERROR grep exited $s on command output"; fi
+  (( s == 0 )) && hits+="(in command output)"
   if [[ -n "${hits//$'\n'/}" ]]; then
     fail=1
     echo "FAIL withdrawn claim is back: \"$w\""
     echo "$hits" | sed 's/^/     /'
   fi
 done
+rm -rf "$work"
 
 echo "check-claims: $ran rows, $([[ $fail -eq 0 ]] && echo PASS || echo FAIL)"
 exit $fail
