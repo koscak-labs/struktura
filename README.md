@@ -213,18 +213,18 @@ let mut rwa = SpacecraftMonitor::new(Subsystem::ReactionWheel, "RWA_current");
 // push samples, get verdicts
 ```
 
-## 🎯 what it detects (all verified, all real data)
+## 🎯 measured α on bundled data
 
-| domain | signal | healthy α | fault α | shift | verdict |
+| domain | signal | baseline α | comparison α | shift | what it shows |
 |--------|--------|-----------|---------|-------|---------|
-| 🔧 **bearings** | CWRU 12kHz vibration | 0.689 | 0.183 | -0.506 | CRITICAL |
-| 🚀 **spacecraft** | Voyager 1 magnetometer, 2021 vs 2022 slices (not the AACS anomaly window; z=1.5, inconclusive) | 0.989 | 0.801 | -0.187 | CRITICAL |
-| 🛰️ **ESA satellites** | ESA-ADB Mission 1 | — | — | — | adapter built ([esa-adb/](esa-adb/struktura-dfa/)); PA%K scores pending benchmark run |
-| 📖 **text** | Austen vs shuffled | 0.749 | 0.572 | -0.177 | detected |
-| 🧬 **genome** | Human chr1 GC% | 0.909 | | | R²=0.991 |
-| ❤️ **cardiac** | HRV RR intervals | 0.695 | | | R²=0.985 |
+| 🔧 **bearings** | CWRU 12kHz vibration, normal vs inner-race fault | 0.689 | 0.183 | -0.506 | clear separation (`struktura demo`) |
+| 🚀 **spacecraft** | Voyager 1 magnetometer, 2021 vs 2022 slices (not the AACS anomaly window) | 0.989 | 0.801 | -0.187 | z=1.5, inconclusive (`struktura voyager`) |
+| 🛰️ **ESA satellites** | ESA-ADB Mission 1 | — | — | — | adapter built ([esa-adb/](esa-adb/struktura-dfa/)); scores pending an official benchmark run |
+| 📖 **text** | shuffled Austen sentence lengths | — | 0.573 | — | α only; the unshuffled original is not shipped (`docs/examples/text.cmd`) |
+| 🧬 **genome** | Human chr1 GC% | 0.909 | | | α only, R²=0.991 |
+| ❤️ **cardiac** | HRV RR intervals, synthetic by default (`examples/cardiac_hrv.rs`) | 0.695 | | | α only, R²=0.985 |
 
-every number from an actual run. reproduce with `struktura demo` / `struktura voyager`.
+only the bearing row is a normal-vs-fault separation on real data. the "CRITICAL" label from `check`/`compare` is a fixed α threshold, not significance.
 
 see [USE_CASES.md](USE_CASES.md) for the full list with citations.
 
@@ -293,7 +293,7 @@ $ struktura text data/austen_shuffled.txt data/mechanical_text.txt
 <!-- /example -->
 ```
 
-the repo ships a shuffled Austen sentence-length corpus (`data/austen_shuffled.txt`, α=0.572, moderate rhythm) and a mechanical/uniform one (`data/mechanical_text.txt`, α=0.525); it does not ship an unshuffled original, so the three-way "original vs shuffled vs mechanical" comparison from an earlier draft of this README could not be reproduced from a real run and is not shown here. DFA catches sequential structure, not just statistics — see `docs/examples/text.cmd` to reproduce.
+the repo ships a shuffled Austen sentence-length corpus (`data/austen_shuffled.txt`, α=0.573, moderate rhythm) and a mechanical/uniform one (`data/mechanical_text.txt`, α=0.525); it does not ship an unshuffled original, so the three-way "original vs shuffled vs mechanical" comparison from an earlier draft of this README could not be reproduced from a real run and is not shown here. DFA catches sequential structure, not just statistics — see `docs/examples/text.cmd` to reproduce.
 
 ## 🛰️ spacecraft telemetry anomaly detection & health monitoring
 

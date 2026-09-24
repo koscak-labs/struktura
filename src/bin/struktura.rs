@@ -758,7 +758,7 @@ fn cmd_voyager() {
     println!();
     println!("  \x1b[1mVOYAGER 1 STRUCTURAL HEALTH ANALYSIS\x1b[0m");
     println!("  DFA scaling analysis of magnetometer data across");
-    println!("  the May 2022 AACS anomaly (embedded data — works after cargo install)");
+    println!("  2021 vs 2022 (embedded data — works after cargo install)");
     println!("  ====================================================================");
     println!();
     println!("  Data: NASA SPDF, L.F. Burlaga, VIM 48-second averages");
@@ -769,7 +769,7 @@ fn cmd_voyager() {
     let bar_a = make_bar(result.anomaly_alpha);
 
     println!("  {} 2021 (healthy)    alpha={:.3}  R²={:.4}", bar_h, result.healthy_alpha, result.healthy_r2);
-    println!("  {} 2022 (anomaly)    alpha={:.3}  R²={:.4}", bar_a, result.anomaly_alpha, result.anomaly_r2);
+    println!("  {} 2022 (May-Jul)    alpha={:.3}  R²={:.4}", bar_a, result.anomaly_alpha, result.anomaly_r2);
 
     let v_str = match result.verdict {
         HealthVerdict::Healthy => "\x1b[32mHEALTHY\x1b[0m",
@@ -783,10 +783,12 @@ fn cmd_voyager() {
     println!();
     println!("  ====================================================================");
     println!("  Baseline alpha:  {:.3}  (2021 healthy operation)", result.healthy_alpha);
-    println!("  Anomaly alpha:   {:.3}  (May-Jul 2022 AACS anomaly)", result.anomaly_alpha);
+    println!("  2022 alpha:      {:.3}  (May-Jul 2022)", result.anomaly_alpha);
     println!();
-    println!("  The magnetic field's fractal structure changed during the anomaly —");
-    println!("  detectable from public NASA data, zero training, zero ML.");
+    println!("  Year-over-year comparison only. Pre-anomaly vs during-anomaly 2022");
+    println!("  shows no significant shift (p=0.52), and these slices give z=1.5:");
+    println!("  inconclusive. This is not a detection of the AACS anomaly.");
+    println!("  (the CRITICAL label is a fixed alpha threshold, not significance)");
     println!();
 }
 
@@ -822,11 +824,11 @@ fn cmd_heliopause() {
     println!();
     println!("  ====================================================================");
     println!("  Heliosphere:  alpha={:.3}  (sun's magnetic field — strong persistence)", result.helio_alpha);
-    println!("  Interstellar: alpha={:.3}  (galactic field — different structure)", result.interstellar_alpha);
+    println!("  Interstellar: alpha={:.3}  (after the crossing)", result.interstellar_alpha);
     println!();
-    println!("  The magnetic field's long-range correlation structure changed");
-    println!("  when Voyager crossed from solar wind into interstellar medium.");
-    println!("  The same DFA core that detects bearing faults.");
+    println!("  Alpha differs across the crossing, but the subsampling z on the");
+    println!("  bundled slices is 0.6: inconclusive. A longer pre/post window is");
+    println!("  the open test.");
     println!();
 }
 
