@@ -2,6 +2,24 @@
 
 All notable changes to Struktura are documented here.
 
+## v1.8.2 (2026-09-24) — claims corrections + CRLF text fix
+
+- Withdrawn: the IMS "323 samples early warning" claim from 1.8.1. The first
+  monitor alarm also fires when only the healthy rows (0-500) are fed, and the
+  confirmed fault (row 925) comes after a plain amplitude threshold (row 701).
+- Withdrawn: C-MAPSS detection rates. Healthy-prefix control alarmed on 35/36
+  engines.
+- `copilot-compare` prints rows only (first alarm, first confirmed fault, first
+  threshold trip, threshold definition), with no lead-time claim.
+- `ims`, `spacecraft`, `rover`, `voyager`, `heliopause` output reworded to match
+  docs/CLAIMS-AUDIT-2026-09-17.md: Voyager 2021 vs 2022 is year-over-year only
+  (pre vs during anomaly p=0.52, slices z=1.5); heliopause z=0.6, both
+  inconclusive. The rover demo is labelled simulated.
+- README "what it detects" table replaced by measured α on bundled data; only
+  the bearing row is a normal-vs-fault separation on real data.
+- Fix: `text` ignores `\r`, so CRLF and LF checkouts of the same file give the
+  same sentence lengths and α (Windows gave mean_len=125 vs 124).
+
 ## v1.8.1 (2026-09-18) — Copilot integration: copilot-compare + predictive monitoring pitch
 
 - New CLI command: `struktura copilot-compare <file.csv>` — side-by-side comparison

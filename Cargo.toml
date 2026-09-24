@@ -1,6 +1,6 @@
 [package]
 name = "struktura"
-version = "1.8.1"
+version = "1.8.2"
 edition = "2021"
 rust-version = "1.70"
 description = "Is your data broken? Pipe any CSV, get told what changed. Self-calibrating anomaly detection — zero config, no model training. Tested on NASA + ESA spacecraft telemetry."
