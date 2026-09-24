@@ -151,9 +151,14 @@ impl ParsedCsv {
         for ch in 0..self.ncols {
             let col: Vec<f64> = self.rows.iter().map(|r| r.get(ch).copied().unwrap_or(f64::NAN)).collect();
             let step = if n >= 3 { col[1] - col[0] } else { 0.0 };
+            // Tolerance: a millionth of the step, plus the float rounding of
+            // the values themselves (epoch seconds with a 0.1 s step differ
+            // by ~2e-7 from the exact step).
+            let magnitude = col.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+            let tol = 1e-6 * step.abs() + 8.0 * f64::EPSILON * magnitude;
             let evenly_rising = n >= 3
                 && step > 0.0
-                && col.windows(2).all(|w| ((w[1] - w[0]) - step).abs() <= 1e-9 * step.abs().max(1.0));
+                && col.windows(2).all(|w| ((w[1] - w[0]) - step).abs() <= tol);
             if evenly_rising && self.ncols > 1 {
                 dropped.push(self.ch_name(ch));
             } else {
