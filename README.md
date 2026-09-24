@@ -45,6 +45,29 @@ No model is trained: thresholds come from the signal's own first rows. The one e
 
 The step fails when a fault is detected and writes the report to the job summary. All inputs are in [action.yml](action.yml).
 
+## 🔬 What it catches that a limit check misses
+
+A limit check (alarm when a value leaves a band learned from healthy data) is the default in most monitoring. It is fast when a fault makes values bigger. It is blind when a fault changes how values follow each other while their spread stays the same, and it false-alarms on healthy signals that wander slowly.
+
+Same streams for all three detectors: 30 seeds, 2,000 samples, change at sample 1,000, calibration on the first 768 samples.
+
+| synthetic stream | struktura `guard` | DFA leg alone | limit check (1.5 × p95, 3 in a row) |
+|---|---|---|---|
+| correlation change, same variance (white → AR 0.9) | **30/30** caught, median 100 samples | 23/30, median 208 | 7/30, median 371 |
+| healthy slow wander (AR 0.95), false alarms | **0/30** | 0/30 | 15/30 |
+| healthy AR 0.7, false alarms | 0/30 | 0/30 | 4/30 |
+| amplitude grows (white → AR 0.9, std ×2.3) | 30/30, median 16 | 23/30 | 30/30, median 48 |
+| white noise → random walk | 30/30, median 13 | 28/30 | 30/30, median 17 |
+
+What this does and does not show:
+
+- It is synthetic data. It shows the kind of fault each method can see, not performance on a real system.
+- In the first row, `guard` mostly alarms on its residual-CUSUM leg (21 runs), then level shift (6) and DFA (3). DFA alone catches 23/30, more slowly.
+- With only 512 calibration samples, `guard`'s level-shift leg raises 3-6/30 false alarms on these clean streams. Calibrate on at least 768 samples.
+- Use a limit check and struktura together. They see different things.
+
+Reproduce with `cargo run --release --example structure_vs_amplitude` (0.4 s). The rows are checked in CI ([docs/claims.tsv](docs/claims.tsv)).
+
 ## 🎯 Who it is for
 
 You have a time series and no labelled faults to train on:
@@ -404,6 +427,7 @@ More in `examples/devops_integration.sh`.
 ## ⚠️ Limitations
 
 - **DFA sees structural shifts, not point anomalies.** A single spike barely moves α; pair DFA with a residual detector for spikes and outliers (`guard` already does).
+- **Short calibration raises false alarms.** With 512 calibration samples the level-shift leg raised 3-6/30 false alarms on clean synthetic streams; from 768 samples on it raised none (`CALIB=512 cargo run --release --example structure_vs_amplitude`).
 - **Preprocessing changes α.** A new filter upstream (notch, bandpass, artifact rejection) invalidates the baseline; recalibrate after any change ([#8](https://github.com/koscak-labs/struktura/issues/8)).
 - **α alone is not a decision.** The `HealthVerdict` thresholds (0.03 / 0.08 / 0.15) are defaults, not universal constants.
 - **F1 on SMAP/MSL is 0.655.** Supervised models do better. The case for this crate is no training, speed and embedded use.

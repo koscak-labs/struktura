@@ -2,7 +2,8 @@
 # scripts/check-claims.sh runs each row and fails if the output drifts.
 #
 # columns (tab-separated):
-#   id        short name; controls start with "control-"
+#   id        short name; controls start with "control-", known limitations
+#             with "limitation-" (they fail when the limitation is fixed)
 #   speed     fast (every push) or slow (weekly job, or --all)
 #   exit      expected exit code of the command
 #   command   run from the repo root; `struktura` is replaced by $STRUKTURA_BIN
@@ -17,4 +18,7 @@ guard-rover	fast	1	struktura guard examples/rover.csv --baseline 1000	fault conf
 control-sylv-healthy	fast	0	head -499 data/sylv_spike.csv | struktura guard - --baseline 333	no anomalies
 control-rover-healthy	fast	0	head -1601 examples/rover.csv | struktura guard - --baseline 1000	no anomalies
 control-monitor-clean	fast	0	struktura monitor-perf	Alarms on clean stream:            0
+structure-vs-amp-matched	fast	0	cargo run -q --release --example structure_vs_amplitude	| white -> AR(0.9), variance-matched | 23/30, 0 early, median 208 | 30/30, 0 early, median 100 | 7/30, 0 early, median 371 |
+control-structure-vs-amp-clean	fast	0	cargo run -q --release --example structure_vs_amplitude	| white | 0/30 | 0/30 | 0/30 | && | AR(0.7) | 0/30 | 0/30 | 4/30 | && | AR(0.95) | 0/30 | 0/30 | 15/30 |
+limitation-short-calibration	fast	0	CALIB=512 cargo run -q --release --example structure_vs_amplitude	clean AR(0.95): LevelShift 6
 evolve-coverage	slow	0	struktura evolve	71.0% && 97.0% && 71.0% (gen 1) -> 92.0% (gen 10)
