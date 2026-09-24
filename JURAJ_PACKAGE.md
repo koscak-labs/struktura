@@ -1,3 +1,5 @@
+> **Superseded draft, do not cite.** Written before the 2026-09-17 claims audit and the 1.8.2 corrections. Several numbers here were withdrawn (SMAP F1 0.788, ESA-ADB "100% recall", the Voyager AACS "detection", heliopause "detection", IMS "early warning"). Current, CI-checked numbers: README.md and docs/claims.tsv; what was withdrawn and why: docs/CLAIMS-AUDIT-2026-09-17.md and CHANGELOG.md.
+
 # struktura — DFA Anomaly Detection for Satellite Telemetry
 ## Research Package for Dr. Juraj Koščák
 

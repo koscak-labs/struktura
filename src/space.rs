@@ -2,12 +2,13 @@
 //!
 //! Real-time anomaly detection for telemetry channels: reaction wheels,
 //! magnetometers, thermal sensors, battery voltage, solar array current.
-//! Detects structural degradation before threshold-based monitors trigger.
+//! Tracks structural (DFA α) changes alongside threshold-based monitors.
 //!
 //! ```
 //! use struktura::space::{SpacecraftMonitor, voyager_demo};
 //! let result = voyager_demo();
-//! assert!(result.anomaly_detected);
+//! // 2021 vs 2022 magnetometer slices: alpha differs, but z = 1.5 (inconclusive).
+//! assert!(result.shift < 0.0);
 //! ```
 
 #[cfg(not(feature = "std"))]
@@ -199,10 +200,12 @@ impl fmt::Display for VoyagerDemoResult {
 
 /// Run DFA on real Voyager 1 magnetometer data.
 ///
-/// Compares 2021 (healthy) vs May-Jul 2022 (AACS anomaly period).
-/// The anomaly was a real spacecraft failure: Voyager 1's attitude
-/// articulation and control system sent garbled telemetry for months.
-/// DFA detects the structural shift in magnetometer readings.
+/// Compares 2021 vs May-Jul 2022 magnetometer slices. The 2022 window
+/// overlaps Voyager 1's AACS anomaly, but this is a year-over-year
+/// comparison: the anomaly window vs the months just before it shows no
+/// significant α shift (p = 0.52), and these slices give z = 1.5.
+/// `anomaly_detected` is the fixed-threshold `HealthVerdict`, not a
+/// significance test (docs/CLAIMS-AUDIT-2026-09-17.md).
 pub fn voyager_demo() -> VoyagerDemoResult {
     let healthy: Vec<f64> = include_str!("../data/voyager1_healthy_4k.csv")
         .lines().filter_map(|l| l.trim().parse().ok()).collect();
@@ -477,9 +480,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn voyager_detects_anomaly() {
+    fn voyager_year_over_year_shift_is_measurable() {
+        // Pins the bundled 2021 vs 2022 slices; not evidence of detecting
+        // the AACS anomaly (see voyager_demo docs).
         let result = voyager_demo();
-        assert!(result.anomaly_detected, "DFA should detect the 2022 AACS anomaly");
+        assert!(result.anomaly_detected, "fixed-threshold verdict on the bundled slices");
         assert!(result.healthy_r2 > 0.9, "healthy R² should be high");
         assert!(result.anomaly_r2 > 0.9, "anomaly R² should be high");
         assert!(result.shift.abs() > 0.03, "shift should be measurable: {}", result.shift);

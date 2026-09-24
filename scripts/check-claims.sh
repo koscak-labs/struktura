@@ -57,9 +57,29 @@ withdrawn=(
   "323 samples"
   "early warning"
   "before failure"
-  "detectable from public NASA data"
+  "detectable from public nasa data"
   "81-100%"
+  "predict failure"
+  "before it happens"
+  "85x faster"
+  "dfa detected it"
+  "threshold monitors would not have"
 )
+# Lines containing one of these markers are exempt: they quote someone else's
+# work (e.g. a cited paper title), not a struktura claim. Lowercase.
+allowed=(
+  "mdpi.com/2076-3417/10/23/8489"
+)
+# Phrases are matched against lowercased text, so they must be lowercase.
+for w in "${withdrawn[@]}"; do
+  [[ "$w" == "$(LC_ALL=C tr 'A-Z' 'a-z' <<<"$w")" ]] || { echo "ERROR withdrawn phrase not lowercase: $w"; fail=1; }
+done
+# Everything a reader or a package index shows.
+scanned() {
+  find README.md REPRODUCIBILITY.md USE_CASES.md llms.txt Cargo.toml src docs/src examples \
+    ogma-template assets/terminal-demo.svg -type f \
+    \( -name '*.md' -o -name '*.rs' -o -name '*.toml' -o -name '*.py' -o -name '*.txt' -o -name '*.svg' \)
+}
 # Match on lowercased text with plain `grep -F`: `grep -i` aborts in Git Bash
 # on this input (even with LC_ALL=C), and a grep that dies silently would let
 # every withdrawn claim through. The phrases are lowercase ASCII.
@@ -69,17 +89,19 @@ lower() { LC_ALL=C tr 'A-Z' 'a-z'; }
 work="$(mktemp -d)"
 printf '%s' "$all_out" | lower > "$work/output"
 while IFS= read -r file; do
-  mkdir -p "$work/$(dirname "$file")"
-  lower < "$file" > "$work/$file"
-done < <(find README.md src -type f)
+  mkdir -p "$work/files/$(dirname "$file")"
+  lower < "$file" > "$work/files/$file"
+done < <(scanned)
 for w in "${withdrawn[@]}"; do
   hits=""
-  while IFS= read -r file; do
-    LC_ALL=C grep -nF -- "$w" "$work/$file" > "$work/hit"
-    s=$?
-    if (( s >= 2 )); then fail=1; echo "ERROR grep exited $s on $file"; fi
-    (( s == 0 )) && hits+="$file: $(cut -c1-120 "$work/hit")"$'\n'
-  done < <(find README.md src -type f)
+  # One recursive grep per phrase over the lowercased copies.
+  LC_ALL=C grep -rnF -- "$w" "$work/files" > "$work/hit"
+  s=$?
+  if (( s >= 2 )); then fail=1; echo "ERROR grep exited $s on the scanned files"; fi
+  for a in "${allowed[@]}"; do
+    LC_ALL=C grep -vF -- "$a" "$work/hit" > "$work/hit2"; mv "$work/hit2" "$work/hit"
+  done
+  [[ -s "$work/hit" ]] && hits+="$(sed "s|^$work/files/||" "$work/hit" | cut -c1-140)"$'\n'
   LC_ALL=C grep -qF -- "$w" "$work/output"
   s=$?
   if (( s >= 2 )); then fail=1; echo "ERROR grep exited $s on command output"; fi

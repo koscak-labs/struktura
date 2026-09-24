@@ -102,7 +102,7 @@ fn bench_threshold(healthy: &[f64], faulty: &[f64], sigma: f64) -> DetectionResu
 
 fn print_table(dataset: &str, results: &[DetectionResult]) {
     println!("\n## {dataset}");
-    println!("| Method | Detected | Early warning | Latency | FP rate |");
+    println!("| Method | Detected | First alarm | Latency | FP rate |");
     println!("|--------|----------|---------------|---------|---------|");
     for r in results {
         let ew = match r.early_warning_samples {

@@ -1,6 +1,6 @@
 [book]
 title = "Struktura"
-description = "Predict failure before it happens"
+description = "Time-series anomaly detection with no training data"
 authors = ["Koscak Labs"]
 language = "en"
 

@@ -16,9 +16,9 @@ All benchmarks use deterministic seeds — outputs reproduce exactly.
 | Streaming HybridMonitor: 7/7 fault taxonomy at 100% each (missingness leg included), 0 false alarms on 200K clean samples | `struktura monitor-perf` | fault table + alarms line |
 | Fault-class identification 97.1% from alarm provenance | `struktura monitor-perf` | class-ID table |
 | Per-sample cost: P50 ~0.7µs / P99 ~7µs / P99.9 ~11µs (host-dependent) | `struktura monitor-perf` | timing lines |
-| IMS bearing run-to-failure: structural warning ~2h before failure (DFA: α spikes rec 970→984). Full HybridMonitor on raw IMS data may alarm earlier — requires dataset in data/ims/ | `struktura ims` (embedded) or `struktura monitor-real` (full data) | IMS section |
+| IMS bearing run-to-failure: first alarm at recording 970 of 984 (α rises from ~0.17). A plain RMS amplitude threshold trips earlier on the same bearing, so this is not an early-warning result | `struktura ims` (embedded) or `struktura monitor-real` (full data) | IMS section |
 | Prognosis: no-trend at 50% of life (correct), −66 recs at 75%, +91 at 90% (healing plateau) | `struktura monitor-real` | prognosis table |
-| Voyager heliopause: honest no-alarm at streaming resolution (with trend-safe legs); whole-segment analysis detects it | `struktura monitor-real` + `struktura heliopause` | Voyager sections |
+| Voyager heliopause: no alarm at streaming resolution (with trend-safe legs); whole-segment α shift 1.137 → 1.056 has z = 0.6, inconclusive | `struktura monitor-real` + `struktura heliopause` | Voyager sections |
 | Generated C99 flight monitor compiles `-Wall -Werror` clean; embedded self-test detects stuck at t=405 | `struktura generate-hybrid -o hybrid_monitor.c` then `gcc -std=c99 -Wall -Werror -O2 -DHYBRID_STANDALONE_TEST -o hybrid hybrid_monitor.c -lm && ./hybrid` | SELFTEST PASS |
 | Prefix-sum DFA ≡ reference DFA to 1e-9 over 1000 windows | `cargo test --release dfa_fast_matches` | test passes |
 | Analytic α-scatter lower bound holds; measured inflation 1.3–4x | `cargo test --release analytic_alpha` | test passes |

@@ -24,14 +24,14 @@ DFA parameters (window size, threshold, learning period, R² gate) come through 
 
 ## Quick validation — Voyager 1
 
-Ran DFA on public Voyager 1 magnetometer data (NASA SPDF, 48-second averages). Picks up the 2022 AACS anomaly period:
+Ran DFA on public Voyager 1 magnetometer data (NASA SPDF, 48-second averages), 2021 vs May-Jul 2022:
 
 | Period | DFA α | R² |
 |--------|-------|----|
-| 2021 healthy | 0.875 | 0.9999 |
-| May-Jul 2022 (anomaly) | 0.827 | 0.9996 |
+| 2021 | 0.989 | 0.987 |
+| May-Jul 2022 | 0.801 | 0.968 |
 
-Shift = -0.048, fully reproducible: `cargo install struktura && struktura voyager`
+Reproducible with `cargo install struktura && struktura voyager`. This is a year-over-year comparison and it is inconclusive (z = 1.5); it is not a detection of the 2022 AACS anomaly (anomaly window vs the months before it: p = 0.52).
 
 ## Also — spotted a couple things
 

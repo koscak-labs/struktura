@@ -1,29 +1,16 @@
-# Cross-Domain Proof
+# Cross-Domain Results
 
-The same algorithm works on completely different signal types.
+The same DFA runs on very different signals. These are α values measured on bundled data; only the bearing pair is a normal-vs-fault comparison.
 
-| Domain | Signal | N | DFA alpha | R-squared |
-|--------|--------|---|-----------|-----------|
-| Spacecraft | Queue depth | 500 | 0.593 | 0.789 |
-| Bearings | CWRU 12kHz vibration | 243,938 | 0.389 | 0.872 |
-| Genome | Human chr1 GC% | 8,000 | 0.909 | 0.991 |
-| Cardiac | RR intervals | 2,048 | 0.695 | 0.985 |
-
-## Genome: 8 chromosomes at R-squared > 0.99
-
-| Chromosome | DFA alpha | R-squared |
-|-----------|-----------|-----------|
-| chr1 | 0.909 | 0.991 |
-| chr2 | 0.699 | 0.991 |
-| chr3 | 0.659 | 0.998 |
-| chr4 | 0.894 | 0.997 |
-| chr5 | 0.824 | 0.994 |
-| chr6 | 0.822 | 0.998 |
-| chr7 | 0.862 | 0.997 |
-| chr8 | 0.816 | 0.995 |
+| Domain | Signal | DFA α | R² |
+|--------|--------|-------|----|
+| Bearings | CWRU 12 kHz vibration, normal | 0.689 | |
+| Bearings | CWRU 12 kHz vibration, inner-race fault | 0.183 | |
+| Genome | Human chr1 GC% | 0.909 | 0.991 |
+| Cardiac | HRV RR intervals, synthetic by default (`examples/cardiac_hrv.rs`) | 0.695 | 0.985 |
 
 ## Shuffle control
 
-To prove the structure is real and not an artifact, we permute each signal and re-run DFA. If shuffling destroys the alpha (moves it toward 0.5), the original structure was real.
+To check that a measured structure is real and not an artifact, permute the signal and run DFA again. If shuffling moves α toward 0.5, the order of the values carried the structure. `struktura prove <file>` runs this test with a bootstrap interval on α.
 
-This is the empirical standard: the crate never claims structure it cannot prove.
+The full list of checked numbers, with commands and controls, is [docs/claims.tsv](https://github.com/koscak-labs/struktura/blob/master/docs/claims.tsv).

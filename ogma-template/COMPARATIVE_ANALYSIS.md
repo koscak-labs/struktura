@@ -32,12 +32,12 @@ Every reasonable amplitude threshold either doesn't fire on the fault OR fires o
 
 ## Voyager 1 comparison
 
-| Period | DFA α | R² | Threshold breached? |
-|--------|-------|----|---------------------|
-| 2021 healthy | 0.989 | 0.987 | NO |
-| May-Jul 2022 (AACS anomaly) | 0.801 | 0.968 | NO — magnetometer values stayed in range |
+| Period | DFA α | R² |
+|--------|-------|----|
+| 2021 | 0.989 | 0.987 |
+| May-Jul 2022 | 0.801 | 0.968 |
 
-The Voyager 1 AACS anomaly did not produce out-of-range magnetometer readings. It changed the field's fractal structure. DFA detected it; threshold monitors would not have.
+This is a year-over-year comparison, not a detection of the 2022 AACS anomaly. Comparing the 2022 anomaly window with the months just before it shows no significant α shift (p = 0.52), and struktura's own subsampling test gives z = 1.5 for the slices above: inconclusive. See docs/CLAIMS-AUDIT-2026-09-17.md.
 
 ## The integration path
 

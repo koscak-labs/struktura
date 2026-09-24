@@ -63,7 +63,7 @@ fn quality_str(q: LawQuality) -> &'static str {
 fn main() {
     println!("================================================================");
     println!("  STRUKTURA BENCHMARK");
-    println!("  Predict failure before it happens.");
+    println!("  DFA on synthetic signals matched to the cross-domain results.");
     println!("================================================================\n");
 
     // Generate synthetic signals that match our verified cross-domain results
