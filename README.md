@@ -230,7 +230,7 @@ let mut rwa = SpacecraftMonitor::new(Subsystem::ReactionWheel, "RWA_current");
 
 `dfa_into()` writes into a caller-supplied buffer, and `dfa_scratch(&[f64], &mut [f64])` does not allocate.
 
-**On a microcontroller (emulated).** The C99 monitor from `struktura generate-hybrid` was built bare-metal for an ARM Cortex-M3 (no FPU) and run in QEMU (`mps2-an385`). On a 3,000-sample, 6-channel stream with a stuck sensor injected at sample 1,500, it alarms at sample 1,504 on the stuck-value leg, the same sample and leg as the Rust monitor and as the same C built for x86, and identically on repeated runs. It uses 7,120 bytes of flash and 9,520 bytes of RAM, with no heap (`malloc`/`free` absent; links with `-nostdlib`). What is not shown yet: it has not run on physical hardware; cycle counts are not measured (QEMU does not model them); `-O2` currently faults in this bare-metal setup, so the ARM numbers use `-O1`; and the C covers 5 of the Rust monitor's 7 legs (no missingness or parity). Reproduce with [bench/flight/run.sh](bench/flight/) in WSL/Linux.
+**On a microcontroller (emulated).** The C99 monitor from `struktura generate-hybrid` was built bare-metal for an ARM Cortex-M3 (no FPU) and run in QEMU (`mps2-an385`). On a 3,000-sample, 6-channel stream with a stuck sensor injected at sample 1,500, it alarms at sample 1,504 on the stuck-value leg, the same sample and leg as the Rust monitor and as the same C built for x86, and identically on repeated runs. It uses 7,120 bytes of flash and 9,520 bytes of RAM, with no heap (`malloc`/`free` absent; links with `-nostdlib`). What is not shown yet: it has not run on physical hardware; cycle counts are not measured (QEMU does not model them); `-O2` currently faults in this bare-metal setup, so the ARM numbers use `-O1`; and the C covers 5 of the Rust monitor's 7 legs (no missingness or parity). **Known bug (1.8.4):** the generated C computes DFA with box sizes 16..23, while the Rust calibration it is scored against uses 16..24, so the C DFA leg's α differs from Rust's by 0.1-0.2 on average (worst seen 0.85). The equivalence above is on the stuck-value leg and does not cover DFA; the fix is in progress. Reproduce with [bench/flight/run.sh](bench/flight/) in WSL/Linux.
 
 ## 📊 Measured α on bundled data
 
@@ -435,8 +435,8 @@ The run is deterministic (seeded; two runs gave byte-identical output) and takes
 # docker
 docker build -t struktura . && docker run -v ./data:/data struktura guard /data/sensor.csv
 
-# python bindings (crates/struktura-py; not on PyPI yet, build from source)
-cd crates/struktura-py && pip install maturin && maturin develop --release
+# python (wheels for Linux, macOS, Windows; PyPI coming)
+pip install struktura --find-links https://github.com/koscak-labs/struktura/releases/expanded_assets/py-v1.8.4
 python -c "import struktura, random; print(struktura.dfa_short([random.random() for _ in range(70)]).alpha)"
 
 # stream anything through DFA

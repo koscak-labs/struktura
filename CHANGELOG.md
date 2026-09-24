@@ -2,7 +2,14 @@
 
 All notable changes to Struktura are documented here.
 
-## Unreleased
+## v1.8.4 (2026-09-24): dfa_short, fair NAB comparison, head-to-head bench, claims cleanup
+
+- Known bug, not fixed in this release: `generate-hybrid` emits DFA box sizes
+  16..23 while the Rust calibration uses 16..24 at the 96-sample window, so the
+  generated C's DFA α differs from Rust by 0.1-0.2 on average. Found by a
+  differential test; fix in progress for 1.8.5.
+- Python wheels (Linux, macOS, Windows) as GitHub release `py-v1.8.4`:
+  `pip install struktura --find-links https://github.com/koscak-labs/struktura/releases/expanded_assets/py-v1.8.4`.
 
 - Real-data evaluation: `examples/nab_eval.rs` runs `guard` and a limit check
   on the 58 labelled NAB series. Alarms are counted in episodes (alarms less
