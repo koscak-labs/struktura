@@ -3,6 +3,18 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// The seed for a differential test: `STRUKTURA_DIFF_SEED` when set (the
+/// scheduled job passes the date), otherwise `default`. Printed so a failing
+/// run can be replayed with the same value.
+pub fn diff_seed(test: &str, default: u64) -> u64 {
+    let seed = std::env::var("STRUKTURA_DIFF_SEED")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default);
+    println!("{test}: STRUKTURA_DIFF_SEED={seed}");
+    seed
+}
+
 /// xorshift64*, so the inputs are the same on every platform.
 pub struct Rng(pub u64);
 

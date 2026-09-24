@@ -14,7 +14,7 @@
 
 mod common;
 
-use common::{c_compiler, compile_and_run, scratch, Rng};
+use common::{c_compiler, compile_and_run, diff_seed, scratch, Rng};
 use std::fs;
 use struktura::codegen::{generate_c_monitor, generate_cfs_app};
 
@@ -49,7 +49,8 @@ fn check_c_monitor(cc: &str, window: usize) {
     )
     .unwrap();
 
-    let x = series(0x5EED_0F5A_B1E5 + window as u64, 3 * window + window / 2);
+    let seed = diff_seed("c_monitor_matches_rust", 0x5EED_0F5A_B1E5);
+    let x = series(seed + window as u64, 3 * window + window / 2);
     let input: Vec<String> = x.iter().map(|v| format!("{v:.17e}")).collect();
     let out = compile_and_run(cc, &dir, "harness.c", &(input.join("\n") + "\n"));
     let c: Vec<f64> = out.lines().map(|l| l.trim().parse().unwrap()).collect();
@@ -137,7 +138,7 @@ fn cfs_app_passes_the_window_in_time_order() {
     )
     .unwrap();
 
-    let x = series(0xCF5, 3 * window + 17);
+    let x = series(diff_seed("cfs_app_time_order", 0xCF5), 3 * window + 17);
     let input: Vec<String> = x.iter().map(|v| format!("{v:.17e}")).collect();
     let out = compile_and_run(&cc, &dir, "harness.c", &(input.join("\n") + "\n"));
     let calls: Vec<Vec<f64>> = out
