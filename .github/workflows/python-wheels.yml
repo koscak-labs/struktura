@@ -36,7 +36,9 @@ jobs:
         include:
           - { os: ubuntu-latest, target: x86_64, smoke: true }
           - { os: ubuntu-latest, target: aarch64, smoke: false }
-          - { os: macos-13, target: x86_64, smoke: true }
+          # Intel macOS wheel cross-built on Apple Silicon: macos-13 (Intel)
+          # runners are being retired and jobs sat queued there indefinitely.
+          - { os: macos-14, target: x86_64, smoke: false }
           - { os: macos-14, target: aarch64, smoke: true }
           - { os: windows-latest, target: x64, smoke: true }
     steps:
