@@ -305,8 +305,10 @@ pub fn generate_hybrid_c(export: &crate::monitor::MonitorExport) -> String {
     s.push_str(" * Compile: gcc -std=c99 -Wall -Werror -O2 -o hybrid hybrid_monitor.c -lm\n");
     s.push_str(" */\n#include <math.h>\n#include <string.h>\n\n");
     s.push_str(&format!("#define HYB_CHANNELS   {}\n", nch));
-    s.push_str("#define HYB_WINDOW     96\n#define HYB_ROLL       96\n");
-    s.push_str("#define HYB_DFA_STRIDE 2\n");
+    // Taken from the Rust monitor so the C stays in step with its calibration.
+    s.push_str(&format!("#define HYB_WINDOW     {}\n", crate::monitor::WINDOW));
+    s.push_str(&format!("#define HYB_ROLL       {}\n", crate::monitor::ROLL));
+    s.push_str(&format!("#define HYB_DFA_STRIDE {}\n", crate::monitor::DFA_STRIDE));
     s.push_str(&format!("#define HYB_RES_THR    {:.17e}\n", export.res_thr));
     s.push_str(&format!("#define HYB_DFA_THR    {:.17e}\n", export.dfa_thr));
     s.push_str(&format!("#define HYB_CUSUM_THR  {:.17e}\n", export.cusum_thr));
@@ -339,13 +341,20 @@ pub fn generate_hybrid_c(export: &crate::monitor::MonitorExport) -> String {
     s.push_str("    for (c = 0; c < HYB_CHANNELS; c++) {\n");
     s.push_str("        m->ch[c].run = 1;\n");
     s.push_str("        m->ch[c].res_hit_prev = (unsigned long)-1;\n    }\n}\n\n");
+    // The box sizes the Rust DFA uses for a window of HYB_WINDOW samples, so the
+    // C alpha is on the same scale as the calibrated alpha_mean and alpha_sd.
+    let (sizes, count) = crate::dfa_box_sizes(crate::monitor::WINDOW);
+    let boxes: Vec<String> = sizes[..count].iter().map(|b| b.to_string()).collect();
     s.push_str("static double hyb_dfa_alpha(const double *v, int n) {\n");
-    s.push_str("    static const int BOXES[8] = {16, 17, 18, 19, 20, 21, 22, 23};\n");
+    s.push_str(&format!(
+        "    static const int BOXES[{count}] = {{{}}};\n",
+        boxes.join(", ")
+    ));
     s.push_str("    double mean = 0.0, cum = 0.0;\n    double y[HYB_WINDOW];\n");
-    s.push_str("    double log_s[8], log_f[8];\n    int i, b, pts = 0;\n");
+    s.push_str(&format!("    double log_s[{count}], log_f[{count}];\n    int i, b, pts = 0;\n"));
     s.push_str("    for (i = 0; i < n; i++) mean += v[i];\n    mean /= (double)n;\n");
     s.push_str("    for (i = 0; i < n; i++) { cum += v[i] - mean; y[i] = cum; }\n");
-    s.push_str("    for (b = 0; b < 8; b++) {\n        int s = BOXES[b];\n");
+    s.push_str(&format!("    for (b = 0; b < {count}; b++) {{\n        int s = BOXES[b];\n"));
     s.push_str("        int num_segs = n / s;\n        double k = (double)s;\n");
     s.push_str("        double sx = k * (k - 1.0) / 2.0;\n");
     s.push_str("        double sx2 = k * (k - 1.0) * (2.0 * k - 1.0) / 6.0;\n");
