@@ -37,8 +37,8 @@ runs:
   steps:
     # Order: a binary built in this checkout (uses: ./), then the prebuilt
     # GitHub release binary for the pinned version, then cargo install.
-    # The release binaries have no published checksums yet; the download
-    # is over HTTPS from this repository's own release of that exact version.
+    # From 1.8.5 each release publishes SHA256SUMS and the download is
+    # verified against it; older releases have none (a notice says so).
     - name: Resolve struktura binary
       id: resolve
       shell: bash
@@ -61,6 +61,20 @@ runs:
         dir="$RUNNER_TEMP/struktura-bin"; mkdir -p "$dir"
         url="https://github.com/koscak-labs/struktura/releases/download/v${VERSION}/${asset}"
         if [ -n "$asset" ] && curl -fsSL --retry 3 -o "$dir/$exe" "$url"; then
+          sums="https://github.com/koscak-labs/struktura/releases/download/v${VERSION}/SHA256SUMS"
+          if curl -fsSL --retry 3 -o "$dir/SHA256SUMS" "$sums"; then
+            # "hash  name" (text mode) or "hash *name" (binary mode)
+            want=$(awk -v a="$asset" '{ n = $2; sub(/^\*/, "", n); if (n == a) print $1 }' "$dir/SHA256SUMS")
+            if command -v sha256sum >/dev/null; then got=$(sha256sum "$dir/$exe" | cut -d' ' -f1)
+            else got=$(shasum -a 256 "$dir/$exe" | cut -d' ' -f1); fi
+            if [ -z "$want" ] || [ "$want" != "$got" ]; then
+              echo "::error::sha256 mismatch for ${asset}: expected ${want:-<not listed>}, got ${got}"
+              exit 1
+            fi
+            echo "struktura ${VERSION}: sha256 verified"
+          else
+            echo "::notice::v${VERSION} has no SHA256SUMS (released before 1.8.5); the binary is not checksum-verified"
+          fi
           chmod +x "$dir/$exe"
           echo "$dir" >> "$GITHUB_PATH"
           echo "source=release" >> "$GITHUB_OUTPUT"

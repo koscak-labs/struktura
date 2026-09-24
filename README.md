@@ -358,6 +358,8 @@ struktura generate --ros    --db channels.json -o dfa_ros_node/
 
 `channels.json` uses the [nasa/ogma](https://github.com/nasa/ogma) variable database format.
 
+**Known bugs (1.8.4, fixes planned for 1.8.5):** generated DFA does not yet match the Rust library. `struktura codegen` (standalone C monitor) and `generate --cfs` compute α on their ring buffer in storage order instead of time order once it has wrapped (α off by up to 0.6-0.75 on random-walk and ramp signals, the scale of the alarm bands); `struktura codegen` and `generate-hybrid` also use different DFA box sizes from Rust. `generate --fprime` and `generate --rover` are not affected (they call the Rust library or have no DFA leg). Found by differential tests against the Rust reference; do not rely on generated DFA thresholds until 1.8.5.
+
 ## 🧠 How DFA works (Hurst exponent in Rust)
 
 DFA (Peng et al., Physical Review E, 1994) measures long-range correlation:
