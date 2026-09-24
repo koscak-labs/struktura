@@ -2,6 +2,22 @@
 
 All notable changes to Struktura are documented here.
 
+## Unreleased
+
+- Real-data evaluation: `examples/nab_eval.rs` runs `guard` and a limit check
+  on the 58 labelled NAB series. guard: 37/116 windows, 50 false alarms
+  (0.17 per 1,000 samples); limit check: 52/116, 420 (1.40).
+- New opt-in `MonitorConfig::quiet_drift` / `guard --quiet-drift`: the drift
+  (residual-CUSUM) leg clips residuals at 4 sigma and rescales residuals that
+  are autocorrelated in calibration. NAB: 50 -> 39 false alarms, 37 -> 36
+  windows. Default behaviour is unchanged (all fixtures and claims identical).
+- `guard` prints a note when calibration is under 768 rows.
+- Browser playground runs the real monitor via WebAssembly.
+- New example `structure_vs_amplitude`: guard vs a limit check on synthetic
+  correlation changes, with controls.
+- Claims ledger: controls now assert how many samples were monitored, so a
+  control that monitors nothing cannot pass; weekly run includes NAB.
+
 ## v1.8.3 (2026-09-24): claims ledger, README rewrite, output cleanup
 
 - New: `docs/claims.tsv` lists every public number with its command, plus

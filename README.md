@@ -71,6 +71,23 @@ What this does and does not show:
 
 Reproduce with `cargo run --release --example structure_vs_amplitude` (0.4 s), or step through the seeds in the [browser playground](https://koscak-labs.github.io/struktura/playground/). The rows are checked in CI ([docs/claims.tsv](docs/claims.tsv)).
 
+## 📈 On real data: the Numenta Anomaly Benchmark
+
+[NAB](https://github.com/numenta/NAB) has 58 real, labelled series: AWS CloudWatch metrics, server CPU and disk, machine temperatures, traffic, ad clicks, tweet volume. The same limit check runs on the same series. Calibration is the first 15% of each series, at least 768 rows.
+
+| 58 series, 116 labelled anomaly windows | `guard` | `guard --quiet-drift` | limit check |
+|---|---|---|---|
+| windows caught | 37 (32%) | 36 (31%) | 52 (45%) |
+| false alarms | 50 | **39** | 420 |
+| false alarms per 1,000 samples | 0.17 | **0.13** | 1.40 |
+| clean control series (no anomalies) | 0 | 0 | 0 |
+
+On real data `guard` is about 8x quieter than a limit check and catches fewer labelled windows. That trade suits paging a person, where false alarms are what gets a monitor switched off; if you need to catch every window, a limit check or a tuned model catches more.
+
+Most remaining false alarms come from the drift (residual-CUSUM) leg on daily cycles and on flat metrics with occasional spikes. `--quiet-drift` clips each residual the drift leg sees and rescales residuals that are autocorrelated in calibration. Its cost: a spike that only the drift leg caught is found later or not at all (on `data/sylv_spike.csv` the row-500 alarm disappears). It is off by default; the setting was chosen from four variants tried on this same benchmark, so treat the 39 as optimistic.
+
+Reproduce: clone NAB (commit `ea702d7`) and run `NAB_DIR=path/to/NAB cargo run --release --example nab_eval` (add `QUIET=1` for quiet mode). These rows are re-run weekly in CI.
+
 ## 🎯 Who it is for
 
 You have a time series and no labelled faults to train on:
@@ -430,6 +447,7 @@ More in `examples/devops_integration.sh`.
 ## ⚠️ Limitations
 
 - **DFA sees structural shifts, not point anomalies.** A single spike barely moves α; pair DFA with a residual detector for spikes and outliers (`guard` already does).
+- **Daily cycles and flat, spiky metrics cause most false alarms on real data** (NAB). `--quiet-drift` removes about a fifth of them at the cost of slower spike detection by the drift leg. There is no seasonal model yet: an attempt to learn daily shapes from the calibration window made NAB results worse and was not shipped.
 - **Short calibration raises false alarms.** With 512 calibration samples the level-shift leg raised 3-6/30 false alarms on clean synthetic streams; from 768 samples on it raised none (`CALIB=512 cargo run --release --example structure_vs_amplitude`).
 - **Preprocessing changes α.** A new filter upstream (notch, bandpass, artifact rejection) invalidates the baseline; recalibrate after any change ([#8](https://github.com/koscak-labs/struktura/issues/8)).
 - **α alone is not a decision.** The `HealthVerdict` thresholds (0.03 / 0.08 / 0.15) are defaults, not universal constants.

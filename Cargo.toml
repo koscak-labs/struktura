@@ -11,7 +11,7 @@ homepage = "https://koscak-labs.github.io/struktura"
 keywords = ["anomaly-detection", "time-series", "hurst", "telemetry", "changepoint"]
 categories = ["science", "algorithms", "no-std", "aerospace", "embedded"]
 readme = "README.md"
-exclude = ["data/genome/", "data/heliopause/", "data/ims/", "data/ims_2nd_*", "data/ims_monitor_*", "data/ims/extracted/", "data/smap_msl/", "data/austen_shuffled.txt", "data/voyager1_2021_healthy.csv", "data/bench_*", "data/_bench_*", "data/sylv_*", "data/esa-adb/", "docs/", "test-ogma-*", "node_modules/", "*.dat", "*.zip", "assets/", "social-preview.*", "PROMOTION_*", "PROMO_*", "DRAFT_*", "ogma-template/", "examples/rover.csv", "PAPER_DRAFT.md", "esa-adb/", "DFA_DISCOVERIES.md", "RIEMANN_FINDING.md"]
+exclude = ["data/genome/", "data/heliopause/", "data/ims/", "data/ims_2nd_*", "data/ims_monitor_*", "data/ims/extracted/", "data/smap_msl/", "data/austen_shuffled.txt", "data/voyager1_2021_healthy.csv", "data/bench_*", "data/_bench_*", "data/sylv_*", "data/esa-adb/", "docs/", "test-ogma-*", "node_modules/", "*.dat", "*.zip", "assets/", "social-preview.*", "PROMOTION_*", "PROMO_*", "DRAFT_*", "ogma-template/", "examples/rover.csv", "PAPER_DRAFT.md", "esa-adb/", "playground/", "DFA_DISCOVERIES.md", "RIEMANN_FINDING.md"]
 
 [features]
 default = ["std"]

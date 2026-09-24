@@ -3586,17 +3586,21 @@ fn cmd_guard(args: &[String]) {
     let mut watch = false;
     let mut watch_ms = 1000u64;
     let mut webhook_url = String::new();
+    let mut quiet = false;
     let mut i = 2;
     while i < args.len() {
         match args[i].as_str() {
             "--baseline" if i + 1 < args.len() => { baseline_n = args[i + 1].parse().unwrap_or(0); i += 2; }
             "--json" => { json = true; i += 1; }
+            "--quiet-drift" => { quiet = true; i += 1; }
             "--watch" | "-w" => { watch = true; i += 1; }
             "--interval" if i + 1 < args.len() => { watch_ms = args[i + 1].parse().unwrap_or(1000); i += 2; }
             "--webhook" if i + 1 < args.len() => { webhook_url = args[i + 1].clone(); i += 2; }
             "--help" | "-h" => {
-                println!("struktura guard <file.csv> [--baseline N] [--json] [--watch] [--webhook URL]");
+                println!("struktura guard <file.csv> [--baseline N] [--json] [--watch] [--webhook URL] [--quiet-drift]");
                 println!("  Monitor any CSV for anomalies. Exit: 0=healthy 1=fault 2=error");
+                println!("  --quiet-drift  Fewer false alarms on real ops data (NAB: 50 -> 39, 37 -> 36 windows);");
+                println!("                 a spike only the drift leg would catch is found later or not at all");
                 println!("  --watch        Follow the file (like tail -f), monitor new rows live");
                 println!("  --interval MS  Poll interval for --watch (default 1000ms)");
                 println!("  --webhook URL  POST anomaly alerts to a Slack/Discord/PagerDuty webhook");
@@ -3621,15 +3625,19 @@ fn cmd_guard(args: &[String]) {
         std::env::set_var("STRUKTURA_WEBHOOK", &webhook_url);
     }
     if watch && !file_path.is_empty() && file_path != "-" {
-        run_guard_watch(&file_path, baseline_n, json, watch_ms);
+        run_guard_watch(&file_path, baseline_n, json, watch_ms, quiet);
     }
-    let exit = run_guard(&content, baseline_n, json);
+    let exit = run_guard(&content, baseline_n, json, quiet);
     process::exit(exit);
 }
 
 /// Watch mode: calibrate on the file's current content, then tail it for
 /// new rows, like `tail -f` but with anomaly detection. Ctrl-C to stop.
-fn run_guard_watch(path: &str, baseline_n: usize, json: bool, poll_ms: u64) -> ! {
+fn guard_config(quiet: bool) -> struktura::monitor::MonitorConfig {
+    struktura::monitor::MonitorConfig { quiet_drift: quiet, ..Default::default() }
+}
+
+fn run_guard_watch(path: &str, baseline_n: usize, json: bool, poll_ms: u64, quiet: bool) -> ! {
     use struktura::monitor::HybridMonitor;
     use struktura::autopilot::AutoPilot;
 
@@ -3648,7 +3656,7 @@ fn run_guard_watch(path: &str, baseline_n: usize, json: bool, poll_ms: u64) -> !
         .map(|ch| rows.iter().map(|r| r.get(ch).copied().unwrap_or(0.0)).collect())
         .collect();
     let calib: Vec<Vec<f64>> = channels.iter().map(|c| c[..calib_n].to_vec()).collect();
-    let mon = match HybridMonitor::calibrate(&calib) {
+    let mon = match HybridMonitor::calibrate_with(&calib, guard_config(quiet)) {
         Some(m) => m,
         None => { eprintln!("calibration failed (need >= 192 samples)"); process::exit(2); }
     };
@@ -3910,7 +3918,7 @@ fn emit_event(t: usize, ev: &struktura::autopilot::Event, json: bool) {
 }
 
 /// Returns exit code: 0 = healthy, 1 = faults found, 2 = calibration error.
-fn run_guard(content: &str, baseline_n: usize, json: bool) -> i32 {
+fn run_guard(content: &str, baseline_n: usize, json: bool, quiet: bool) -> i32 {
     use struktura::monitor::HybridMonitor;
     use struktura::autopilot::{AutoPilot, Event};
 
@@ -3934,7 +3942,7 @@ fn run_guard(content: &str, baseline_n: usize, json: bool) -> i32 {
         .collect();
 
     let calib: Vec<Vec<f64>> = channels.iter().map(|c| c[..calib_n].to_vec()).collect();
-    let mon = match HybridMonitor::calibrate(&calib) {
+    let mon = match HybridMonitor::calibrate_with(&calib, guard_config(quiet)) {
         Some(m) => m,
         None => {
             if json {

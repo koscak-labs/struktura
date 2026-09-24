@@ -15,9 +15,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: cargo build --release --bin struktura
+      # Slow rows include the NAB real-data evaluation (examples/nab_eval.rs),
+      # pinned to the NAB commit the published numbers came from.
+      - name: fetch NAB
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: |
+          git init -q "$RUNNER_TEMP/nab" && cd "$RUNNER_TEMP/nab"
+          git remote add origin https://github.com/numenta/NAB.git
+          git fetch -q --depth 1 origin ea702d75cc2258d9d7dd35ca8e5e2539d71f3140
+          git checkout -q FETCH_HEAD
       - name: check-claims.sh
         env:
           STRUKTURA_BIN: ${{ github.workspace }}/target/release/struktura
+          NAB_DIR: ${{ runner.temp }}/nab
         run: |
           chmod +x scripts/check-claims.sh
           if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then

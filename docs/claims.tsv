@@ -15,10 +15,15 @@ heliopause-alpha	fast	0	struktura heliopause	1.137 && 1.056 && inconclusive
 ims-first-alarm	fast	0	struktura ims	recording 970 && 984
 guard-sylv	fast	1	struktura guard data/sylv_spike.csv	row    500 && 2 faults detected
 guard-rover	fast	1	struktura guard examples/rover.csv --baseline 1000	fault confirmed && 6 faults detected
-control-sylv-healthy	fast	0	head -499 data/sylv_spike.csv | struktura guard - --baseline 333	no anomalies
-control-rover-healthy	fast	0	head -1601 examples/rover.csv | struktura guard - --baseline 1000	no anomalies
+control-sylv-healthy	fast	0	head -499 data/sylv_spike.csv | struktura guard - --baseline 333	HEALTHY, 166 samples, no anomalies
+control-rover-healthy	fast	0	head -1601 examples/rover.csv | struktura guard - --baseline 1000	HEALTHY, 600 samples, no anomalies
 control-monitor-clean	fast	0	struktura monitor-perf	Alarms on clean stream:            0
 structure-vs-amp-matched	fast	0	cargo run -q --release --example structure_vs_amplitude	| white -> AR(0.9), variance-matched | 23/30, 0 early, median 208 | 30/30, 0 early, median 100 | 7/30, 0 early, median 371 |
 control-structure-vs-amp-clean	fast	0	cargo run -q --release --example structure_vs_amplitude	| white | 0/30 | 0/30 | 0/30 | && | AR(0.7) | 0/30 | 0/30 | 4/30 | && | AR(0.95) | 0/30 | 0/30 | 15/30 |
 limitation-short-calibration	fast	0	CALIB=512 cargo run -q --release --example structure_vs_amplitude	clean AR(0.95): LevelShift 6
 evolve-coverage	slow	0	struktura evolve	71.0% && 97.0% && 71.0% (gen 1) -> 92.0% (gen 10)
+control-sylv-healthy-quiet	fast	0	head -499 data/sylv_spike.csv | struktura guard - --baseline 333 --quiet-drift	HEALTHY, 166 samples, no anomalies
+limitation-quiet-spike	fast	1	struktura guard data/sylv_spike.csv --quiet-drift	1 faults detected
+nab-default	slow	0	cargo run -q --release --example nab_eval	TOTAL                      58     116        37        50       0.17   |          52       420       1.40
+nab-quiet	slow	0	QUIET=1 cargo run -q --release --example nab_eval	TOTAL                      58     116        36        39       0.13   |          52       420       1.40
+control-nab-clean	slow	0	QUIET=1 cargo run -q --release --example nab_eval	artificialNoAnomaly         5       0         0         0       0.00

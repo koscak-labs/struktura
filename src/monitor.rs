@@ -117,6 +117,14 @@ pub struct MonitorConfig {
     pub cusum_k: f64,
     /// Threshold design horizon (expected false alarms: 1 per this many).
     pub design_horizon: f64,
+    /// Quiet mode for the drift (residual-CUSUM) leg: clip each residual at
+    /// `CUSUM_CLIP` sigmas so a single spike cannot trip a drift alarm, and
+    /// rescale residuals that are clearly autocorrelated in calibration
+    /// (see `cusum_residual_scale`). Off by default. On the NAB real-data
+    /// series it cut guard's false alarms from 50 to 39 and detected windows
+    /// from 37 to 36 (examples/nab_eval.rs); spikes that only the drift leg
+    /// caught are found later or by other legs.
+    pub quiet_drift: bool,
 }
 
 impl Default for MonitorConfig {
@@ -127,6 +135,7 @@ impl Default for MonitorConfig {
             roll_persist: ROLL_PERSIST,
             cusum_k: CUSUM_K,
             design_horizon: DESIGN_HORIZON,
+            quiet_drift: false,
         }
     }
 }
@@ -270,6 +279,56 @@ struct ChannelCalib {
     /// threshold learned from a finite calibration extrapolates. The leg is
     /// disabled for such channels.
     repeat_enabled: bool,
+    /// Divisor for the residual fed to the CUSUM leg. 1.0 unless the
+    /// calibration residuals are clearly autocorrelated (see
+    /// `cusum_residual_scale`), in which case it is the square root of
+    /// their long-run variance ratio.
+    cusum_scale: f64,
+}
+
+/// Batch size for the long-run variance estimate of calibration residuals.
+const LRV_BATCH: usize = 32;
+/// Quiet-drift clip for residuals fed to the CUSUM (Huber-style): a single
+/// spike moves the drift statistic by at most this many sigmas.
+const CUSUM_CLIP: f64 = 4.0;
+
+/// Residual as the CUSUM leg sees it. With `quiet` off this is `z` itself,
+/// so the default monitor is unchanged.
+fn cusum_input(z: f64, cc: &ChannelCalib, quiet: bool) -> f64 {
+    if quiet {
+        (z / cc.cusum_scale).clamp(-CUSUM_CLIP, CUSUM_CLIP)
+    } else {
+        z
+    }
+}
+
+/// CUSUM assumes independent residuals. A daily cycle, or any structure the
+/// AR(1) predictor misses, leaves slow correlated wiggles in the residuals,
+/// and the CUSUM reads them as drift (NAB: 28 of guard's 50 false alarms,
+/// mostly on daily-cycle series). Estimate the long-run variance ratio of the
+/// standardized residuals by batch means and, only when it is clearly above
+/// what independent residuals give, return its square root so the CUSUM sees
+/// residuals with unit long-run variance. Otherwise return 1.0, which keeps
+/// the CUSUM exactly as before.
+fn cusum_residual_scale(z: &[f64]) -> f64 {
+    let b = z.len() / LRV_BATCH;
+    if b < 8 {
+        return 1.0;
+    }
+    let means: Vec<f64> = (0..b)
+        .map(|i| z[i * LRV_BATCH..(i + 1) * LRV_BATCH].iter().sum::<f64>() / LRV_BATCH as f64)
+        .collect();
+    let mm = means.iter().sum::<f64>() / b as f64;
+    let var_means = means.iter().map(|m| crate::powi(m - mm, 2)).sum::<f64>() / (b - 1) as f64;
+    let ratio = var_means * LRV_BATCH as f64;
+    // For independent unit-variance residuals the ratio is ~ chi2(b-1)/(b-1):
+    // mean 1, sd sqrt(2/(b-1)). Act only beyond 3 sd.
+    let gate = 1.0 + 3.0 * crate::sqrt(2.0 / (b - 1) as f64);
+    if ratio > gate {
+        crate::sqrt(ratio)
+    } else {
+        1.0
+    }
 }
 
 /// Per-channel runtime state (fixed size, mutated every sample).
@@ -621,8 +680,14 @@ impl HybridMonitor {
                 }
             }
 
+            let resid_z: Vec<f64> = (1..length)
+                .map(|t| (c[t] - (ar_a + ar_b * c[t - 1])) / ar_sd)
+                .collect();
+            let cusum_scale = if config.quiet_drift { cusum_residual_scale(&resid_z) } else { 1.0 };
+
             per_channel_alphas.push(alphas);
             calib.push(ChannelCalib {
+                cusum_scale,
                 ar_a,
                 ar_b,
                 ar_sd,
@@ -662,7 +727,7 @@ impl HybridMonitor {
                 let mut mc = 0.0f64;
                 for (ch, c) in clean.iter().enumerate() {
                     let cc = &calib[ch];
-                    let z = (c[t] - (cc.ar_a + cc.ar_b * c[t - 1])) / cc.ar_sd;
+                    let z = cusum_input((c[t] - (cc.ar_a + cc.ar_b * c[t - 1])) / cc.ar_sd, cc, config.quiet_drift);
                     pos[ch] = (pos[ch] + z - config.cusum_k).max(0.0);
                     neg[ch] = (neg[ch] - z - config.cusum_k).max(0.0);
                     let m = pos[ch].max(neg[ch]);
@@ -885,8 +950,9 @@ impl HybridMonitor {
 
         // Leg 1: residual + leg 5: CUSUM (both from the same z-score)
         let zs = (v - (cc.ar_a + cc.ar_b * st.prev)) / cc.ar_sd;
-        st.cusum_pos = (st.cusum_pos + zs - self.config.cusum_k).max(0.0);
-        st.cusum_neg = (st.cusum_neg - zs - self.config.cusum_k).max(0.0);
+        let zc = cusum_input(zs, cc, self.config.quiet_drift);
+        st.cusum_pos = (st.cusum_pos + zc - self.config.cusum_k).max(0.0);
+        st.cusum_neg = (st.cusum_neg - zc - self.config.cusum_k).max(0.0);
         let cusum_alarm = st.cusum_pos.max(st.cusum_neg) > self.cusum_thr;
 
         let res_hit = zs.abs() > self.res_thr;
@@ -1147,6 +1213,54 @@ mod tests {
             }
         }
         None
+    }
+
+    /// Deterministic N(0,1) stream (xorshift64* + Box-Muller).
+    fn normals(seed: u64, n: usize) -> Vec<f64> {
+        let mut s = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+        let mut u = || {
+            s ^= s >> 12;
+            s ^= s << 25;
+            s ^= s >> 27;
+            ((s.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 11) as f64 + 0.5) / (1u64 << 53) as f64
+        };
+        (0..n)
+            .map(|_| {
+                let (a, b) = (u(), u());
+                crate::sqrt(-2.0 * libm::log(a)) * libm::cos(2.0 * core::f64::consts::PI * b)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn residual_scale_leaves_independent_residuals_alone() {
+        // The quiet-drift rescale must not touch white residuals: 1.0 exactly,
+        // so the CUSUM is unchanged on them.
+        for seed in 0..30 {
+            assert_eq!(cusum_residual_scale(&normals(seed, 768)), 1.0, "seed {seed}");
+        }
+    }
+
+    #[test]
+    fn residual_scale_grows_for_cyclic_residuals() {
+        // Residuals carrying a slow cycle (what an AR(1) fit leaves on a
+        // daily-cycle metric) have long-run variance well above 1.
+        for seed in 0..30 {
+            let z: Vec<f64> = normals(seed, 768)
+                .iter()
+                .enumerate()
+                .map(|(t, e)| e + 0.8 * libm::sin(2.0 * core::f64::consts::PI * t as f64 / 96.0))
+                .collect();
+            assert!(cusum_residual_scale(&z) > 1.5, "seed {seed}");
+        }
+    }
+
+    #[test]
+    fn quiet_drift_is_off_by_default() {
+        let calib = synth_spacecraft(700, 4242);
+        let mon = HybridMonitor::calibrate(&calib).expect("calibration");
+        assert!(!mon.config.quiet_drift);
+        assert!(mon.calib.iter().all(|c| c.cusum_scale == 1.0));
     }
 
     #[test]
