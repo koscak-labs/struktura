@@ -2,6 +2,25 @@
 
 All notable changes to Struktura are documented here.
 
+## v1.8.3 (2026-09-24): claims ledger, README rewrite, output cleanup
+
+- New: `docs/claims.tsv` lists every public number with its command, plus
+  control rows on healthy data that must stay silent. `scripts/check-claims.sh`
+  re-runs them and fails on drift, on a control that alarms, or when a withdrawn
+  claim reappears in README.md, src/ or command output. CI runs the fast rows
+  on every push and all rows weekly (`.github/workflows/claims.yml`).
+- `ims` output and `ImsDemoResult`'s Display no longer say "early warning";
+  they report the first alarm and note that an RMS threshold trips earlier.
+  `--help` describes `voyager` as a 2021 vs 2022 magnetometer comparison.
+- README rewritten: plain descriptions, commands corrected (`guard` is the
+  monitor, `when` is changepoint detection), `evolve` table shows the final
+  generation (92%) next to the peak (97%).
+- CLI output and comments: fewer em dashes, no decorative emoji in examples.
+- Cargo description and keywords updated for search (anomaly-detection,
+  time-series, hurst, telemetry, predictive-maintenance).
+- Release workflow: skips `cargo publish` when the version is already on
+  crates.io; binaries are uploaded under per-target names.
+
 ## v1.8.2 (2026-09-24) — claims corrections + CRLF text fix
 
 - Withdrawn: the IMS "323 samples early warning" claim from 1.8.1. The first

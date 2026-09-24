@@ -1,14 +1,14 @@
 [package]
 name = "struktura"
-version = "1.8.2"
+version = "1.8.3"
 edition = "2021"
 rust-version = "1.70"
-description = "Is your data broken? Pipe any CSV, get told what changed. Self-calibrating anomaly detection — zero config, no model training. Tested on NASA + ESA spacecraft telemetry."
+description = "Time-series anomaly detection with no training data: detrended fluctuation analysis (DFA, Hurst exponent), a self-calibrating streaming monitor for sensors and telemetry, and C99 code generation for embedded and flight software. no_std."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/koscak-labs/struktura"
 documentation = "https://docs.rs/struktura"
 homepage = "https://koscak-labs.github.io/struktura"
-keywords = ["anomaly-detection", "dfa", "time-series", "spacecraft", "hurst"]
+keywords = ["anomaly-detection", "time-series", "hurst", "telemetry", "predictive-maintenance"]
 categories = ["science", "algorithms", "no-std", "aerospace", "embedded"]
 readme = "README.md"
 exclude = ["data/genome/", "data/heliopause/", "data/ims/", "data/ims_2nd_*", "data/ims_monitor_*", "data/ims/extracted/", "data/smap_msl/", "data/austen_shuffled.txt", "data/voyager1_2021_healthy.csv", "data/bench_*", "data/_bench_*", "data/sylv_*", "data/esa-adb/", "docs/", "test-ogma-*", "node_modules/", "*.dat", "*.zip", "assets/", "social-preview.*", "PROMOTION_*", "PROMO_*", "DRAFT_*", "ogma-template/", "examples/rover.csv", "PAPER_DRAFT.md", "esa-adb/", "DFA_DISCOVERIES.md", "RIEMANN_FINDING.md"]
