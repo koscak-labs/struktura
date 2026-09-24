@@ -12,6 +12,9 @@ All notable changes to Struktura are documented here.
   anomaly and 2/8 whose calibration is clean; skipped below 1,536 calibration
   rows. Found because guard called NAB's machine-temperature failure series
   healthy (examples/calib_selfcheck_eval.rs).
+- The core crate's `wasm` feature and `src/wasm.rs` are removed; JavaScript
+  bindings live in `crates/struktura-wasm` (npm tarball on `wasm-v*` releases),
+  as the Python ones do in `crates/struktura-py`.
 
 ## v1.8.4 (2026-09-24): dfa_short, fair NAB comparison, head-to-head bench, claims cleanup
 

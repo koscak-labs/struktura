@@ -26,6 +26,9 @@ ran=0
 all_out=""
 
 while IFS=$'\t' read -r id speed want_exit cmd expect; do
+  # A CRLF checkout (git autocrlf on Windows) leaves "\r" on the last field;
+  # it would make the last expected string of every row unmatchable.
+  expect="${expect%$'\r'}"
   [[ -z "$id" || "$id" == \#* || "$id" == "id" ]] && continue
   [[ "$speed" == "slow" && $ALL -eq 0 ]] && continue
   ran=$((ran + 1))

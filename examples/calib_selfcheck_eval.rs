@@ -55,9 +55,10 @@ fn load_windows(text: &str) -> Vec<(String, Vec<(i64, i64)>)> {
 }
 
 fn main() {
+    // CI sets NAB_DIR on every run but only fetches NAB on the weekly one.
     match std::env::var("NAB_DIR") {
-        Ok(nab) => nab_part(&nab),
-        Err(_) => println!("NAB_DIR not set: skipping the NAB part"),
+        Ok(nab) if std::path::Path::new(&format!("{nab}/labels/combined_windows.json")).exists() => nab_part(&nab),
+        _ => println!("NAB not found (NAB_DIR unset or empty): skipping the NAB part"),
     }
     synthetic_part();
 }

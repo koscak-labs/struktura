@@ -17,7 +17,6 @@ exclude = ["data/genome/", "data/heliopause/", "data/ims/", "data/ims_2nd_*", "d
 default = ["std"]
 std = []
 serde = ["dep:serde"]
-wasm = ["dep:wasm-bindgen"]
 
 [lib]
 # rlib only. Observed in 1.7.2 with crate-type = ["lib", "cdylib", "staticlib"]:
@@ -32,7 +31,6 @@ crate-type = ["lib"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"], optional = true }
-wasm-bindgen = { version = "0.2", optional = true }
 libm = "0.2"
 
 [dev-dependencies]

@@ -439,6 +439,10 @@ docker build -t struktura . && docker run -v ./data:/data struktura guard /data/
 pip install struktura --find-links https://github.com/koscak-labs/struktura/releases/expanded_assets/py-v1.8.4
 python -c "import struktura, random; print(struktura.dfa_short([random.random() for _ in range(70)]).alpha)"
 
+# javascript / node (WebAssembly; a browser build is attached to the same release)
+npm install https://github.com/koscak-labs/struktura/releases/download/wasm-v1.8.4/struktura-1.8.4.tgz
+node -e "const s=require('struktura'); console.log(s.dfaShort(Float64Array.from({length:70},Math.random)).alpha)"
+
 # stream anything through DFA
 tail -f /var/log/metrics.csv | struktura pipe --json
 curl prometheus:9090/query | struktura pipe --window 128
