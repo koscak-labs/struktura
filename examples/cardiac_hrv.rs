@@ -43,11 +43,11 @@ fn main() {
         let law = analyze(&data);
         println!("  α = {:.3}  R² = {:.4}  quality = {}", law.dfa.alpha, law.dfa.r_squared, law.quality);
         if law.dfa.alpha > 0.8 {
-            println!("  interpretation: healthy fractal structure 💚");
+            println!("  interpretation: healthy fractal structure");
         } else if law.dfa.alpha > 0.6 {
-            println!("  interpretation: reduced complexity ⚠️ (consider medical consultation)");
+            println!("  interpretation: reduced complexity (consider medical consultation)");
         } else {
-            println!("  interpretation: significant loss of fractal structure 🔴");
+            println!("  interpretation: significant loss of fractal structure");
         }
         return;
     } else {

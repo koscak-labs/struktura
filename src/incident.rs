@@ -272,8 +272,8 @@ impl IncidentBuilder {
 /// Attach context events in `[start_tick - CONTEXT_LOOKBACK, end_tick]` from
 /// `timeline` to every incident in `incidents`. Free function (rather than
 /// only a builder method) so callers that post-process incidents *after*
-/// `finalize()` — e.g. to offset ticks with [`offset_ticks`] before
-/// matching them against a recording-tick-aligned timeline — can reuse the
+/// `finalize()` (e.g. to offset ticks with [`offset_ticks`] before
+/// matching them against a recording-tick-aligned timeline) can reuse the
 /// exact same lookback-window logic.
 pub fn attach_context(incidents: &mut [Incident], timeline: &ContextTimeline) {
     for incident in incidents.iter_mut() {

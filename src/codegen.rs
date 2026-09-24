@@ -213,13 +213,13 @@ pub fn generate_fprime_rover() -> String {
     s.push_str("        event SensorStuck(channel: string size 20) severity warning high\n\n");
     s.push_str("        @ Signal shifted to a new operating level\n");
     s.push_str("        event LevelShift(channel: string size 20) severity warning high\n\n");
-    s.push_str("        @ Channel quarantined — using reconstructed values\n");
+    s.push_str("        @ Channel quarantined, using reconstructed values\n");
     s.push_str("        event Quarantined(channel: string size 20) severity warning high\n\n");
-    s.push_str("        @ Environment changed — learning new baseline\n");
+    s.push_str("        @ Environment changed, learning new baseline\n");
     s.push_str("        event Adapting() severity activity high\n\n");
     s.push_str("        @ New baseline accepted\n");
     s.push_str("        event Recalibrated() severity activity high\n\n");
-    s.push_str("        @ Adaptation rejected — fault confirmed\n");
+    s.push_str("        @ Adaptation rejected, fault confirmed\n");
     s.push_str("        event FaultConfirmed(channel: string size 20) severity warning high\n\n");
 
     // Telemetry
@@ -235,7 +235,7 @@ pub fn generate_fprime_rover() -> String {
 
     s.push_str("    }\n}\n\n");
     s.push_str("// Implementation: link with rover_flight.rs compiled as staticlib.\n");
-    s.push_str("// RoverMonitor::new() is const — lives in BSS, zero init cost.\n");
+    s.push_str("// RoverMonitor::new() is const, lives in BSS, zero init cost.\n");
     s.push_str("// RAM: ~6KB for 10 channels. No heap. Bounded worst-case per tick.\n");
     s.push_str("// Calibration constants baked at build time or loaded from EEPROM.\n");
     s.push_str("// https://github.com/koscak-labs/struktura\n");
@@ -287,8 +287,8 @@ pub fn generate_cfs_app(name: &str, window_size: usize) -> String {
     s
 }
 
-/// Generate a self-contained C hybrid monitor with a CALIBRATED
-/// configuration baked in — every threshold learned from real calibration
+/// Generate a self-contained C hybrid monitor with a calibrated
+/// configuration baked in: every threshold learned from real calibration
 /// data, no magic numbers. C99, no dependencies beyond libm, static
 /// memory only, bounded loops only (flight-software discipline).
 ///
@@ -419,7 +419,7 @@ pub fn generate_hybrid_c(export: &crate::monitor::MonitorExport) -> String {
     s.push_str("                m->alarmed = 1; return HYB_ALARM_LEVEL;\n            }\n");
     s.push_str("        } else {\n            st->roll_streak = 0;\n        }\n    }\n");
     s.push_str("    return HYB_OK;\n}\n\n");
-    // The self-test freezes a channel whose repeat leg is ENABLED (channels
+    // The self-test freezes a channel whose repeat leg is enabled (channels
     // that legitimately saturate have it auto-disabled).
     let test_ch = export
         .channels

@@ -20,7 +20,7 @@ $ struktura smap --ar 0 --dfa
     [point]       38/45  =  84.4%
     contextual]"   8/30  =  26.7%
     point]"        3/11  =  27.3%
-  Self-calibrated, no training, no GPU, ~4us/sample. Honest note: the
-  values are pre-scaled to (-1,1) by JPL and many channels saturate,
-  which auto-disables the repeated-value leg on those channels.
+  Self-calibrated, no training, no GPU, ~4us/sample. Note: the values are
+  pre-scaled to (-1,1) by JPL and many channels saturate, which auto-disables
+  the repeated-value leg on those channels.
 

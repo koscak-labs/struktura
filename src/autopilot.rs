@@ -3,22 +3,22 @@
 //!
 //! Three autonomous behaviors, each with a conservative policy:
 //!
-//! 1. **Auto-quarantine.** An alarm whose provenance identifies a SENSOR
+//! 1. **Auto-quarantine.** An alarm whose provenance identifies a sensor
 //!    failure on one channel (stuck, sustained missingness, cross-channel
 //!    inconsistency) quarantines that channel: its legs go silent, its
 //!    reading is served by reconstruction from the survivors, and
 //!    monitoring continues degraded.
 //! 2. **Guarded self-recalibration.** A level-shift alarm may mean the
-//!    ENVIRONMENT changed rather than broke (new operating mode, new
+//!    environment changed rather than broke (new operating mode, new
 //!    thermal regime). The autopilot collects a candidate window of the
 //!    new regime, calibrates a candidate monitor on it, and then streams a
 //!    guard window through the candidate: only if the guard stays silent
 //!    is the candidate accepted. A guard alarm means the "new regime" is
-//!    itself unstable — the adaptation rolls back and the original alarm
+//!    itself unstable: the adaptation rolls back and the original alarm
 //!    stands as a confirmed fault. (This mirrors the guarded-adaptation
 //!    accept/rollback discipline used in telemetry-assurance research.)
 //! 3. **Continuous operation.** Genuine fault alarms (drift, spike,
-//!    structural) are reported as events and the latch is cleared — an
+//!    structural) are reported as events and the latch is cleared: an
 //!    autonomous system logs and keeps watching; it never goes blind
 //!    after its first detection.
 //!
@@ -34,8 +34,8 @@ use crate::monitor::{classify_alarm, AlarmReport, HybridMonitor, Leg};
 pub const RECAL_WINDOW: usize = 400;
 /// Samples the candidate must stay silent for before being accepted.
 pub const GUARD_WINDOW: usize = 300;
-/// A second level-shift alarm on the SAME channel within this many samples
-/// of an accepted recalibration is not another regime change — it is a
+/// A second level-shift alarm on the same channel within this many samples
+/// of an accepted recalibration is not another regime change; it is a
 /// sustained trend (drift) that each short guard window individually
 /// mistakes for a stable new normal. The autopilot then refuses to adapt
 /// and reports a confirmed drift instead. (Found empirically: without
@@ -54,8 +54,8 @@ pub enum Event {
     AdaptationStarted { tick: u64 },
     /// The candidate monitor passed its guard window and took over.
     Recalibrated { tick: u64 },
-    /// The candidate alarmed during the guard window — adaptation rolled
-    /// back; the original level-shift alarm stands as a confirmed fault.
+    /// The candidate alarmed during the guard window; adaptation rolled
+    /// back, and the original level-shift alarm stands as a confirmed fault.
     RolledBack { tick: u64, guard_report: AlarmReport },
 }
 
@@ -151,13 +151,13 @@ impl AutoPilot {
                                 });
                             }
                             // Environment may have changed → guarded adaptation,
-                            // UNLESS the same channel already forced a recent
-                            // recalibration — that pattern is a sustained trend
+                            // unless the same channel already forced a recent
+                            // recalibration: that pattern is a sustained trend
                             // (drift), and adapting again would chase the fault.
                             Leg::LevelShift => {
                                 self.monitor.reset();
                                 let ch = report.channel;
-                                // Latched trend: refresh silently — one
+                                // Latched trend: refresh silently, one
                                 // fault, one report, no re-adaptation.
                                 if matches!(
                                     self.drift_latch[ch],
@@ -228,7 +228,7 @@ impl AutoPilot {
                             self.mode = Mode::Guarding { candidate, fed: 0 };
                         }
                         None => {
-                            // Cannot calibrate — stay on the old monitor.
+                            // Cannot calibrate; stay on the old monitor.
                             self.mode = Mode::Monitoring;
                         }
                     }
@@ -249,7 +249,7 @@ impl AutoPilot {
                     events.push(Event::RolledBack { tick, guard_report });
                     self.mode = Mode::Monitoring;
                 } else if *fed >= GUARD_WINDOW {
-                    // Guard passed — the candidate takes over.
+                    // Guard passed; the candidate takes over.
                     let mut accepted = match core::mem::replace(&mut self.mode, Mode::Monitoring)
                     {
                         Mode::Guarding { candidate, .. } => candidate,
@@ -299,11 +299,11 @@ mod tests {
         for t in 0..n {
             for ch in 0..6 {
                 let mut v = stream[ch][t];
-                // Event 1 (t>=4000): temp sensor (ch2) freezes — dead sensor.
+                // Event 1 (t>=4000): temp sensor (ch2) freezes, dead sensor.
                 if ch == 2 && t >= 4000 {
                     v = stream[2][4000];
                 }
-                // Event 2 (t>=10000): PERMANENT regime change, all channels
+                // Event 2 (t>=10000): permanent regime change, all channels
                 // shift by 0.8 sigma (new thermal/power operating point).
                 if t >= 10_000 {
                     v += 0.8 * ch_sd[ch];
@@ -377,7 +377,7 @@ mod tests {
         for t in 0..n {
             for ch in 0..6 {
                 let mut v = stream[ch][t];
-                // From t=6000: payload_current keeps ACCELERATING — not a
+                // From t=6000: payload_current keeps accelerating, not a
                 // new stable regime but a runaway.
                 if ch == 5 && t >= 6000 {
                     let dt = (t - 6000) as f64;

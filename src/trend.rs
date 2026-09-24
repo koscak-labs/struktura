@@ -1,8 +1,9 @@
-//! Trend detection — is the signal getting worse over time?
+//! Trend detection: is the signal's structure drifting over time?
 //!
 //! Runs DFA on a sliding window across the signal and fits a trend line
-//! to the resulting α values. A declining α means the structure is
-//! degrading progressively — the early warning before a sudden failure.
+//! to the resulting α values. A steady decline in α means the correlation
+//! structure is changing progressively. Whether that precedes a failure
+//! depends on the system and has to be checked against a healthy control.
 //!
 //! ```
 //! use struktura::trend::alpha_trend;

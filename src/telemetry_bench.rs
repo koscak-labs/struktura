@@ -1,5 +1,5 @@
-//! Coupled-spacecraft telemetry benchmark — DFA vs the standard telemetry
-//! fault taxonomy (packet loss, spike, stuck, drift, regime shift, mixed).
+//! Coupled-spacecraft telemetry benchmark comparing DFA to the standard
+//! telemetry fault taxonomy (packet loss, spike, stuck, drift, regime shift, mixed).
 //!
 //! The simulator reproduces the coupled power/thermal/wheel/pointing/payload
 //! dynamics used in telemetry-assurance benchmarks: 6 channels driven by a
@@ -125,8 +125,8 @@ fn channel_std(v: &[f64]) -> f64 {
     (v.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n).sqrt()
 }
 
-/// The standard telemetry fault taxonomy, plus `correlation_change` — the
-/// structural fault class the taxonomy is missing.
+/// The standard telemetry fault taxonomy, plus `correlation_change` (the
+/// structural fault class the taxonomy is missing).
 pub const FAULT_TYPES: [&str; 7] = [
     "packet_loss", "spike", "stuck", "drift", "regime_shift", "mixed",
     "correlation_change",
@@ -208,7 +208,7 @@ pub fn inject_fault(clean: &[Vec<f64>], fault: &str, seed: u64) -> Vec<Vec<f64>>
         }
         "correlation_change" => {
             // Structural fault: same mean, same amplitude, destroyed temporal
-            // correlation — the fault class the additive taxonomy can't express.
+            // correlation (the fault class the additive taxonomy can't express).
             let ch = 0;
             let seg = &clean[ch][start..stop];
             let mean = seg.iter().sum::<f64>() / seg.len() as f64;
@@ -266,7 +266,7 @@ pub struct FaultDetectResult {
     pub best_channel: usize,
 }
 
-/// Everything the statistical benchmark produced, including the honesty
+/// Everything the statistical benchmark produced, including the validation
 /// checks: the Bonferroni-corrected thresholds and the EMPIRICAL family-wise
 /// false-positive rate measured on held-out clean pairs.
 #[derive(Debug, Clone)]
@@ -286,7 +286,7 @@ pub struct BenchmarkReport {
 ///
 /// The null distribution uses `n_null` clean-vs-clean seed pairs (disjoint
 /// from evaluation seeds). The achieved family-wise FPR is then MEASURED on
-/// a further `n_seeds` held-out clean pairs and reported — no assumed FPR.
+/// a further `n_seeds` held-out clean pairs and reported, not assumed.
 pub fn run_benchmark(length: usize, n_seeds: u64, n_null: u64) -> BenchmarkReport {
     // Null distribution per channel (seeds disjoint from eval seeds below)
     let mut null_shifts: Vec<Vec<f64>> = vec![Vec::new(); CHANNELS];
@@ -475,7 +475,7 @@ pub struct TimestepF1 {
     pub f1: f64,
     pub false_alarm_rate: f64,
     /// Fraction of seeds where at least one flag lands inside
-    /// [fault_start, fault_stop + window] — event-level detection
+    /// [fault_start, fault_stop + window]: event-level detection
     /// (NAB-style), which credits detections that arrive with latency.
     pub event_detect_rate: f64,
     /// Mean samples from fault start to first flag, over detected events.
@@ -610,7 +610,7 @@ pub fn timestep_f1_benchmark(
         .collect()
 }
 
-// ── Hybrid monitor: residual + repeated-value + DFA ─────────────────
+// Hybrid monitor: residual + repeated-value + DFA
 //
 // Three orthogonal detectors, each calibrated on the clean calibration
 // sequence, fused by OR:
@@ -685,7 +685,7 @@ pub fn hybrid_benchmark(
         let calib = synth_spacecraft(length, s + 100);
         let test_clean = synth_spacecraft(length, s + 200);
 
-        // ── Calibrate detector 1: AR(1) residuals ──
+        // Calibrate detector 1: AR(1) residuals
         let ar: Vec<Ar1> = calib.iter().map(|c| fit_ar1(c)).collect();
         let mut calib_res_scores = Vec::with_capacity(length - 1);
         for t in 1..length {
@@ -724,7 +724,7 @@ pub fn hybrid_benchmark(
             }
         }
 
-        // ── Calibrate detector 3: DFA windowed z ──
+        // Calibrate detector 3: DFA windowed z
         let calib_windows: Vec<Vec<(usize, f64)>> = calib
             .iter()
             .map(|c| window_alphas_trailing(c, window, step))
@@ -757,7 +757,7 @@ pub fn hybrid_benchmark(
             .fold(0.0f64, f64::max)
             * 1.02;
 
-        // ── Calibrate detector 4: rolling-mean level shift ──
+        // Calibrate detector 4: rolling-mean level shift
         // The dominant periodic driver (orbit) has period 96, so a 96-sample
         // rolling mean cancels it; a sustained level shift moves the rolling
         // mean where periodic dynamics cannot. Threshold = the max deviation
@@ -787,7 +787,7 @@ pub fn hybrid_benchmark(
             })
             .collect();
 
-        // ── Evaluate a sequence: first flag time + which detector ──
+        // Evaluate a sequence: first flag time + which detector
         let evaluate = |signal: &[Vec<f64>]| -> Option<(usize, usize)> {
             // detector 3 precompute
             let test_windows: Vec<Vec<(usize, f64)>> = signal

@@ -1,6 +1,6 @@
 //! Spacecraft health monitoring via DFA structural analysis.
 //!
-//! Real-time anomaly detection for telemetry channels — reaction wheels,
+//! Real-time anomaly detection for telemetry channels: reaction wheels,
 //! magnetometers, thermal sensors, battery voltage, solar array current.
 //! Detects structural degradation before threshold-based monitors trigger.
 //!
@@ -200,7 +200,7 @@ impl fmt::Display for VoyagerDemoResult {
 /// Run DFA on real Voyager 1 magnetometer data.
 ///
 /// Compares 2021 (healthy) vs May-Jul 2022 (AACS anomaly period).
-/// The anomaly was a real spacecraft failure — Voyager 1's attitude
+/// The anomaly was a real spacecraft failure: Voyager 1's attitude
 /// articulation and control system sent garbled telemetry for months.
 /// DFA detects the structural shift in magnetometer readings.
 pub fn voyager_demo() -> VoyagerDemoResult {
@@ -256,7 +256,7 @@ impl fmt::Display for HelioDemoResult {
 /// Run DFA on Voyager 1 magnetometer data across the heliopause crossing.
 ///
 /// On August 25, 2012 (DOY 238), Voyager 1 crossed from the heliosphere
-/// into interstellar space — the first human-made object to leave the solar
+/// into interstellar space, the first human-made object to leave the solar
 /// system. DFA detects the structural transition in the magnetic field.
 ///
 /// Heliosphere: sun's magnetic field dominates, strong long-range persistence.
@@ -301,9 +301,9 @@ impl fmt::Display for ImsDemoResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "IMS Bearing Run-to-Failure (NASA/IMS, U. Cincinnati)\n\
                     Baseline (rec 1-900):    α={:.3}\n\
-                    Early warning (rec 970): α={:.3} (structure stiffens)\n\
-                    End of life (rec 984):   α={:.3} (structure collapses)\n\
-                    Early warning: {} recordings ({} min) before failure",
+                    First alarm (rec 970):   α={:.3}\n\
+                    Last recording (984):    α={:.3}\n\
+                    Alarm {} recordings ({} min) before the test ended; a plain RMS threshold trips earlier",
             self.baseline_alpha, self.pre_failure_alpha, self.failure_alpha,
             self.failure_recording - self.early_warning_recording,
             (self.failure_recording - self.early_warning_recording) * 10)
@@ -413,7 +413,7 @@ pub fn synth_thermal(n: usize, seed: u64, drift_rate: f64) -> Vec<f64> {
 ///
 /// First half: clean sinusoidal signal with correlated noise.
 /// Second half (after `fault_start`): same amplitude range but
-/// DESTROYED correlation — noise becomes independent. DFA detects
+/// DESTROYED correlation: noise becomes independent. DFA detects
 /// the structural change; amplitude-based detectors miss it.
 pub fn synth_structural_fault(n: usize, seed: u64, fault_start: f64) -> Vec<f64> {
     let fault_at = (n as f64 * fault_start.clamp(0.0, 1.0)) as usize;
@@ -424,11 +424,11 @@ pub fn synth_structural_fault(n: usize, seed: u64, fault_start: f64) -> Vec<f64>
         state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
         let raw = (state >> 33) as f64 / (1u64 << 31) as f64 - 0.5;
         if i < fault_at {
-            // Strongly correlated AR(1) process — high α (~0.9+)
+            // Strongly correlated AR(1) process: high α (~0.9+)
             prev = prev * 0.95 + raw * 0.05;
             out.push(prev);
         } else {
-            // White noise — low α (~0.5). Same amplitude range, different structure.
+            // White noise: low α (~0.5). Same amplitude range, different structure.
             out.push(raw * 0.05);
         }
     }

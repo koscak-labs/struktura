@@ -1,6 +1,6 @@
 //! Fixed-size rover health monitor for flight computers.
 //!
-//! No heap allocation at any point — all state lives in fixed arrays
+//! No heap allocation at any point: all state lives in fixed arrays
 //! sized at compile time. Suitable for `no_std` bare-metal targets
 //! (radiation-hardened processors, FPGAs, embedded ARM).
 //!
@@ -9,7 +9,7 @@
 //! rovers: AR(1) residual (instant spikes + correlation loss),
 //! repeated-value (stuck sensors), and rolling-mean level shift
 //! (regime changes). No DFA leg (saves the window-sized scratch
-//! buffer) — the other three catch 5/6 fault types in the taxonomy.
+//! buffer); the other three catch 5/6 fault types in the taxonomy.
 //!
 //! Memory per instance: `(WINDOW + ROLL + 12) * 8 * N_CH + 64` bytes.
 //! At defaults (WINDOW=32, ROLL=32, N_CH=10): **5,920 bytes total**.
@@ -202,11 +202,11 @@ impl RoverMonitor {
     }
 }
 
-// ── C FFI exports ──────────────────────────────────────────────────
+// C FFI exports.
 //
 // A single static RoverMonitor lives in BSS (zero-init, no heap).
-// The C wrapper (RoverHealthImpl.c) calls these. The monitor is NOT
-// thread-safe — flight software is single-threaded per rate group.
+// The C wrapper (RoverHealthImpl.c) calls these. The monitor is not
+// thread-safe; flight software is single-threaded per rate group.
 
 static mut ROVER_MON: RoverMonitor = RoverMonitor::new();
 
@@ -291,15 +291,15 @@ mod tests {
 
     #[test]
     fn flight_monitor_is_const_constructible() {
-        // Must be usable in a static — real flight code puts this in BSS.
+        // Must be usable in a static: real flight code puts this in BSS.
         static _MON: RoverMonitor = RoverMonitor::new();
     }
 
     #[test]
     fn flight_monitor_size() {
         let size = core::mem::size_of::<RoverMonitor>();
-        // Must fit in a few KB — real flight computers have 32-256KB RAM.
-        assert!(size < 8192, "RoverMonitor is {} bytes — must be < 8KB", size);
+        // Must fit in a few KB: real flight computers have 32-256KB RAM.
+        assert!(size < 8192, "RoverMonitor is {} bytes, must be < 8KB", size);
     }
 
     #[test]
@@ -338,7 +338,7 @@ mod tests {
     #[test]
     fn no_alloc_proof() {
         // This test exists to prove the monitor compiles in no_std.
-        // The module uses no Vec, no String, no Box — only fixed arrays.
+        // The module uses no Vec, no String, no Box: only fixed arrays.
         let mon = RoverMonitor::new();
         assert!(!mon.alarmed);
     }

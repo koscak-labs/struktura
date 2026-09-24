@@ -3,8 +3,8 @@
 //! Fits a least-squares line to the most recent `fit_window` points of a
 //! health metric (RMS, DFA α, any scalar trend) and extrapolates to a
 //! failure threshold. Returns the ETA in samples together with a 1-sigma
-//! interval derived from the regression's slope uncertainty — an honest
-//! "how much should you trust this" alongside every prediction.
+//! interval derived from the regression's slope uncertainty, giving a
+//! measure of how much to trust each prediction.
 //!
 //! A prediction is only issued when the fitted trend actually moves toward
 //! the threshold and the slope is distinguishable from zero (|slope| >
@@ -18,12 +18,12 @@ use crate::sqrt;
 
 /// A time-to-threshold estimate.
 ///
-/// Honesty note: the 1-sigma band covers SLOPE NOISE only. When the true
-/// degradation is nonlinear (e.g. the IMS bearing's temporary "healing"
-/// plateau, where a spall smooths and RMS dips before the final rise), the
-/// linear model's error exceeds the band — measured on IMS: predictions
-/// -66/+91 recordings (~±13 hours on a 164-hour run) with ±10-recording
-/// bands. Treat the band as a floor on uncertainty, never a ceiling.
+/// The 1-sigma band covers slope noise only. When the true degradation is
+/// nonlinear (e.g. the IMS bearing's temporary "healing" plateau, where a
+/// spall smooths and RMS dips before the final rise), the linear model's
+/// error exceeds the band: measured on IMS, predictions were -66/+91
+/// recordings (~±13 hours on a 164-hour run) with ±10-recording bands.
+/// Treat the band as a floor on uncertainty, not a ceiling.
 #[derive(Debug, Clone, Copy)]
 pub struct Eta {
     /// Predicted samples until the metric crosses the threshold.

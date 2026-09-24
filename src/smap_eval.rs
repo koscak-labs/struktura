@@ -5,7 +5,7 @@
 //! epsilon selection (no labels) → contiguous anomaly sequences → pruning.
 //! This module reproduces that pipeline faithfully but replaces the LSTM
 //! with ridge autoregression of order `p` fitted on the nominal train
-//! split — closed-form least squares, no gradient training, no GPU.
+//! split: closed-form least squares, no gradient training, no GPU.
 //!
 //! The experiment this enables: how much of the benchmark performance is
 //! the deep network, and how much is the residual mathematics?
@@ -88,14 +88,14 @@ pub fn ewma(x: &[f64], span: usize) -> Vec<f64> {
 }
 
 /// Telemanom's unsupervised epsilon selection: try ε = μ + z·σ for a grid
-/// of z; removing the points above ε shrinks the residual mean/sd — pick
+/// of z; removing the points above ε shrinks the residual mean/sd. Pick
 /// the z that maximizes that shrink per anomalous point/sequence.
 pub fn find_epsilon(errors: &[f64]) -> f64 {
     find_epsilon_from(errors, 2.5)
 }
 
-/// Same as [`find_epsilon`] with a configurable lower bound on the z grid —
-/// a lower floor trades precision for recall.
+/// Same as [`find_epsilon`] with a configurable lower bound on the z grid.
+/// A lower floor trades precision for recall.
 pub fn find_epsilon_from(errors: &[f64], z_min: f64) -> f64 {
     let n = errors.len() as f64;
     let mean = errors.iter().sum::<f64>() / n;
@@ -127,7 +127,7 @@ pub fn find_epsilon_from(errors: &[f64], z_min: f64) -> f64 {
             prev_above = above;
         }
         // JPL's exact regularizer. (A linear sequence penalty was tried to
-        // help multi-anomaly channels: measured 0.739 vs 0.743 — no gain,
+        // help multi-anomaly channels: measured 0.739 vs 0.743, no gain,
         // reverted. The multi-sequence recall gap lives elsewhere.)
         let score = ((mean - bm) / mean + (sd - bsd) / sd)
             / (n_above as f64 + (seqs * seqs) as f64);
@@ -173,7 +173,7 @@ pub fn anomaly_sequences(errors: &[f64], eps: f64, buffer: usize) -> Vec<(usize,
 
 /// Telemanom's pruning: rank sequences by their max smoothed error; walk
 /// down the ranking and drop every sequence below the first relative drop
-/// smaller than `p_prune` (default 0.13) — weak stragglers are noise.
+/// smaller than `p_prune` (default 0.13): weak stragglers are noise.
 pub fn prune_sequences(
     errors: &[f64],
     seqs: &[(usize, usize)],
@@ -242,7 +242,7 @@ pub fn detect_channel_tuned(
 ) -> Vec<(usize, usize)> {
     // p == 0 selects the AR order PER CHANNEL on a train-only holdout
     // (fit on the first 80%, score one-step error on the last 20%,
-    // refit the winner on the full train split — the test is never seen).
+    // refit the winner on the full train split; the test is never seen).
     let chosen_p = if p == 0 {
         let split = train.len() * 4 / 5;
         let (tr, va) = train.split_at(split);
@@ -272,9 +272,9 @@ pub fn detect_channel_tuned(
     let res = pred.residuals(test);
     let span = (test.len() / 30).clamp(10, 300);
 
-    // DUAL channels: magnitude + local variance of the residual. Some
+    // Two channels: magnitude and local variance of the residual. Some
     // contextual anomalies produce plausible-magnitude residuals with
-    // CHANGED VARIANCE (the predictor tracks the values but the noise
+    // changed variance (the predictor tracks the values but the noise
     // structure differs). A rolling-variance channel catches these.
     let var_window = span.max(20);
     let mut res_var = vec![0.0f64; res.len()];
@@ -284,11 +284,11 @@ pub fn detect_channel_tuned(
         res_var[t] = w.iter().map(|x| (x - m) * (x - m)).sum::<f64>() / var_window as f64;
     }
     // Combine: element-wise max of the z-scored magnitude and z-scored
-    // variance channels — whichever is louder wins per timestep.
+    // variance channels; whichever is louder wins per timestep.
     let sm_mag = ewma(&res, span);
     let sm_var = ewma(&res_var, span);
-    // Calibrate the variance channel from the TRAIN split's residual
-    // statistics — the test anomaly mass must not inflate the baseline.
+    // Calibrate the variance channel from the train split's residual
+    // statistics: the test anomaly mass must not inflate the baseline.
     let train_res = pred.residuals(train);
     let train_sm_var = {
         let mut rv = vec![0.0f64; train_res.len()];
@@ -310,23 +310,23 @@ pub fn detect_channel_tuned(
         .zip(sm_var.iter())
         .map(|(&m, &v)| {
             // The variance channel contributes only when it fires harder
-            // than the magnitude channel already does — a conservative OR
+            // than the magnitude channel already does: a conservative OR
             // that doesn't add noise when the magnitude channel is quiet.
             let zv = ((v - var_mean) / var_sd).max(0.0);
             m + (zv * var_sd * 0.3).max(0.0) // additive boost, scaled
         })
         .collect::<Vec<f64>>();
 
-    // WINDOWED epsilon (JPL's actual scheme, ~2100-point evaluation
+    // Windowed epsilon (JPL's actual scheme, ~2100-point evaluation
     // windows): a single global epsilon lets the largest anomaly dominate
     // the residual statistics, sinking smaller secondary anomalies below
-    // threshold — the measured cause of the multi-anomaly recall gap.
+    // threshold. That is the measured cause of the multi-anomaly recall gap.
     // Each window gets its own epsilon; sequences merge globally, then one
     // global pruning pass.
     const EPS_WINDOW: usize = 2100;
     let n = sm.len();
     // Global noise floor: a quiet window's local epsilon must never drop
-    // below the stream-wide (mean + 2 sigma) — otherwise every quiet
+    // below the stream-wide (mean + 2 sigma), otherwise every quiet
     // window mints its own false positives (measured: 12 -> 46 FPs
     // without the floor).
     // Robust floor: median + 3·(1.4826·MAD). Mean/sd would be inflated by
@@ -341,13 +341,13 @@ pub fn detect_channel_tuned(
         let mad = dev[dev.len() / 2];
         med + 3.0 * 1.4826 * mad
     };
-    // GLOBAL pass: one epsilon over the whole stream — wins on channels
+    // Global pass: one epsilon over the whole stream. Wins on channels
     // with one dominant anomaly (local windows self-contaminate there).
     let mut seqs: Vec<(usize, usize)> = Vec::new();
     let global_eps = find_epsilon_from(&sm[p..], z_min);
     seqs.extend(anomaly_sequences(&sm, global_eps, buffer));
 
-    // WINDOWED passes: per-window epsilon (floored) — wins on multi-anomaly
+    // Windowed passes: per-window epsilon (floored). Wins on multi-anomaly
     // channels where the largest event masks the others globally. Two
     // phases, offset by half a window, so no anomaly is split across a
     // window boundary in both phases.
@@ -386,7 +386,7 @@ pub fn detect_channel_tuned(
 /// DFA structural channel for the batch protocol: sliding windowed α over
 /// the test split, z-scored against the train split's windowed-α
 /// statistics, run through the same ε/sequence machinery. Catches
-/// CONTEXTUAL anomalies (the pattern changes while values stay plausible)
+/// contextual anomalies (the pattern changes while values stay plausible)
 /// that a value predictor's residuals cannot see.
 pub fn dfa_sequences(
     train: &[f64],
@@ -417,9 +417,9 @@ pub fn dfa_sequences(
     .max(1e-6);
     let test_a = alphas_of(test, &mut buf);
     let z: Vec<f64> = test_a.iter().map(|a| (a - m).abs() / sd).collect();
-    // The structural channel gets its OWN false-positive discipline: a hard
+    // The structural channel gets its own false-positive discipline: a hard
     // epsilon floor well above the α-scatter (windowed α is noisy on real
-    // channels) and its own pruning pass — without these the union floods.
+    // channels) and its own pruning pass; without these the union floods.
     let eps = find_epsilon_from(&z, z_min.max(4.0));
     let raw = anomaly_sequences(&z, eps, buffer / stride);
     prune_sequences(&z, &raw, 0.13)

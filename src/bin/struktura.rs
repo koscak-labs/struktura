@@ -213,7 +213,7 @@ fn main() {
         println!("  DEMOS (zero setup, embedded data):");
         println!("    struktura demo                             Bearing fault (CWRU data)");
         println!("    struktura nasa                             SMAP satellite anomaly");
-        println!("    struktura voyager                          Voyager 1 AACS anomaly");
+        println!("    struktura voyager                          Voyager 1 magnetometer, 2021 vs 2022");
         println!("    struktura mission                          Autonomous 24K-sample gauntlet");
         println!();
         println!("  DOMAIN:");
@@ -456,9 +456,9 @@ fn cmd_check(args: &[String]) {
         println!("    Real alpha:     {:.3}  (R2={:.4})", proof.real_alpha, proof.real_r2);
         println!("    Shuffled alpha: {:.3}  (R2={:.4})", proof.shuffled_alpha, proof.shuffled_r2);
         if proof.structure_confirmed {
-            println!("    Result: \x1b[32mCONFIRMED\x1b[0m — shuffling destroyed the structure");
+            println!("    Result: \x1b[32mCONFIRMED\x1b[0m, shuffling destroyed the structure");
         } else {
-            println!("    Result: \x1b[33mINCONCLUSIVE\x1b[0m — signal may lack exploitable structure");
+            println!("    Result: \x1b[33mINCONCLUSIVE\x1b[0m, signal may lack exploitable structure");
         }
     }
 
@@ -479,7 +479,7 @@ fn cmd_check_multi(files: &[&str], args: &[String]) {
     let _ = threshold;
 
     println!();
-    println!("  \x1b[1mSTRUKTURA\x1b[0m — batch analysis ({} files)", files.len());
+    println!("  \x1b[1mSTRUKTURA\x1b[0m: batch analysis ({} files)", files.len());
     println!("  ================================================");
     println!();
     println!("  | {:<30} | {:>6} | {:>7} | {:>6} | {:>8} | {:>8} |", "File", "N", "Alpha", "R2", "Quality", "Verdict");
@@ -535,7 +535,7 @@ fn cmd_compare(args: &[String]) {
     let direction = if shift > 0.0 { "more correlated (more persistent)" }
                     else { "less correlated (more random)" };
     println!();
-    println!("  shift: {:+.3} — the signal became {}", shift, direction);
+    println!("  shift: {:+.3}, the signal became {}", shift, direction);
 
     // Significance: z of the shift against both signals' own alpha spread
     // across quarter-length windows (subsampling, see bootstrap_alpha).
@@ -758,7 +758,7 @@ fn cmd_voyager() {
     println!();
     println!("  \x1b[1mVOYAGER 1 STRUCTURAL HEALTH ANALYSIS\x1b[0m");
     println!("  DFA scaling analysis of magnetometer data across");
-    println!("  2021 vs 2022 (embedded data — works after cargo install)");
+    println!("  2021 vs 2022 (embedded data, works after cargo install)");
     println!("  ====================================================================");
     println!();
     println!("  Data: NASA SPDF, L.F. Burlaga, VIM 48-second averages");
@@ -799,7 +799,7 @@ fn cmd_heliopause() {
     println!();
     println!("  \x1b[1mVOYAGER 1 HELIOPAUSE CROSSING\x1b[0m");
     println!("  DFA structural analysis across the boundary of our solar system");
-    println!("  August 25, 2012 — first human-made object to enter interstellar space");
+    println!("  August 25, 2012, first human-made object to enter interstellar space");
     println!("  ====================================================================");
     println!();
     println!("  Data: NASA SPDF, L.F. Burlaga, VIM 48-second magnetometer averages");
@@ -823,7 +823,7 @@ fn cmd_heliopause() {
 
     println!();
     println!("  ====================================================================");
-    println!("  Heliosphere:  alpha={:.3}  (sun's magnetic field — strong persistence)", result.helio_alpha);
+    println!("  Heliosphere:  alpha={:.3}  (sun's magnetic field, strong persistence)", result.helio_alpha);
     println!("  Interstellar: alpha={:.3}  (after the crossing)", result.interstellar_alpha);
     println!();
     println!("  Alpha differs across the crossing, but the subsampling z on the");
@@ -903,7 +903,7 @@ fn cmd_batch(args: &[String]) {
 
     println!();
     if any_alert {
-        println!("  \x1b[31;1m⚠ STRUCTURAL CHANGES DETECTED — see verdicts above\x1b[0m");
+        println!("  \x1b[31;1m⚠ STRUCTURAL CHANGES DETECTED, see verdicts above\x1b[0m");
     } else if baseline_alpha.is_some() {
         println!("  \x1b[32m✓ All signals within baseline tolerance\x1b[0m");
     }
@@ -1008,7 +1008,7 @@ fn cmd_watch(args: &[String]) {
     });
 
     println!();
-    println!("  \x1b[1mSTRUKTURA WATCH\x1b[0m — monitoring {} every {}s", file, interval_secs);
+    println!("  \x1b[1mSTRUKTURA WATCH\x1b[0m: monitoring {} every {}s", file, interval_secs);
     if let Some(ba) = baseline_alpha {
         println!("  Baseline alpha: {:.3}", ba);
     }
@@ -1052,7 +1052,7 @@ fn cmd_watch(args: &[String]) {
 fn cmd_fingerprint(args: &[String]) {
     if args.len() < 3 {
         eprintln!("Usage: struktura dna <file1> [file2] ...  (aliases: fingerprint, fp)");
-        eprintln!("  Structural DNA — the unique identity of each signal.");
+        eprintln!("  Structural DNA, the unique identity of each signal.");
         process::exit(1);
     }
     use struktura::fingerprint::fingerprint;
@@ -1193,27 +1193,27 @@ fn cmd_ims() {
     println!();
     println!("  \x1b[1mNASA IMS BEARING RUN-TO-FAILURE\x1b[0m");
     println!("  DFA structural analysis across 984 recordings (7 days)");
-    println!("  Bearing 1 outer race fault — IMS/U. Cincinnati, NASA DASHlink");
+    println!("  Bearing 1 outer race fault, IMS/U. Cincinnati, NASA DASHlink");
     println!("  ====================================================================");
     println!();
 
     println!("  Baseline (recordings 1-900):   α≈{:.3}  (stable, anti-correlated noise)", result.baseline_alpha);
-    println!("  Early warning (recording 970):  α={:.3}  (structure STIFFENS)", result.pre_failure_alpha);
-    println!("  End of life (recording 984):    α={:.3}  (structure COLLAPSES)", result.failure_alpha);
+    println!("  First alarm (recording 970):   α={:.3}", result.pre_failure_alpha);
+    println!("  Last recording (984):          α={:.3}", result.failure_alpha);
     println!();
     println!("  Timeline:");
     println!("    rec 1-900:  α≈0.17  ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒  stable");
-    println!("    rec 970:    α=0.30  ▒▒▒▒▒▒▒▒▒▒▒▒██                 onset");
-    println!("    rec 974:    α=0.53  ▒▒▒▒▒▒▒▒▒▒▒▒██████████         \x1b[33mSTIFFENING\x1b[0m");
-    println!("    rec 981:    α=0.47  ▒▒▒▒▒▒▒▒▒▒▒▒█████████          \x1b[31mPEAK\x1b[0m");
-    println!("    rec 983:    α=0.18  ▒▒▒▒▒▒                         brief recovery");
-    println!("    rec 984:    α=0.11  ▒▒▒                             \x1b[31;1mCOLLAPSE\x1b[0m");
+    println!("    rec 970:    α=0.30  ▒▒▒▒▒▒▒▒▒▒▒▒██");
+    println!("    rec 974:    α=0.53  ▒▒▒▒▒▒▒▒▒▒▒▒██████████");
+    println!("    rec 981:    α=0.47  ▒▒▒▒▒▒▒▒▒▒▒▒█████████");
+    println!("    rec 983:    α=0.18  ▒▒▒▒▒▒");
+    println!("    rec 984:    α=0.11  ▒▒▒");
     println!();
     println!("  ====================================================================");
-    println!("  The bearing's structure STIFFENED (correlations appeared) 2+ hours");
-    println!("  before final collapse. DFA detected a regime change — the bearing");
-    println!("  entered a new mechanical state before it destroyed itself.");
-    println!("  The same DFA core. Same function as the heliopause demo.");
+    println!("  DFA's alpha shifted (regime change) starting at recording 970, before");
+    println!("  the recording 984 failure. A plain RMS threshold on this same data");
+    println!("  trips earlier than that, so this is not an early-warning result,");
+    println!("  it demonstrates the same DFA core used in the heliopause demo.");
     println!();
 }
 
@@ -1268,7 +1268,7 @@ fn cmd_health(args: &[String]) {
     for p in &spectrum.points { print!("{:.2} ", p.h_q); }
     println!();
 
-    // Trend analysis — is α getting worse over time within this signal?
+    // Trend analysis, is α getting worse over time within this signal?
     if current.len() >= 512 {
         let trend = struktura::trend::alpha_trend(&current, 256, 64);
         let dir_str = match trend.direction {
@@ -1308,7 +1308,7 @@ fn cmd_health(args: &[String]) {
 fn cmd_multifractal(args: &[String]) {
     if args.len() < 3 {
         eprintln!("Usage: struktura multifractal <file_or_->  (alias: mf)");
-        eprintln!("  Reveals multi-scale structure — is the signal simple or complex?");
+        eprintln!("  Reveals multi-scale structure, is the signal simple or complex?");
         process::exit(1);
     }
     use struktura::mfdfa::mfdfa;
@@ -1343,9 +1343,9 @@ fn cmd_multifractal(args: &[String]) {
     println!();
 
     let mf_str = if spectrum.is_multifractal {
-        "\x1b[35mMULTIFRACTAL\x1b[0m — different scales have different structure"
+        "\x1b[35mMULTIFRACTAL\x1b[0m, different scales have different structure"
     } else {
-        "\x1b[32mMONOFRACTAL\x1b[0m — uniform structure across all scales"
+        "\x1b[32mMONOFRACTAL\x1b[0m, uniform structure across all scales"
     };
     println!("  Verdict: {mf_str}");
     println!("  Width {:.3} (wider = more complex multi-scale behavior)", spectrum.width);
@@ -1452,7 +1452,7 @@ fn cmd_market(args: &[String]) {
 
     println!();
     println!("  \x1b[1mMARKET REGIME DETECTION\x1b[0m");
-    println!("  DFA on log-returns — what strategy works NOW");
+    println!("  DFA on log-returns, what strategy works NOW");
     println!("  ====================================================================");
     println!();
     let bar = make_bar(result.alpha);
@@ -1520,7 +1520,7 @@ fn cmd_text(args: &[String]) {
 
     println!();
     println!("  \x1b[1mTEXT STRUCTURE ANALYSIS\x1b[0m");
-    println!("  DFA on sentence-length sequences — measures writing rhythm");
+    println!("  DFA on sentence-length sequences, measures writing rhythm");
     println!("  ====================================================================");
     println!();
     println!("  Reference: human prose α≈0.7-0.8 | shuffled/mechanical α≈0.5");
@@ -1613,7 +1613,7 @@ fn cmd_generate(args: &[String]) {
             "--threshold" if i + 1 < args.len() => { threshold = args[i + 1].parse().unwrap_or(0.08); i += 2; }
             "-o" | "--output" if i + 1 < args.len() => { output_dir = args[i + 1].clone(); i += 2; }
             "--help" => {
-                println!("struktura generate — generate complete cFS/F Prime DFA monitor apps");
+                println!("struktura generate, generate complete cFS/F Prime DFA monitor apps");
                 println!();
                 println!("  Compatible with nasa/ogma db.json format. No Haskell required.");
                 println!();
@@ -1662,8 +1662,8 @@ fn cmd_generate(args: &[String]) {
             let c_wrapper = generate_rover_c_wrapper();
             std::fs::write(format!("{}/RoverHealthImpl.c", output_dir), &c_wrapper).expect("write C wrapper");
             println!("Generated rover F Prime component in {}/", output_dir);
-            println!("  RoverHealth.fpp    — F Prime component definition");
-            println!("  RoverHealthImpl.c  — C implementation (calls rover_flight staticlib)");
+            println!("  RoverHealth.fpp   , F Prime component definition");
+            println!("  RoverHealthImpl.c , C implementation (calls rover_flight staticlib)");
             println!("  Link with: cargo build --release --lib --crate-type staticlib");
             return;
         }
@@ -2202,7 +2202,7 @@ fn cmd_benchmark_faults() {
     println!("  ================================================================");
     println!();
 
-    // Step 1: build the null distribution — clean-to-clean alpha shifts across seeds
+    // Step 1: build the null distribution, clean-to-clean alpha shifts across seeds
     let mut null_shifts: Vec<f64> = Vec::new();
     for seed in 1..=n_seeds {
         let clean = synth_structural_fault(n, seed * 7919, 1.1);
@@ -2252,7 +2252,7 @@ fn cmd_benchmark_faults() {
     println!();
     println!("  DFA measures STRUCTURE (long-range correlations), not VALUES.");
     println!("  Residual-based detectors (xLSTM, ARIMA) measure VALUE deviations.");
-    println!("  Together they cover the full fault taxonomy — neither alone does.");
+    println!("  Together they cover the full fault taxonomy, neither alone does.");
     println!();
     println!("  Algorithm: Detrended Fluctuation Analysis (Peng 1994)");
     println!("  Signal: {} samples/seed, fault injected at sample {}", n, fault_at);
@@ -2326,12 +2326,12 @@ fn cmd_benchmark_telemetry(args: &[String]) {
             frac * 100.0, samples, color, rate * 100.0);
     }
     println!();
-    // Per-timestep F1 — metric-compatible with residual-detector benchmarks
+    // Per-timestep F1, metric-compatible with residual-detector benchmarks
     use struktura::telemetry_bench::timestep_f1_benchmark;
     let f1_seeds = n_seeds.min(30);
     let f1 = timestep_f1_benchmark(length, f1_seeds, 96, 2);
     println!("  \x1b[1mPER-TIMESTEP F1\x1b[0m (trailing DFA window 96, step 2, {} seeds,", f1_seeds);
-    println!("  threshold = 99th pct of calibration scores — residual-detector protocol)");
+    println!("  threshold = 99th pct of calibration scores, residual-detector protocol)");
     println!("  | Fault Type         | F1 (step) | False Alarm | Event Detect | Latency |");
     println!("  |--------------------|-----------|-------------|--------------|---------|");
     for r in &f1 {
@@ -2383,7 +2383,7 @@ fn cmd_monitor_perf() {
 
     println!();
     println!("  \x1b[1mSTREAMING MONITOR PERFORMANCE\x1b[0m (flight-relevant timing)");
-    println!("  6 channels, window 96, DFA stride 2 — release build, this host");
+    println!("  6 channels, window 96, DFA stride 2, release build, this host");
     println!();
 
     let calib = synth_spacecraft(2048, 424242);
@@ -2441,7 +2441,7 @@ fn cmd_monitor_perf() {
     println!("  By leg (res/rep/dfa/level/cusum): {}/{}/{}/{}/{}",
         leg_counts[0], leg_counts[1], leg_counts[2], leg_counts[3], leg_counts[4]);
     println!();
-    println!("  Memory: fixed after calibration — per channel {} + {} f64 rings;",
+    println!("  Memory: fixed after calibration, per channel {} + {} f64 rings;",
         struktura::monitor::WINDOW, struktura::monitor::ROLL);
     println!("  no heap allocation in the push path.");
     println!();
@@ -2565,7 +2565,7 @@ fn cmd_monitor_real() {
     println!("  \x1b[1mMONITOR ON REAL NASA DATA\x1b[0m");
     println!("  ================================================================");
 
-    // ── Part 1: NASA IMS bearing run-to-failure ──
+    // Part 1: NASA IMS bearing run-to-failure
     // 984 recordings, 10-minute intervals, 4 bearing channels.
     // Per-recording RMS per channel = housekeeping-style telemetry stream.
     // Bearing 1 outer-race failure terminated the test at the last recording.
@@ -2678,16 +2678,16 @@ fn cmd_monitor_real() {
                         println!("  alarm {} recordings ({:.1} h) before the test ended", lead_recs, lead_hours);
                         println!("  (a plain RMS amplitude threshold on this bearing trips earlier)");
                     }
-                    None => println!("  \x1b[31mNo alarm raised — detection failed\x1b[0m"),
+                    None => println!("  \x1b[31mNo alarm raised, detection failed\x1b[0m"),
                 }
             }
             None => println!("  IMS calibration failed (insufficient data)"),
         }
     } else {
-        println!("  IMS raw data not found (need data/ims/extracted/2nd_test/2nd_test) — skipped");
+        println!("  IMS raw data not found (need data/ims/extracted/2nd_test/2nd_test), skipped");
     }
 
-    // ── Part 1b: prognosis validation on the IMS run-to-failure ──
+    // Part 1b: prognosis validation on the IMS run-to-failure
     // Health metric: bearing-1 RMS. Failure threshold: the RMS level at the
     // final recording. At each checkpoint, fit the recent trend and predict
     // the crossing; compare with the actual failure recording (983).
@@ -2729,11 +2729,11 @@ fn cmd_monitor_real() {
                 ),
             }
         }
-        println!("  ('no resolvable trend' early in life is the honest output —");
-        println!("   degradation had not begun; a number there would be fiction.)");
+        println!("  ('no resolvable trend' early in life is the correct output:");
+        println!("   degradation had not begun, a number there would be fiction.)");
     }
 
-    // ── Part 2: Voyager 1 magnetometer — heliopause crossing ──
+    // Part 2: Voyager 1 magnetometer, heliopause crossing
     // Calibration must come from the SAME instrument regime: use the first
     // half of the pre-crossing cruise data, stream the rest of pre + post.
     let pre: Vec<f64> = include_str!("../../data/voyager1_helio_pre.csv")
@@ -2743,13 +2743,13 @@ fn cmd_monitor_real() {
 
     let calib_n = pre.len() / 2;
     println!();
-    println!("  \x1b[1mVoyager 1 magnetometer — heliopause crossing\x1b[0m");
+    println!("  \x1b[1mVoyager 1 magnetometer, heliopause crossing\x1b[0m");
     println!("  Calibration: first {} pre-crossing samples (2011-2012 cruise);", calib_n);
     println!("  stream: remaining {} pre + {} post-crossing samples",
         pre.len() - calib_n, post.len());
     match HybridMonitor::calibrate(&[pre[..calib_n].to_vec()]) {
         Some(mut mon) => {
-            // Interplanetary field strength trends with solar activity — the
+            // Interplanetary field strength trends with solar activity, the
             // level-shift and CUSUM legs assume level stationarity and are
             // disabled for this channel (per-deployment leg configuration).
             use struktura::monitor::Leg;
@@ -2768,7 +2768,7 @@ fn cmd_monitor_real() {
             match alarm_at {
                 Some((i, leg)) => {
                     if i < pre_rest {
-                        println!("  \x1b[31mALARM at sample {} PRE-crossing via {:?} — false alarm\x1b[0m", i, leg);
+                        println!("  \x1b[31mALARM at sample {} PRE-crossing via {:?}, false alarm\x1b[0m", i, leg);
                     } else {
                         println!("  Quiet through {} held-out pre-crossing samples;", pre_rest);
                         println!("  \x1b[32mALARM {} samples after the heliopause crossing via {:?}\x1b[0m",
@@ -2849,11 +2849,11 @@ fn cmd_mission() {
     use struktura::telemetry_bench::synth_spacecraft;
 
     println!();
-    println!("  \x1b[1mAUTONOMOUS MISSION GAUNTLET\x1b[0m — no human in the loop");
+    println!("  \x1b[1mAUTONOMOUS MISSION GAUNTLET\x1b[0m: no human in the loop");
     println!("  24,000 samples. Scripted events the autopilot must survive alone:");
     println!("    t= 4,000  temp sensor freezes (dead sensor)");
     println!("    t=10,000  PERMANENT regime change (+0.8 sigma, all channels)");
-    println!("    t=18,000  drift fault on SOC — in the NEW regime");
+    println!("    t=18,000  drift fault on SOC, in the NEW regime");
     println!("  ================================================================");
     println!();
 
@@ -2980,7 +2980,7 @@ fn cmd_evolve(args: &[String]) {
     }
 
     println!();
-    println!("  \x1b[1mGENERATIONAL EVOLUTION\x1b[0m — parameter mutation + LEG SYNTHESIS");
+    println!("  \x1b[1mGENERATIONAL EVOLUTION\x1b[0m: parameter mutation + LEG SYNTHESIS");
     println!("  BLUE may now compose NEW detector legs from a grammar (source x");
     println!("  statistic x window x persistence), each Gumbel-calibrated, accepted");
     println!("  only with zero clean alarms. {} generations x {} probes x {} candidates.",
@@ -3308,7 +3308,7 @@ fn cmd_smap(args: &[String]) {
     const REFRACTORY: usize = 100;
 
     for line in labels.lines().skip(1) {
-        // chan_id,spacecraft,"[[s,e],[s,e]]",class,num_values — the sequence
+        // chan_id,spacecraft,"[[s,e],[s,e]]",class,num_values, the sequence
         // field is quoted and contains commas.
         let mut parts = line.splitn(2, ',');
         let chan = match parts.next() { Some(c) => c.trim().to_string(), None => continue };
@@ -3402,7 +3402,7 @@ fn cmd_smap(args: &[String]) {
         }
 
         // Trending-channel detection (the Voyager lesson): near-unit-root
-        // AR(1) means the level wanders legitimately — the stationarity
+        // AR(1) means the level wanders legitimately, the stationarity
         // legs (level shift, CUSUM) would flood false alarms.
         let trending = {
             let n = train_v.len() - 1;
@@ -3505,9 +3505,9 @@ fn cmd_smap(args: &[String]) {
                 class, hits, total, *hits as f64 / *total as f64 * 100.0);
         }
     }
-    println!("  Self-calibrated, no training, no GPU, ~4us/sample. Honest note: the");
-    println!("  values are pre-scaled to (-1,1) by JPL and many channels saturate,");
-    println!("  which auto-disables the repeated-value leg on those channels.");
+    println!("  Self-calibrated, no training, no GPU, ~4us/sample. Note: the values are");
+    println!("  pre-scaled to (-1,1) by JPL and many channels saturate, which auto-disables");
+    println!("  the repeated-value leg on those channels.");
     println!();
 }
 
@@ -3520,7 +3520,7 @@ fn cmd_nasa() {
         .lines().filter_map(|l| l.trim().parse().ok()).collect();
 
     println!();
-    println!("  \x1b[1mNASA SMAP SATELLITE — CHANNEL T-1 (thermal telemetry)\x1b[0m");
+    println!("  \x1b[1mNASA SMAP SATELLITE, CHANNEL T-1 (thermal telemetry)\x1b[0m");
     println!("  Real data from NASA's Soil Moisture Active Passive satellite.");
     println!("  Two labeled anomalies: a point fault + a contextual fault.");
     println!("  Method: ridge AR(auto) + JPL's telemanom residual math.");
@@ -3533,7 +3533,7 @@ fn cmd_nasa() {
     use struktura::monitor::HybridMonitor;
     let mut mon = HybridMonitor::calibrate(std::slice::from_ref(&train)).expect("calibration");
     // Disable stationarity legs on this channel (SMAP data is quantized and
-    // trends between modes — the same lesson as Voyager).
+    // trends between modes, the same lesson as Voyager).
     mon.set_leg_enabled(struktura::monitor::Leg::LevelShift, false);
     mon.set_leg_enabled(struktura::monitor::Leg::ResidualCusum, false);
     let mut stream_alarms: Vec<(usize, struktura::monitor::Leg)> = Vec::new();
@@ -3550,7 +3550,7 @@ fn cmd_nasa() {
     for (i, &(ls, le)) in labeled.iter().enumerate() {
         let found = seqs.iter().any(|&(s, e)| s <= le && e >= ls);
         let mark = if found { "\x1b[32m✓ DETECTED\x1b[0m" } else { "\x1b[31m✗ MISSED\x1b[0m" };
-        println!("  Anomaly {}: samples {}..{} ({}) — {}", i + 1, ls, le, classes[i], mark);
+        println!("  Anomaly {}: samples {}..{} ({}), {}", i + 1, ls, le, classes[i], mark);
     }
 
     let fp: Vec<_> = seqs.iter().filter(|&&(s, e)| {
@@ -3628,7 +3628,7 @@ fn cmd_guard(args: &[String]) {
 }
 
 /// Watch mode: calibrate on the file's current content, then tail it for
-/// new rows — like `tail -f` but with anomaly detection. Ctrl-C to stop.
+/// new rows, like `tail -f` but with anomaly detection. Ctrl-C to stop.
 fn run_guard_watch(path: &str, baseline_n: usize, json: bool, poll_ms: u64) -> ! {
     use struktura::monitor::HybridMonitor;
     use struktura::autopilot::AutoPilot;
@@ -3710,12 +3710,12 @@ fn run_guard_watch(path: &str, baseline_n: usize, json: bool, poll_ms: u64) -> !
 
 fn generate_rover_c_wrapper() -> String {
     let mut s = String::new();
-    s.push_str("/* RoverHealthImpl.c — generated by struktura generate --rover\n");
+    s.push_str("/* RoverHealthImpl.c, generated by struktura generate --rover\n");
     s.push_str(" * Bridges F Prime component calls to the Rust rover_flight staticlib.\n");
     s.push_str(" * Link with: libstruktura.a (cargo build --release --lib --crate-type staticlib)\n");
     s.push_str(" */\n\n");
     s.push_str("#include <stdint.h>\n\n");
-    s.push_str("/* FFI declarations — match rover_flight.rs exports */\n");
+    s.push_str("/* FFI declarations, match rover_flight.rs exports */\n");
     s.push_str("#define N_CH 10\n\n");
     s.push_str("typedef struct { uint8_t leg; uint8_t channel; uint32_t tick; } FAlarm;\n\n");
     s.push_str("/* Extern: the Rust staticlib provides these */\n");
@@ -3808,7 +3808,7 @@ fn cmd_rover() {
     use struktura::monitor::explain_alarm;
 
     println!();
-    println!("  \x1b[1mROVER HEALTH MONITORING\x1b[0m — autonomous fault handling");
+    println!("  \x1b[1mROVER HEALTH MONITORING\x1b[0m: autonomous fault handling");
     println!("  10 channels: 4 wheel motors, suspension, battery (V + SOC),");
     println!("  thermal (CPU + motors), comms. three scripted faults:");
     println!("    t=1500  front-left wheel bearing starts wearing");
@@ -3847,14 +3847,14 @@ fn cmd_rover() {
                 Event::Quarantined { channel, .. } => {
                     q_count += 1;
                     let ch_name = ROVER_CHANNEL_NAMES.get(*channel).unwrap_or(&"?");
-                    println!("  t={:>5}  ✗ {} dead — virtual readings active", t, ch_name);
+                    println!("  t={:>5}  ✗ {} dead, virtual readings active", t, ch_name);
                 }
                 Event::AdaptationStarted { .. } =>
                     println!("  t={:>5}  ↻ environment change? learning new baseline...", t),
                 Event::Recalibrated { .. } =>
                     println!("  t={:>5}  ✓ new baseline accepted", t),
                 Event::RolledBack { .. } =>
-                    println!("  t={:>5}  ✗ not environment — fault confirmed", t),
+                    println!("  t={:>5}  ✗ not environment, fault confirmed", t),
             }
         }
     }
@@ -3879,19 +3879,19 @@ fn emit_event(t: usize, ev: &struktura::autopilot::Event, json: bool) {
         }
         Event::Quarantined { channel, .. } => {
             if json { println!("{{\"event\":\"quarantine\",\"t\":{},\"channel\":{}}}", t, channel); }
-            else { eprintln!("  row {:>6}  ✗ ch{} declared dead — using reconstructed values", t, channel); }
+            else { eprintln!("  row {:>6}  ✗ ch{} declared dead, using reconstructed values", t, channel); }
         }
         Event::AdaptationStarted { .. } => {
             if json { println!("{{\"event\":\"adapting\",\"t\":{}}}", t); }
-            else { eprintln!("  row {:>6}  ↻ environment may have changed — learning new baseline...", t); }
+            else { eprintln!("  row {:>6}  ↻ environment may have changed, learning new baseline...", t); }
         }
         Event::Recalibrated { .. } => {
             if json { println!("{{\"event\":\"recalibrated\",\"t\":{}}}", t); }
-            else { eprintln!("  row {:>6}  ✓ new baseline accepted — this is the new normal", t); }
+            else { eprintln!("  row {:>6}  ✓ new baseline accepted, this is the new normal", t); }
         }
         Event::RolledBack { .. } => {
             if json { println!("{{\"event\":\"rollback\",\"t\":{}}}", t); }
-            else { eprintln!("  row {:>6}  ✗ not a real environment change — fault confirmed", t); }
+            else { eprintln!("  row {:>6}  ✗ not a real environment change, fault confirmed", t); }
         }
     }
 }
@@ -3990,14 +3990,14 @@ fn run_guard(content: &str, baseline_n: usize, json: bool) -> i32 {
                     if json {
                         println!("{{\"event\":\"quarantine\",\"t\":{},\"channel\":\"{}\"}}", t, name);
                     } else {
-                        eprintln!("  row {:>6}  ✗ {} declared dead — using reconstructed values", t, name);
+                        eprintln!("  row {:>6}  ✗ {} declared dead, using reconstructed values", t, name);
                     }
                 }
                 Event::AdaptationStarted { .. } => {
                     if json {
                         println!("{{\"event\":\"adapting\",\"t\":{}}}", t);
                     } else {
-                        eprintln!("  row {:>6}  ↻ environment may have changed — learning new baseline...", t);
+                        eprintln!("  row {:>6}  ↻ environment may have changed, learning new baseline...", t);
                     }
                 }
                 Event::Recalibrated { .. } => {
@@ -4005,14 +4005,14 @@ fn run_guard(content: &str, baseline_n: usize, json: bool) -> i32 {
                     if json {
                         println!("{{\"event\":\"recalibrated\",\"t\":{}}}", t);
                     } else {
-                        eprintln!("  row {:>6}  ✓ new baseline accepted — this is the new normal", t);
+                        eprintln!("  row {:>6}  ✓ new baseline accepted, this is the new normal", t);
                     }
                 }
                 Event::RolledBack { .. } => {
                     if json {
                         println!("{{\"event\":\"rollback\",\"t\":{}}}", t);
                     } else {
-                        eprintln!("  row {:>6}  ✗ not a real environment change — fault confirmed", t);
+                        eprintln!("  row {:>6}  ✗ not a real environment change, fault confirmed", t);
                     }
                 }
             }
@@ -4025,7 +4025,7 @@ fn run_guard(content: &str, baseline_n: usize, json: bool) -> i32 {
             if alarm_count == 0 { "healthy" } else { "fault_detected" });
     } else {
         if alarm_count == 0 {
-            eprintln!("  HEALTHY — {} samples, no anomalies", n - calib_n);
+            eprintln!("  HEALTHY, {} samples, no anomalies", n - calib_n);
         } else {
             eprintln!("  {} faults detected across {} samples ({} adaptations, {} quarantines)",
                 alarm_count, n - calib_n, adapt_count, quarantine_count);
@@ -4098,7 +4098,7 @@ fn cmd_when(args: &[String]) {
             let before_interp = interpret_alpha(cp.alpha_before);
             let after_interp = interpret_alpha(cp.alpha_after);
             let direction = if cp.shift > 0.0 { "more correlated" } else { "less correlated" };
-            println!("  {}. \x1b[33msample {}\x1b[0m — structure shifted {:+.3} (z={:.1})", i + 1, cp.location, cp.shift, cp.confidence);
+            println!("  {}. \x1b[33msample {}\x1b[0m, structure shifted {:+.3} (z={:.1})", i + 1, cp.location, cp.shift, cp.confidence);
             println!("     before: α={:.3} ({})", cp.alpha_before, before_interp);
             println!("     after:  α={:.3} ({})", cp.alpha_after, after_interp);
             let mark = if truth.is_empty() { "" } else if in_truth(cp.location) { "  [in truth window]" } else { "  [outside truth]" };
@@ -4224,7 +4224,7 @@ fn cmd_pipe(args: &[String]) {
     }
 }
 
-// ── debugger commands (v1.8) ─────────────────────────────────────────
+// debugger commands (v1.8)
 
 fn cmd_investigate(args: &[String]) {
     let mut file_path = String::new();
@@ -4277,7 +4277,7 @@ fn cmd_investigate(args: &[String]) {
     for (ci, col) in meas_data.iter().enumerate() {
         let bad = col.iter().filter(|v| !v.is_finite()).count();
         if bad > 0 {
-            quality_issues.push(format!("  {} — {} non-finite values ({:.1}%)", meas_names[ci], bad, 100.0 * bad as f64 / col.len() as f64));
+            quality_issues.push(format!("  {}, {} non-finite values ({:.1}%)", meas_names[ci], bad, 100.0 * bad as f64 / col.len() as f64));
         }
     }
 
@@ -4369,7 +4369,7 @@ fn cmd_case(args: &[String]) {
             // reproducibility detection, not a security hash).
             let input_hash = struktura::case::fingerprint_content(content.as_bytes());
             // Shared parse -> classify -> filter-to-measurement-columns
-            // pipeline (also used by `investigate`, Finding 2) — schema is
+            // pipeline (also used by `investigate`, Finding 2), schema is
             // built up front from the same filtered columns `investigate`
             // calibrates on, instead of being built after the run over
             // unfiltered columns (which used to feed timestamp/mode
@@ -4492,8 +4492,8 @@ fn cmd_replay(args: &[String]) {
 /// Parse a header + comma-separated-f64 CSV body into column-major data.
 ///
 /// A malformed row (wrong field count) used to be silently patched up
-/// per-field — a short row padded with NaN, a long row truncated to header
-/// width — which let a bad row masquerade as partly-valid data. Row count
+/// per-field, a short row padded with NaN, a long row truncated to header
+/// width, which let a bad row masquerade as partly-valid data. Row count
 /// (and therefore tick alignment with a sidecar context file keyed on the
 /// original row number) is still always preserved, but now the entire row
 /// is marked invalid and every channel's value for that row is NaN, not
@@ -4502,7 +4502,7 @@ fn cmd_replay(args: &[String]) {
 ///
 /// A row with the *right* field count but a value that doesn't parse as a
 /// number (e.g. a `mode`/`command` column carrying a string label) is NOT
-/// treated as malformed here — `prepare_input`'s `ColumnSchema` filters
+/// treated as malformed here, `prepare_input`'s `ColumnSchema` filters
 /// those non-measurement columns out downstream, so a non-numeric field in
 /// a well-shaped row is expected input, not a data-quality problem; only
 /// that one field becomes NaN.
@@ -4534,7 +4534,7 @@ fn parse_csv_columns(content: &str) -> (Vec<String>, Vec<Vec<f64>>, Vec<usize>) 
 
 /// Shared input preparation for `investigate` and `case save` (Finding 2):
 /// parse the CSV, classify its columns, and filter to measurement channels
-/// only — `investigate` used to filter and `case save` didn't, so a case
+/// only, `investigate` used to filter and `case save` didn't, so a case
 /// saved from the same file calibrated on timestamp/mode columns too.
 fn prepare_input(content: &str) -> (Vec<String>, Vec<Vec<f64>>, struktura::context::ColumnSchema, Vec<String>) {
     let (header, cols, invalid_rows) = parse_csv_columns(content);
@@ -4609,7 +4609,7 @@ fn cmd_copilot_compare(args: &[String]) {
 
     // Header
     println!();
-    println!("  \x1b[1mCopilot Boolean vs Struktura DFA — {}\x1b[0m", file_path);
+    println!("  \x1b[1mCopilot Boolean vs Struktura DFA: {}\x1b[0m", file_path);
     println!("  {} samples × {} channels, calibrated on {} rows", n, ncols, calib_n);
     println!("  ─────────────────────────────────────────────────────────────────────");
     println!("  {:>6}  {:>10}  {:>14}  {:>20}", "row", "amplitude", "bool monitor", "struktura DFA");
@@ -4656,12 +4656,12 @@ fn cmd_copilot_compare(args: &[String]) {
             }
         }
 
-        // Only print transition rows — when something CHANGES
+        // Only print transition rows, when something CHANGES
         let bool_just_tripped = bool_tripped && first_bool_alarm == Some(t);
         let is_dfa_event = dfa_event.is_some();
         if is_dfa_event || bool_just_tripped {
             let bool_str = if bool_tripped { "\x1b[31m✗ ALARM\x1b[0m" } else { "✓ OK" };
-            let dfa_str = dfa_event.unwrap_or_else(|| "—".into());
+            let dfa_str = dfa_event.unwrap_or_else(|| "-".into());
             let amp_str = if bool_tripped { format!("\x1b[31m{:.4}\x1b[0m", max_amp) } else { format!("{:.4}", max_amp) };
             println!("  {:>6}  {:>10}  {:>14}  {}", t, amp_str, bool_str, dfa_str);
         }

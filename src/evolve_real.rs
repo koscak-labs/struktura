@@ -1,4 +1,4 @@
-//! Evolve against real labeled data — the bridge between the synthetic
+//! Evolve against real labeled data: the bridge between the synthetic
 //! RED/BLUE loop ([`crate::redblue`]) and actual benchmark anomalies.
 //!
 //! Same mutation grammar and leg-synthesis grammar as [`crate::redblue`],
@@ -118,7 +118,7 @@ pub fn detects_real(
 
 /// Clean-alarm check: calibrate on a small prefix, stream a small suffix.
 /// Uses at most CLEAN_CHECK_LEN rows total to keep the evolve loop fast.
-/// The BLUE constraint is that this stays ZERO.
+/// The BLUE constraint is that this stays at zero.
 const CLEAN_CHECK_LEN: usize = 2800;
 
 pub fn clean_alarms_real(config: MonitorConfig, calib: &[Vec<f64>]) -> usize {
@@ -206,7 +206,7 @@ pub fn leg_fires_real(
 
 fn mutate(config: MonitorConfig, seed: &mut u64) -> MonitorConfig {
     // Small xorshift so this module needs no RNG dependency beyond what is
-    // already pub(crate) — deterministic given the caller-supplied seed.
+    // already pub(crate); deterministic given the caller-supplied seed.
     *seed ^= *seed << 13;
     *seed ^= *seed >> 7;
     *seed ^= *seed << 17;
@@ -285,7 +285,7 @@ pub fn evolve_real(
         })
         .collect();
 
-    // Drop the full test data — we only need the pre-extracted windows now.
+    // Drop the full test data; only the pre-extracted windows are needed now.
     drop(test);
 
     let detects_with_legs = |c: MonitorConfig, ls: &[LegGene], idx: usize| -> bool {

@@ -127,7 +127,7 @@ fn print_table(dataset: &str, results: &[DetectionResult]) {
 
 fn main() {
     println!("# struktura benchmark — head-to-head comparison\n");
-    println!("All numbers from a single run on this machine. Honest — losses printed.\n");
+    println!("All numbers from a single run on this machine, losses included.\n");
 
     // IMS bearing run-to-failure — use first 20% as healthy baseline, last 20% as degraded
     let ims = load_csv("data/ims_2nd_test_b1_rms.csv");
@@ -171,5 +171,5 @@ fn main() {
     println!("\n---");
     println!("struktura detects STRUCTURAL changes (correlation shifts).");
     println!("ankane/threshold detect AMPLITUDE anomalies (spikes, outliers).");
-    println!("Different tools for different fault types — not a replacement, a complement.");
+    println!("Different tools for different fault types: this complements amplitude detectors rather than replacing them.");
 }

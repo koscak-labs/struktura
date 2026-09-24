@@ -5,7 +5,7 @@
 //! BLUE mutates the detection policy ([`MonitorConfig`]) and accepts a
 //! mutant only if it detects strictly more of the accumulated adversarial
 //! corpus while raising ZERO alarms on clean sequences. Every round's
-//! misses join the corpus — the monitor's training set is written by its
+//! misses join the corpus, so the monitor's training set is written by its
 //! own failures.
 //!
 //! This is a closed computational loop: no hand-tuning, no oracle. The
@@ -256,7 +256,7 @@ pub fn run(
     (config, reports)
 }
 
-// ── Generation 2: structural leg synthesis ──────────────────────────
+// Generation 2: structural leg synthesis
 //
 // A synthesized leg is a genotype in a small detector grammar:
 //   SOURCE:    raw value | AR(1) residual | first difference
@@ -265,9 +265,8 @@ pub fn run(
 //   PERSIST:   1 | 2 | 4 | 8 consecutive exceedances
 // Each leg is calibrated per deployment exactly like the built-in legs:
 // its statistic's z-score stream over the clean calibration sequence gets
-// a Gumbel return-level threshold. Evolution may ADD legs (structure),
-// not only tune numbers — this is what breaks the parameter-tuning
-// ceiling.
+// a Gumbel return-level threshold. Evolution may ADD legs, not just tune
+// their numbers, which is what breaks the parameter-tuning ceiling.
 
 /// A synthesized detector-leg genotype.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

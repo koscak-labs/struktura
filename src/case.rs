@@ -21,13 +21,13 @@ pub struct CaseManifest {
     pub samples: usize,
     /// Content fingerprint of the *original input file* (see
     /// [`fingerprint_content`]). `None` for cases saved before this field
-    /// existed. NOT what `replay()` should diff `recording.csv` against —
+    /// existed. NOT what `replay()` should diff `recording.csv` against;
     /// see [`Self::recording_hash`].
     pub input_hash: Option<String>,
     /// Content fingerprint of the exact bytes written to `recording.csv`
     /// (the transformed `ch0,ch1,...`-header, normalized-value file, not
     /// the original input). This is what `replay()` compares a fresh read
-    /// of `recording.csv` against — `input_hash` fingerprints a different
+    /// of `recording.csv` against: `input_hash` fingerprints a different
     /// byte representation and comparing against it always mismatched,
     /// even for an untouched case. `None` for cases saved before this
     /// field existed.
@@ -96,7 +96,7 @@ pub struct CaseConfig {
     pub column_schema: ColumnSchema,
     /// Per-channel calibration-window imputation counts from
     /// `replay::run_investigation`, as `(channel_index, imputed_count)`
-    /// pairs — saved so a later `struktura replay` (or a human reading
+    /// pairs, saved so a later `struktura replay` (or a human reading
     /// `config.json`) can see how much of the original investigation's
     /// calibration was fabricated from the channel mean rather than
     /// observed.
@@ -106,8 +106,8 @@ pub struct CaseConfig {
 /// A content fingerprint (FNV-1a, 64-bit) over the full byte content of an
 /// input file, rendered as 16 lowercase hex digits.
 ///
-/// This is NOT a cryptographic hash — no crypto-hash dependency is pulled
-/// in for it — and must not be used for integrity/security purposes. Its
+/// This is NOT a cryptographic hash (no crypto-hash dependency is pulled
+/// in for it) and must not be used for integrity/security purposes. Its
 /// only job is reproducibility detection: "was this case built from
 /// exactly this recording file?"
 #[must_use]
@@ -183,7 +183,7 @@ impl Case {
     /// `AutoPilot::push` consumes during live monitoring. [`Case::recording`]
     /// hands it back channel-major, the shape `HybridMonitor::calibrate` wants.
     ///
-    /// `timeline` is the investigation's context sidecar (if any) — saved to
+    /// `timeline` is the investigation's context sidecar (if any), saved to
     /// `context.json` so `replay()` can reattach the same context at the
     /// same ticks instead of always replaying against an empty timeline.
     /// `channel_names` are the measurement column names in recording-column
@@ -265,7 +265,7 @@ impl Case {
     }
 
     /// Reads `recording.csv` back as column-major vectors (one `Vec<f64>`
-    /// per channel) — a transpose of the row-per-tick CSV layout.
+    /// per channel), a transpose of the row-per-tick CSV layout.
     pub fn recording(&self) -> Result<Vec<Vec<f64>>, String> {
         let path = self.dir.join("recording.csv");
         let text = std::fs::read_to_string(&path).map_err(|e| format!("read recording.csv: {}", e))?;
@@ -298,7 +298,7 @@ impl Case {
     }
 
     /// Raw text of this case's `config.json` (the detector configuration
-    /// saved alongside the recording — see [`CaseConfig`]). Used by
+    /// saved alongside the recording, see [`CaseConfig`]). Used by
     /// `struktura replay` (Finding 5) to compare the saved configuration
     /// and recording fingerprint against a fresh recalibration.
     pub fn config_json(&self) -> Result<String, String> {
@@ -368,7 +368,7 @@ fn parse_context_timeline(json: &str) -> Result<ContextTimeline, String> {
 }
 
 /// Extract just the `input_hash` field from a case's `config.json` text
-/// (see [`Case::config_json`]) — cheap drift detection without parsing the
+/// (see [`Case::config_json`]): cheap drift detection without parsing the
 /// full monitor export.
 #[must_use]
 pub fn parse_config_input_hash(json: &str) -> Option<String> {

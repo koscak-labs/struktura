@@ -1,7 +1,7 @@
 #![allow(clippy::needless_range_loop, clippy::type_complexity, clippy::large_enum_variant, clippy::useless_vec, clippy::map_clone)]
 //! Predict failure before it happens.
 //!
-//! Struktura detects when the *structure* of a signal changes — before
+//! Struktura detects when the *structure* of a signal changes, before
 //! averages, thresholds, or ML models notice. One function, one number,
 //! works on anything with a time dimension.
 //!
@@ -25,10 +25,10 @@
 //!
 //! # Domains
 //!
-//! - [`space`] — spacecraft telemetry monitoring (reaction wheels, magnetometers, batteries)
-//! - [`market`] — financial regime detection (trending / random walk / mean-reverting)
-//! - [`text`] — writing rhythm analysis (human literary prose vs mechanical/AI)
-//! - [`rhythm`] — event timing analysis (git commits, heartbeats, keystrokes)
+//! - [`space`]: spacecraft telemetry monitoring (reaction wheels, magnetometers, batteries)
+//! - [`market`]: financial regime detection (trending / random walk / mean-reverting)
+//! - [`text`]: writing rhythm analysis (human literary prose vs mechanical/AI)
+//! - [`rhythm`]: event timing analysis (git commits, heartbeats, keystrokes)
 //!
 //! Works in `no_std` environments (`default-features = false`). 85-112x faster than Python.
 
@@ -100,17 +100,17 @@ impl fmt::Display for DfaResult {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum LawQuality {
-    /// R-squared > 0.95 — the scaling law fits the data almost perfectly.
+    /// R-squared > 0.95: the scaling law fits the data almost perfectly.
     Exact,
-    /// R-squared > 0.85 — strong confidence in the derived exponent.
+    /// R-squared > 0.85: strong confidence in the derived exponent.
     Strong,
-    /// R-squared > 0.7 — good enough for health monitoring.
+    /// R-squared > 0.7: good enough for health monitoring.
     Good,
-    /// R-squared > 0.3 — approximate; use with caution.
+    /// R-squared > 0.3: approximate; use with caution.
     Approx,
-    /// R-squared <= 0.3 — insufficient structure; the crate abstains from diagnosis.
+    /// R-squared <= 0.3: insufficient structure; the crate abstains from diagnosis.
     Abstain,
-    /// Fewer than 20 data points — not enough data to analyze.
+    /// Fewer than 20 data points: not enough data to analyze.
     Insufficient,
 }
 
@@ -150,13 +150,13 @@ pub struct StructuralLaw {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum HealthVerdict {
-    /// Shift < 0.03 from baseline — within normal variation.
+    /// Shift < 0.03 from baseline: within normal variation.
     Healthy,
-    /// Shift 0.03-0.08 — minor structural change, monitor closely.
+    /// Shift 0.03-0.08: minor structural change, monitor closely.
     Watch,
-    /// Shift 0.08-0.15 — significant structural departure.
+    /// Shift 0.08-0.15: significant structural departure.
     Warning,
-    /// Shift >= 0.15 — major structural breakdown.
+    /// Shift >= 0.15: major structural breakdown.
     Critical,
 }
 
@@ -351,7 +351,7 @@ pub fn dfa_scratch(values: &[f64], scratch: &mut [f64]) -> DfaResult {
     let buf = &scratch[..n];
 
     // Adaptive box sizes: geometric spacing from max(16, n/50) to n/4.
-    // Gives consistent accuracy across signal lengths — short signals
+    // Gives consistent accuracy across signal lengths: short signals
     // get tighter boxes, long signals get wider coverage.
     let s_min = 16usize.max(n / 50);
     let s_max = n / 4;
@@ -373,7 +373,7 @@ pub fn dfa_scratch(values: &[f64], scratch: &mut [f64]) -> DfaResult {
         let num_segs = n / s;
         if num_segs == 0 { continue; }
 
-        // Precompute sx, sx2, det — they depend only on s, not data.
+        // Precompute sx, sx2, det (depend only on s, not data).
         let k = s as f64;
         let sx = k * (k - 1.0) / 2.0;
         let sx2 = k * (k - 1.0) * (2.0 * k - 1.0) / 6.0;
@@ -828,7 +828,7 @@ mod tests {
     /// with dof ≈ (W/s)(s−2) and var(ln F(s)) = ¼·var(ln F²) ≈
     /// 1 / (2·(W/s)·(s−2)). α is the OLS slope of ln F on ln s, hence
     /// var(α̂) = Σ (x_j − x̄)² v_j / (Σ (x_j − x̄)²)², x_j = ln s_j.
-    /// The model treats box scales as independent — they share the same
+    /// The model treats box scales as independent, but they share the same
     /// profile, so this is a LOWER bound on the true variance.
     fn analytic_alpha_sd(n: usize) -> f64 {
         let s_min = 16usize.max(n / 50);
@@ -875,8 +875,8 @@ mod tests {
             // The independence model is a LOWER bound: the box scales share
             // one profile, and that correlation inflates the true variance
             // by an n-dependent factor (measured: ~1.3x at n=96 rising to
-            // ~4x at n=384 — more scales, more shared structure). Assert
-            // the bound direction, and that the inflation stays below 6x
+            // ~4x at n=384, as more scales means more shared structure).
+            // Assert the bound direction, and that the inflation stays below 6x
             // over the monitor's window range.
             let ratio = measured / derived;
             assert!(
@@ -894,7 +894,7 @@ mod tests {
 
     #[test]
     fn dfa_fast_matches_dfa_into_exactly() {
-        // 1000 random windows across lengths and signal classes —
+        // 1000 random windows across lengths and signal classes:
         // prefix-sum DFA must agree with the reference at 1e-12.
         let mut buf_a = Vec::new();
         let mut buf_b = Vec::new();
@@ -1271,7 +1271,7 @@ impl PartialEq for StructuralLaw {
             && self.n == other.n
     }
 }
-// ── Simple API (start here) ──────────────────────────────────────────
+// Simple API (start here)
 
 /// Compare two signals and get a verdict: is the structure the same?
 ///
@@ -1312,7 +1312,7 @@ pub fn is_degraded(baseline: &[f64], current: &[f64]) -> bool {
 
 /// Has the signal's structure changed at all?
 ///
-/// More sensitive than [`is_degraded`] — returns `true` on any measurable
+/// More sensitive than [`is_degraded`]: returns `true` on any measurable
 /// shift (> 0.01), even if below the Watch threshold.
 #[must_use]
 pub fn has_changed(baseline: &[f64], current: &[f64]) -> bool {
@@ -1366,7 +1366,7 @@ pub fn anomaly_scores(values: &[f64], window: usize, step: usize, threshold: f64
     alphas.iter().map(|a| (a - baseline).abs() / (std + threshold)).collect()
 }
 
-// ── Domain modules ──────────────────────────────────────────────────
+// Domain modules
 
 #[cfg(test)]
 mod scratch_tests {
@@ -1477,7 +1477,7 @@ pub mod fingerprint;
 #[cfg(feature = "std")]
 pub mod codegen;
 
-// --- debugger modules (v1.8 telemetry investigation) ---
+// Debugger modules (v1.8 telemetry investigation)
 pub mod context;
 pub mod incident;
 #[cfg(feature = "std")]

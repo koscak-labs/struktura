@@ -45,9 +45,9 @@ fn main() {
         let law = analyze(&data);
         println!("  α = {:.3}  R² = {:.4}", law.dfa.alpha, law.dfa.r_squared);
         if law.dfa.alpha > 0.7 {
-            println!("  signal: structured (clean reception) ✅");
+            println!("  signal: structured (clean reception)");
         } else {
-            println!("  signal: scintillation detected ⚠️ (positioning may be degraded)");
+            println!("  signal: scintillation detected (positioning may be degraded)");
         }
         return;
     }

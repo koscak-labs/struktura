@@ -1,7 +1,7 @@
-//! Changepoint detection — WHERE did the structure change?
+//! Changepoint detection: locates WHERE the structure changed.
 //!
-//! Answers "sample 3,847 is where the bearing started degrading" — not
-//! just "it degraded."
+//! Reports "sample 3,847 is where the bearing started degrading," giving
+//! a location alongside the fact that degradation occurred.
 //!
 //! ```
 //! use struktura::changepoint::find_changepoint;
