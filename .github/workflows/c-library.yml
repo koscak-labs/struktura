@@ -43,16 +43,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-      - uses: ilammy/msvc-dev-cmd@v1
-        if: runner.os == 'Windows'
       - name: Build static and shared library
         shell: bash
         run: |
           # No color: otherwise an ANSI reset lands inside the library list (-lc^[[0m).
           CARGO_TERM_COLOR=never cargo rustc --lib --release --target ${{ matrix.target }} \
-            --crate-type staticlib --crate-type cdylib -- --print native-static-libs --color never 2> build.log || { cat build.log; exit 1; }
+            --crate-type staticlib --crate-type cdylib -- --print native-static-libs 2> build.log || { cat build.log; exit 1; }
           sed -n 's/.*native-static-libs: //p' build.log | head -1 | sed $'s/\x1b\\[[0-9;]*m//g' > native-libs.txt
           echo "native libs: $(cat native-libs.txt)"
+      # After the build on purpose: with the MSVC env in bash, Git's /usr/bin/link shadows link.exe.
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows' && matrix.run
       - name: Link and run the C test against the static library
         if: matrix.run
         shell: bash
