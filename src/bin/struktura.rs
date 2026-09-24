@@ -3147,7 +3147,7 @@ fn cmd_evolve_real(args: &[String]) {
         }
         (hdr, cols)
     };
-    eprintln!("evolve-real: {} rows x {} columns loaded", test_cols.get(0).map(|c| c.len()).unwrap_or(0), test_header.len());
+    eprintln!("evolve-real: {} rows x {} columns loaded", test_cols.first().map(|c| c.len()).unwrap_or(0), test_header.len());
 
     // For the train/calib data, use the same file but only keep the last
     // 10000 rows for the clean-alarm check (the evolve loop windows its

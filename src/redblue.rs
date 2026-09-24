@@ -278,10 +278,10 @@ pub struct LegGene {
     pub persist: u8,   // index into {1, 2, 4, 8}
 }
 
-const LEG_WINDOWS: [usize; 4] = [8, 16, 32, 64];
-const LEG_PERSIST: [usize; 4] = [1, 2, 4, 8];
+pub(crate) const LEG_WINDOWS: [usize; 4] = [8, 16, 32, 64];
+pub(crate) const LEG_PERSIST: [usize; 4] = [1, 2, 4, 8];
 
-fn leg_stat(vals: &[f64], statistic: u8) -> f64 {
+pub(crate) fn leg_stat(vals: &[f64], statistic: u8) -> f64 {
     let n = vals.len() as f64;
     match statistic % 5 {
         0 => vals.iter().sum::<f64>() / n,
@@ -308,7 +308,7 @@ fn leg_stat(vals: &[f64], statistic: u8) -> f64 {
 }
 
 /// Transform a channel stream into the leg's source series.
-fn leg_source(chan: &[f64], source: u8, ar: (f64, f64, f64)) -> Vec<f64> {
+pub(crate) fn leg_source(chan: &[f64], source: u8, ar: (f64, f64, f64)) -> Vec<f64> {
     match source % 3 {
         0 => chan.to_vec(),
         1 => {
@@ -331,7 +331,7 @@ fn leg_source(chan: &[f64], source: u8, ar: (f64, f64, f64)) -> Vec<f64> {
     }
 }
 
-fn fit_ar1_simple(series: &[f64]) -> (f64, f64, f64) {
+pub(crate) fn fit_ar1_simple(series: &[f64]) -> (f64, f64, f64) {
     let n = series.len() - 1;
     let x = &series[..n];
     let y = &series[1..];
@@ -353,7 +353,7 @@ fn fit_ar1_simple(series: &[f64]) -> (f64, f64, f64) {
     (a, b, crate::sqrt(ss / n as f64).max(1e-9))
 }
 
-fn gumbel_level(scores: &[f64], horizon: f64) -> f64 {
+pub(crate) fn gumbel_level(scores: &[f64], horizon: f64) -> f64 {
     const BLOCKS: usize = 16;
     let n = scores.len();
     if n < BLOCKS * 4 {

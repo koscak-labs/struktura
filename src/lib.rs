@@ -1419,6 +1419,8 @@ pub mod autopilot;
 #[cfg(feature = "std")]
 pub mod redblue;
 #[cfg(feature = "std")]
+pub mod evolve_real;
+#[cfg(feature = "std")]
 pub mod smap_eval;
 #[cfg(feature = "std")]
 pub mod rover;
