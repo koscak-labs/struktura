@@ -1,0 +1,127 @@
+name: C library
+
+# Prebuilt C libraries for every vX.Y.Z release: include/struktura.h plus a
+# static and a shared library per platform, so C/C++ projects can link
+# struktura without a Rust toolchain. Each native build links the C test in
+# tests/c and runs it before anything is uploaded. The link flags come from
+# rustc's own --print native-static-libs, not a hand-kept list.
+#
+# Bare-metal (thumbv7em etc.) is not packaged here: a no_std staticlib needs a
+# panic handler and allocator chosen by the firmware, so embedded users build
+# from source with Cargo (the no_std CI job keeps that path green).
+
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+  pull_request:
+    paths: ['src/ffi.rs', 'include/**', 'tests/c/**', 'Cargo.toml', '.github/workflows/c-library.yml']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to build and attach to (such as v1.8.4)'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,    target: x86_64-unknown-linux-gnu,  run: true }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, run: true }
+          - { os: macos-14,         target: aarch64-apple-darwin,      run: true }
+          - { os: macos-14,         target: x86_64-apple-darwin,       run: false }
+          - { os: windows-latest,   target: x86_64-pc-windows-msvc,    run: true }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+      - name: Build static and shared library
+        shell: bash
+        run: |
+          cargo rustc --lib --release --target ${{ matrix.target }} \
+            --crate-type staticlib --crate-type cdylib -- --print native-static-libs 2> build.log || { cat build.log; exit 1; }
+          sed -n 's/.*native-static-libs: //p' build.log | head -1 > native-libs.txt
+          echo "native libs: $(cat native-libs.txt)"
+      - name: Link and run the C test against the static library
+        if: matrix.run
+        shell: bash
+        run: |
+          out="target/${{ matrix.target }}/release"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cl /nologo /Iinclude tests/c/test_struktura.c "$out/struktura.lib" $(cat native-libs.txt) /Fe:test_struktura.exe
+            ./test_struktura.exe
+          else
+            cc tests/c/test_struktura.c -Iinclude "$out/libstruktura.a" $(cat native-libs.txt) -o test_struktura
+            ./test_struktura
+          fi
+      - name: Package
+        id: pkg
+        shell: bash
+        run: |
+          ref="${{ inputs.tag || github.ref_name }}"
+          case "$ref" in v[0-9]*) ver="${ref#v}" ;; *) ver="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)-dev" ;; esac
+          name="struktura-c-${ver}-${{ matrix.target }}"
+          out="target/${{ matrix.target }}/release"
+          mkdir -p "$name/include" "$name/lib"
+          cp include/struktura.h "$name/include/"
+          cp LICENSE-MIT LICENSE-APACHE "$name/"
+          for f in libstruktura.a libstruktura.so libstruktura.dylib struktura.lib struktura.dll struktura.dll.lib; do
+            [ -f "$out/$f" ] && cp "$out/$f" "$name/lib/"
+          done
+          {
+            echo "struktura ${ver} C library for ${{ matrix.target }}"
+            echo
+            echo "Header: include/struktura.h. Link lib/ (static or shared) plus these system libraries:"
+            echo "  $(cat native-libs.txt)"
+            echo
+            echo "Source and docs: https://github.com/koscak-labs/struktura"
+          } > "$name/README.txt"
+          ls -la "$name" "$name/lib"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            7z a -bso0 "$name.zip" "$name" && archive="$name.zip"
+          else
+            tar czf "$name.tar.gz" "$name" && archive="$name.tar.gz"
+          fi
+          if command -v sha256sum >/dev/null; then sha256sum "$archive" > "$archive.sha256"; else shasum -a 256 "$archive" > "$archive.sha256"; fi
+          cat "$archive.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: c-${{ matrix.target }}
+          path: |
+            struktura-c-*.tar.gz
+            struktura-c-*.zip
+            struktura-c-*.sha256
+
+  attach:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: c-*
+          merge-multiple: true
+      - name: Attach to the existing release (created by the Release workflow)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          ls -la dist
+          for i in $(seq 1 40); do
+            gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 && break
+            echo "waiting for release $TAG ($i/40)"; sleep 15
+          done
+          gh release upload "$TAG" dist/* -R "$GITHUB_REPOSITORY" --clobber
