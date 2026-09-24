@@ -78,6 +78,7 @@ Reproduce with `cargo run --release --example structure_vs_amplitude` (0.4 s), o
 | detector (116 labelled windows) | windows caught | false alarms | per 1,000 samples | streaming | builds for Cortex-M |
 |---|---|---|---|---|---|
 | **struktura `guard`** | 36 | **35** | **0.12** | yes | **yes** |
+| **struktura `guard --sensitivity high`** | **49** | 48 | 0.16 | yes | **yes** |
 | extended-isolation-forest 0.2.3 | 47 | 182 | 0.61 | no (batch) | no |
 | limit check (1.5 × p95, 3 in a row) | 48 | 240 | 0.80 | yes | trivial |
 | EWMA chart (λ 0.2, 3σ) | 68 | 758 | 2.53 | yes | trivial |
@@ -85,7 +86,7 @@ Reproduce with `cargo run --release --example structure_vs_amplitude` (0.4 s), o
 | ankane STL (anomaly_detection 0.4.0) | 69 | 954 | 3.19 | no (batch) | no |
 | grafana augurs BOCPD (augurs-changepoint 0.10.2) | 77 | 1,461 | 4.88 | no (batch) | no |
 
-`guard` raises by far the fewest false alarms and catches the fewest windows. That trade suits paging a person, where false alarms are what gets a monitor switched off. If you need to catch every labelled window and can triage many alarms, BOCPD, STL or even an EWMA chart catch more. The isolation forest timed out on 10 of the 58 series (quantized values) and those count as no alarms, so its row understates it. On the clean control series every detector here is silent.
+`guard` raises by far the fewest false alarms and, at its default setting, catches the fewest windows. That trade suits paging a person, where false alarms are what gets a monitor switched off. `--sensitivity high` catches as many windows as the limit check (49 vs 48) with a fifth of its false alarms (48 vs 240). That setting was chosen from a sweep of five on this same benchmark, so treat it as optimistic; on clean synthetic slow-wander streams it raises 2-3 false alarms in 30 where the default raises none. If you need to catch every labelled window and can triage many alarms, BOCPD, STL or even an EWMA chart catch more. The isolation forest timed out on 10 of the 58 series (quantized values) and those count as no alarms, so its row understates it. On the clean control series every detector here is silent.
 
 Most of `guard`'s remaining false alarms come from its drift (residual-CUSUM) leg on daily cycles and on flat metrics with occasional spikes. The opt-in `--quiet-drift` changes little (35 → 33 false alarms, 36 → 35 windows).
 
@@ -230,7 +231,7 @@ let mut rwa = SpacecraftMonitor::new(Subsystem::ReactionWheel, "RWA_current");
 
 `dfa_into()` writes into a caller-supplied buffer, and `dfa_scratch(&[f64], &mut [f64])` does not allocate.
 
-**On a microcontroller (emulated).** The C99 monitor from `struktura generate-hybrid` was built bare-metal for an ARM Cortex-M3 (no FPU) and run in QEMU (`mps2-an385`). On a 3,000-sample, 6-channel stream with a stuck sensor injected at sample 1,500, it alarms at sample 1,504 on the stuck-value leg, the same sample and leg as the Rust monitor and as the same C built for x86, and identically on repeated runs. It uses 7,120 bytes of flash and 9,520 bytes of RAM, with no heap (`malloc`/`free` absent; links with `-nostdlib`). What is not shown yet: it has not run on physical hardware; cycle counts are not measured (QEMU does not model them); `-O2` currently faults in this bare-metal setup, so the ARM numbers use `-O1`; and the C covers 5 of the Rust monitor's 7 legs (no missingness or parity). **Known bug (1.8.4):** the generated C computes DFA with box sizes 16..23, while the Rust calibration it is scored against uses 16..24, so the C DFA leg's α differs from Rust's by 0.1-0.2 on average (worst seen 0.85). The equivalence above is on the stuck-value leg and does not cover DFA; the fix is in progress. Reproduce with [bench/flight/run.sh](bench/flight/) in WSL/Linux.
+**On a microcontroller (emulated).** The C99 monitor from `struktura generate-hybrid` was built bare-metal for an ARM Cortex-M3 (no FPU) and run in QEMU (`mps2-an385`). On a 3,000-sample, 6-channel stream with a stuck sensor injected at sample 1,500, it alarms at sample 1,504 on the stuck-value leg, the same sample and leg as the Rust monitor and as the same C built for x86, and identically on repeated runs. It uses 7,120 bytes of flash and 9,520 bytes of RAM, with no heap (`malloc`/`free` absent; links with `-nostdlib`). What is not shown yet: it has not run on physical hardware; cycle counts are not measured (QEMU does not model them); `-O2` currently faults in this bare-metal setup, so the ARM numbers use `-O1`; and the C covers 5 of the Rust monitor's 7 legs (no missingness or parity). **Fixed on master, ships in 1.8.5:** in 1.8.4 the generated C computed DFA with box sizes 16..23 while the Rust calibration uses 16..24, so the C DFA leg's α differed from Rust's by 0.1-0.2 on average (worst 0.85). Both now take their box sizes from one function (`dfa_box_sizes`), and a test checks that the generated C's α matches Rust's (tests/hybrid_c_matches_rust.rs). The QEMU equivalence above was measured before this fix and covers the stuck-value leg only. Reproduce with [bench/flight/run.sh](bench/flight/) in WSL/Linux.
 
 ## 📊 Measured α on bundled data
 
@@ -358,7 +359,7 @@ struktura generate --ros    --db channels.json -o dfa_ros_node/
 
 `channels.json` uses the [nasa/ogma](https://github.com/nasa/ogma) variable database format.
 
-**Known bugs (1.8.4, fixes planned for 1.8.5):** generated DFA does not yet match the Rust library. `struktura codegen` (standalone C monitor) and `generate --cfs` compute α on their ring buffer in storage order instead of time order once it has wrapped (α off by up to 0.6-0.75 on random-walk and ramp signals, the scale of the alarm bands); `struktura codegen` and `generate-hybrid` also use different DFA box sizes from Rust. `generate --fprime` and `generate --rover` are not affected (they call the Rust library or have no DFA leg). Found by differential tests against the Rust reference; do not rely on generated DFA thresholds until 1.8.5.
+**Known bugs (1.8.4, fixes planned for 1.8.5):** generated DFA does not yet match the Rust library. `struktura codegen` (standalone C monitor) and `generate --cfs` compute α on their ring buffer in storage order instead of time order once it has wrapped (α off by up to 0.6-0.75 on random-walk and ramp signals, the scale of the alarm bands); `struktura codegen` also uses different DFA box sizes from Rust (fixed on master for `generate-hybrid`). `generate --fprime` and `generate --rover` are not affected (they call the Rust library or have no DFA leg). Found by differential tests against the Rust reference; do not rely on generated DFA thresholds until 1.8.5.
 
 ## 🧠 How DFA works (Hurst exponent in Rust)
 

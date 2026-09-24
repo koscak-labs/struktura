@@ -17,12 +17,20 @@
 //!
 //! Run: cargo run --release --example structure_vs_amplitude
 
-use struktura::monitor::{HybridMonitor, Leg};
+use struktura::monitor::{HybridMonitor, Leg, MonitorConfig};
 
 const N: usize = 2000;
 const CHANGE: usize = 1000;
 fn calib_len() -> usize {
     std::env::var("CALIB").ok().and_then(|v| v.parse().ok()).unwrap_or(768)
+}
+/// HORIZON=<samples> overrides the threshold design horizon (default 1e6).
+fn calibrate(clean: &[f64]) -> Option<HybridMonitor> {
+    let mut config = MonitorConfig::default();
+    if let Some(h) = std::env::var("HORIZON").ok().and_then(|v| v.parse::<f64>().ok()) {
+        config.design_horizon = h;
+    }
+    HybridMonitor::calibrate_with(&[clean.to_vec()], config)
 }
 const SEEDS: u64 = 30;
 
@@ -88,7 +96,7 @@ fn stream(seed: u64, before: Kind, after: Option<Kind>) -> Vec<f64> {
 
 /// First alarm tick (index into the full stream), or None.
 fn first_monitor_alarm(x: &[f64], dfa_only: bool) -> Option<usize> {
-    let mut m = HybridMonitor::calibrate(&[x[..calib_len()].to_vec()])?;
+    let mut m = calibrate(&x[..calib_len()])?;
     if dfa_only {
         for leg in [
             Leg::Residual,
@@ -106,7 +114,7 @@ fn first_monitor_alarm(x: &[f64], dfa_only: bool) -> Option<usize> {
 
 /// Which leg the full monitor alarms on first, if any.
 fn first_leg(x: &[f64]) -> Option<Leg> {
-    let mut m = HybridMonitor::calibrate(&[x[..calib_len()].to_vec()])?;
+    let mut m = calibrate(&x[..calib_len()])?;
     (calib_len()..x.len()).find_map(|i| m.push(&[x[i]]))
 }
 

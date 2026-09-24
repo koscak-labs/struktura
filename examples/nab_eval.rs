@@ -352,7 +352,12 @@ fn eval_series(category: &str, name: &str, rows: Vec<(i64, f64)>, windows: Vec<(
 
     // ---- guard path: AutoPilot + HybridMonitor, exactly as cmd_guard ----
     // QUIET=1 runs the opt-in quiet-drift mode (MonitorConfig::quiet_drift).
-    let config = MonitorConfig { quiet_drift: env::var("QUIET").is_ok_and(|v| v == "1"), ..MonitorConfig::default() };
+    // HORIZON=<samples> sets the threshold design horizon (1 expected false
+    // alarm per this many clean samples; default 1e6). Lower = more sensitive.
+    let mut config = MonitorConfig { quiet_drift: env::var("QUIET").is_ok_and(|v| v == "1"), ..MonitorConfig::default() };
+    if let Some(h) = env::var("HORIZON").ok().and_then(|v| v.parse::<f64>().ok()) {
+        config.design_horizon = h;
+    }
     let mon = HybridMonitor::calibrate_with(&[calib_slice.to_vec()], config)?;
     let mut ap = AutoPilot::new(mon);
     // Every detector is scored in EPISODES: alarms less than ALARM_COOLDOWN

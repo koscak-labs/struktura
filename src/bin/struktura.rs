@@ -3587,18 +3587,33 @@ fn cmd_guard(args: &[String]) {
     let mut watch_ms = 1000u64;
     let mut webhook_url = String::new();
     let mut quiet = false;
+    let mut high = false;
     let mut i = 2;
     while i < args.len() {
         match args[i].as_str() {
             "--baseline" if i + 1 < args.len() => { baseline_n = args[i + 1].parse().unwrap_or(0); i += 2; }
             "--json" => { json = true; i += 1; }
             "--quiet-drift" => { quiet = true; i += 1; }
+            "--sensitivity" if i + 1 < args.len() => {
+                high = match args[i + 1].as_str() {
+                    "normal" => false,
+                    "high" => true,
+                    other => {
+                        eprintln!("--sensitivity must be normal or high, got {}", other);
+                        process::exit(2);
+                    }
+                };
+                i += 2;
+            }
             "--watch" | "-w" => { watch = true; i += 1; }
             "--interval" if i + 1 < args.len() => { watch_ms = args[i + 1].parse().unwrap_or(1000); i += 2; }
             "--webhook" if i + 1 < args.len() => { webhook_url = args[i + 1].clone(); i += 2; }
             "--help" | "-h" => {
-                println!("struktura guard <file.csv> [--baseline N] [--json] [--watch] [--webhook URL] [--quiet-drift]");
+                println!("struktura guard <file.csv> [--baseline N] [--sensitivity normal|high] [--json] [--watch] [--webhook URL] [--quiet-drift]");
                 println!("  Monitor any CSV for anomalies. Exit: 0=healthy 1=fault 2=error");
+                println!("  --sensitivity  normal (default): fewest false alarms. high: catches more, alarms more");
+                println!("                 (NAB: 36 -> 49 of 116 windows, 35 -> 48 false alarms; clean slow-wander");
+                println!("                 synthetic streams 0 -> 2-3 of 30)");
                 println!("  --quiet-drift  Clip what the drift leg sees; small effect (NAB: 35 -> 33 false alarms,");
                 println!("                 36 -> 35 windows); a spike only the drift leg catches is found later or not at all");
                 println!("  --watch        Follow the file (like tail -f), monitor new rows live");
@@ -3624,20 +3639,32 @@ fn cmd_guard(args: &[String]) {
     if !webhook_url.is_empty() {
         std::env::set_var("STRUKTURA_WEBHOOK", &webhook_url);
     }
+    let cfg = guard_config(quiet, high);
     if watch && !file_path.is_empty() && file_path != "-" {
-        run_guard_watch(&file_path, baseline_n, json, watch_ms, quiet);
+        run_guard_watch(&file_path, baseline_n, json, watch_ms, cfg);
     }
-    let exit = run_guard(&content, baseline_n, json, quiet);
+    let exit = run_guard(&content, baseline_n, json, cfg);
     process::exit(exit);
+}
+
+/// Threshold design horizon for `--sensitivity high`: 1 expected false alarm
+/// per 1e5 clean samples instead of the default 1e6. On NAB (episode
+/// counting) this took guard from 36 to 49 of 116 windows and from 35 to 48
+/// false alarms; chosen from a sweep of 1e3..1e7 on the same benchmark
+/// (examples/nab_eval.rs with HORIZON=...).
+const HIGH_SENSITIVITY_HORIZON: f64 = 1e5;
+
+fn guard_config(quiet: bool, high: bool) -> struktura::monitor::MonitorConfig {
+    let mut cfg = struktura::monitor::MonitorConfig { quiet_drift: quiet, ..Default::default() };
+    if high {
+        cfg.design_horizon = HIGH_SENSITIVITY_HORIZON;
+    }
+    cfg
 }
 
 /// Watch mode: calibrate on the file's current content, then tail it for
 /// new rows, like `tail -f` but with anomaly detection. Ctrl-C to stop.
-fn guard_config(quiet: bool) -> struktura::monitor::MonitorConfig {
-    struktura::monitor::MonitorConfig { quiet_drift: quiet, ..Default::default() }
-}
-
-fn run_guard_watch(path: &str, baseline_n: usize, json: bool, poll_ms: u64, quiet: bool) -> ! {
+fn run_guard_watch(path: &str, baseline_n: usize, json: bool, poll_ms: u64, cfg: struktura::monitor::MonitorConfig) -> ! {
     use struktura::monitor::HybridMonitor;
     use struktura::autopilot::AutoPilot;
 
@@ -3656,7 +3683,7 @@ fn run_guard_watch(path: &str, baseline_n: usize, json: bool, poll_ms: u64, quie
         .map(|ch| rows.iter().map(|r| r.get(ch).copied().unwrap_or(0.0)).collect())
         .collect();
     let calib: Vec<Vec<f64>> = channels.iter().map(|c| c[..calib_n].to_vec()).collect();
-    let mon = match HybridMonitor::calibrate_with(&calib, guard_config(quiet)) {
+    let mon = match HybridMonitor::calibrate_with(&calib, cfg) {
         Some(m) => m,
         None => { eprintln!("calibration failed (need >= 192 samples)"); process::exit(2); }
     };
@@ -3691,7 +3718,7 @@ fn run_guard_watch(path: &str, baseline_n: usize, json: bool, poll_ms: u64, quie
         eprintln!("struktura guard --watch: {} ch, calibrated on {} rows, tailing {} (poll {}ms, Ctrl-C to stop)",
             ncols, calib_n, path, poll_ms);
         short_calibration_note(calib_n);
-        calibration_self_check_note(calibration_self_check(&calib, guard_config(quiet)), calib_n);
+        calibration_self_check_note(calibration_self_check(&calib, cfg), calib_n);
     }
 
     // Tail loop
@@ -3954,7 +3981,7 @@ fn emit_event(t: usize, ev: &struktura::autopilot::Event, json: bool) {
 }
 
 /// Returns exit code: 0 = healthy, 1 = faults found, 2 = calibration error.
-fn run_guard(content: &str, baseline_n: usize, json: bool, quiet: bool) -> i32 {
+fn run_guard(content: &str, baseline_n: usize, json: bool, cfg: struktura::monitor::MonitorConfig) -> i32 {
     use struktura::monitor::HybridMonitor;
     use struktura::autopilot::{AutoPilot, Event};
 
@@ -3978,7 +4005,7 @@ fn run_guard(content: &str, baseline_n: usize, json: bool, quiet: bool) -> i32 {
         .collect();
 
     let calib: Vec<Vec<f64>> = channels.iter().map(|c| c[..calib_n].to_vec()).collect();
-    let mon = match HybridMonitor::calibrate_with(&calib, guard_config(quiet)) {
+    let mon = match HybridMonitor::calibrate_with(&calib, cfg) {
         Some(m) => m,
         None => {
             if json {
@@ -3999,7 +4026,7 @@ fn run_guard(content: &str, baseline_n: usize, json: bool, quiet: bool) -> i32 {
         }
         short_calibration_note(calib_n);
     }
-    let calib_suspect = calibration_self_check(&calib, guard_config(quiet));
+    let calib_suspect = calibration_self_check(&calib, cfg);
     if !json {
         calibration_self_check_note(calib_suspect, calib_n);
     }

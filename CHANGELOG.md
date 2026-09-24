@@ -15,6 +15,17 @@ All notable changes to Struktura are documented here.
 - The core crate's `wasm` feature and `src/wasm.rs` are removed; JavaScript
   bindings live in `crates/struktura-wasm` (npm tarball on `wasm-v*` releases),
   as the Python ones do in `crates/struktura-py`.
+- `guard --sensitivity normal|high`: `high` sets the threshold design horizon
+  to 1e5 clean samples per expected false alarm (default 1e6). NAB (episode
+  counting): windows 36 -> 49 of 116, false alarms 35 -> 48 (limit check:
+  48, 240). Chosen from a sweep of 1e3..1e7 on NAB itself. Clean synthetic
+  slow-wander streams: 2-3/30 false alarms at high, 0/30 at normal.
+- Fix: `generate-hybrid` now emits the same DFA box sizes as the Rust DFA
+  (shared `dfa_box_sizes`); in 1.8.4 the C α differed by 0.1-0.2 on average,
+  worst 0.85 (1.69 α_sd); now max |Δα| 2.9e-11 (tests/hybrid_c_matches_rust.rs,
+  found by a differential test; PR #28).
+- Releases publish `SHA256SUMS`; the GitHub Action verifies the downloaded
+  binary against it.
 
 ## v1.8.4 (2026-09-24): dfa_short, fair NAB comparison, head-to-head bench, claims cleanup
 
