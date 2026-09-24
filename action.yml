@@ -65,8 +65,11 @@ runs:
           if curl -fsSL --retry 3 -o "$dir/SHA256SUMS" "$sums"; then
             # "hash  name" (text mode) or "hash *name" (binary mode)
             want=$(awk -v a="$asset" '{ n = $2; sub(/^\*/, "", n); if (n == a) print $1 }' "$dir/SHA256SUMS")
-            if command -v sha256sum >/dev/null; then got=$(sha256sum "$dir/$exe" | cut -d' ' -f1)
-            else got=$(shasum -a 256 "$dir/$exe" | cut -d' ' -f1); fi
+            # Hash from stdin: given a Windows path with backslashes, sha256sum
+            # escapes the name and prefixes the line with "\", which broke the
+            # comparison on Windows runners.
+            if command -v sha256sum >/dev/null; then got=$(sha256sum < "$dir/$exe" | cut -d' ' -f1)
+            else got=$(shasum -a 256 < "$dir/$exe" | cut -d' ' -f1); fi
             if [ -z "$want" ] || [ "$want" != "$got" ]; then
               echo "::error::sha256 mismatch for ${asset}: expected ${want:-<not listed>}, got ${got}"
               exit 1
