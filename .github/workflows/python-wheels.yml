@@ -1,0 +1,102 @@
+name: Python wheels
+
+# Builds the struktura Python package (crates/struktura-py, a pyo3 binding over
+# the Rust crate) for Linux, macOS and Windows, and smoke-tests every wheel it
+# can run. Publishing to PyPI happens only for a `py-v<version>` tag, only after
+# approval in the `pypi` environment, and via PyPI Trusted Publishing, so no
+# API token is stored anywhere.
+
+on:
+  push:
+    tags: ['py-v*']
+  pull_request:
+    paths: ['crates/struktura-py/**', 'src/**', 'Cargo.toml', '.github/workflows/python-wheels.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  version-check:
+    if: startsWith(github.ref, 'refs/tags/py-v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag must match crates/struktura-py version
+        run: |
+          v=$(grep -m1 '^version' crates/struktura-py/Cargo.toml | cut -d'"' -f2)
+          test "${GITHUB_REF_NAME}" = "py-v${v}" || { echo "tag ${GITHUB_REF_NAME} != py-v${v}"; exit 1; }
+
+  wheels:
+    name: wheel ${{ matrix.os }} ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64, smoke: true }
+          - { os: ubuntu-latest, target: aarch64, smoke: false }
+          - { os: macos-13, target: x86_64, smoke: true }
+          - { os: macos-14, target: aarch64, smoke: true }
+          - { os: windows-latest, target: x64, smoke: true }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: crates/struktura-py
+          target: ${{ matrix.target }}
+          args: --release --out dist
+          manylinux: auto
+      - name: Smoke test the wheel
+        if: matrix.smoke
+        shell: bash
+        run: |
+          python -m pip install --no-index --find-links crates/struktura-py/dist struktura
+          cd "$RUNNER_TEMP"
+          python - <<'EOF'
+          import random, struktura
+          random.seed(1)
+          r = struktura.dfa_short([random.gauss(0, 1) for _ in range(512)])
+          assert r is not None and 0.3 < r.alpha < 0.7, r
+          m = struktura.Monitor([[random.gauss(0, 1) for _ in range(2000)]])
+          assert all(m.push([random.gauss(0, 1)]) is None for _ in range(200))
+          print("ok", struktura.__version__, round(r.alpha, 3))
+          EOF
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.os }}-${{ matrix.target }}
+          path: crates/struktura-py/dist/*.whl
+
+  sdist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: crates/struktura-py
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: crates/struktura-py/dist/*.tar.gz
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/py-v')
+    needs: [version-check, wheels, sdist]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - run: ls -la dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
