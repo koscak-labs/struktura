@@ -60,7 +60,8 @@ jobs:
         run: |
           out="target/${{ matrix.target }}/release"
           if [ "$RUNNER_OS" = "Windows" ]; then
-            cl /nologo /Iinclude tests/c/test_struktura.c "$out/struktura.lib" $(cat native-libs.txt) /Fe:test_struktura.exe
+            # Dash flags: Git bash rewrites /nologo into a path.
+            cl -nologo -Iinclude tests/c/test_struktura.c "$out/struktura.lib" $(cat native-libs.txt) -Fe:test_struktura.exe
             ./test_struktura.exe
           else
             cc tests/c/test_struktura.c -Iinclude "$out/libstruktura.a" $(cat native-libs.txt) -o test_struktura
