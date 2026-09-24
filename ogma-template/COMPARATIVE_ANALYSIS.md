@@ -53,7 +53,7 @@ Together through ogma: one generated app subscribes to a telemetry channel, runs
 ```
 cargo install struktura
 struktura demo        # CWRU bearing comparison
-struktura voyager     # Voyager 1 anomaly detection
+struktura voyager     # Voyager 1 year-over-year comparison (inconclusive, not an anomaly detection)
 ```
 
 All data embedded in the crate. Zero dependencies. Zero training.
