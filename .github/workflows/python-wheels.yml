@@ -103,6 +103,8 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           name: struktura ${{ github.ref_name }} (Python)
+          # Keep "Latest" on the crate/CLI release: installers use releases/latest/download/<binary>.
+          make_latest: false
           body: |
             Python package for struktura, prebuilt for Linux (x86_64, aarch64), macOS (arm64, x86_64) and Windows x64, CPython >= 3.8.
 
