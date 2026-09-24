@@ -1,0 +1,23 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "struktura"
+description = "Time-series anomaly detection with no training data: detrended fluctuation analysis (DFA, Hurst exponent) and a self-calibrating streaming monitor for sensors and telemetry. Rust core."
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT OR Apache-2.0"}
+keywords = ["anomaly-detection", "dfa", "time-series", "telemetry", "hurst"]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Scientific/Engineering",
+]
+dynamic = ["version"]
+
+[project.urls]
+Repository = "https://github.com/koscak-labs/struktura"
+
+[tool.maturin]
+module-name = "struktura"

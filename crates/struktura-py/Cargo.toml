@@ -1,0 +1,23 @@
+[package]
+name = "struktura-py"
+version = "1.8.3"
+edition = "2021"
+rust-version = "1.70"
+description = "Python bindings for struktura. All computation runs in the Rust crate; this crate only converts arguments."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/koscak-labs/struktura"
+publish = false
+
+# Standalone: keeps the core crate rlib-only (no_std dependents need that, see
+# the [lib] comment in ../../Cargo.toml) and stops a parent directory's
+# workspace from capturing this crate.
+[workspace]
+
+[lib]
+name = "struktura"
+crate-type = ["cdylib"]
+
+[dependencies]
+stk = { package = "struktura", path = "../.." }  # renamed: this crate's own lib is also called struktura
+# abi3: one wheel per platform for every CPython >= 3.8.
+pyo3 = { version = "0.23", features = ["extension-module", "abi3-py38"] }
