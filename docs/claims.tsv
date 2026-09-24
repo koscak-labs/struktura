@@ -1,0 +1,20 @@
+# Every public number, and the control that has to stay silent for it to count.
+# scripts/check-claims.sh runs each row and fails if the output drifts.
+#
+# columns (tab-separated):
+#   id        short name; controls start with "control-"
+#   speed     fast (every push) or slow (weekly job, or --all)
+#   exit      expected exit code of the command
+#   command   run from the repo root; `struktura` is replaced by $STRUKTURA_BIN
+#   expect    strings that must all appear in the output, separated by " && "
+id	speed	exit	command	expect
+bearing-alpha	fast	0	struktura demo	alpha=0.689 && alpha=0.183
+voyager-alpha	fast	0	struktura voyager	alpha=0.989 && alpha=0.801 && inconclusive
+heliopause-alpha	fast	0	struktura heliopause	1.137 && 1.056 && inconclusive
+ims-first-alarm	fast	0	struktura ims	recording 970 && 984
+guard-sylv	fast	1	struktura guard data/sylv_spike.csv	row    500 && 2 faults detected
+guard-rover	fast	1	struktura guard examples/rover.csv --baseline 1000	fault confirmed && 6 faults detected
+control-sylv-healthy	fast	0	head -499 data/sylv_spike.csv | struktura guard - --baseline 333	no anomalies
+control-rover-healthy	fast	0	head -1601 examples/rover.csv | struktura guard - --baseline 1000	no anomalies
+control-monitor-clean	fast	0	struktura monitor-perf	Alarms on clean stream:            0
+evolve-coverage	slow	0	struktura evolve	71.0% && 97.0% && 71.0% (gen 1) -> 92.0% (gen 10)

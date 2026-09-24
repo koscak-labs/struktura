@@ -1,0 +1,27 @@
+name: claims
+# Re-runs every public number in docs/claims.tsv, the controls that must stay
+# silent, and the withdrawn-claim guard. Fast rows on every push; all rows
+# (including `evolve`) every Monday and on demand.
+on:
+  push:
+    branches: [master]
+  pull_request:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+jobs:
+  check-claims:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo build --release --bin struktura
+      - name: check-claims.sh
+        env:
+          STRUKTURA_BIN: ${{ github.workspace }}/target/release/struktura
+        run: |
+          chmod +x scripts/check-claims.sh
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            scripts/check-claims.sh --all
+          else
+            scripts/check-claims.sh
+          fi
