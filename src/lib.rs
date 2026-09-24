@@ -297,6 +297,41 @@ pub fn dfa_short(values: &[f64]) -> Option<DfaResult> {
     Some(linreg(&log_s[..pts], &log_f[..pts]))
 }
 
+/// Box sizes that [`dfa`], [`dfa_into`], [`dfa_fast_into`] and
+/// [`dfa_scratch`] use for a series of `n` samples: up to 12 distinct sizes,
+/// geometrically spaced from `max(16, n / 50)` to `n / 4`. Returns the sizes
+/// and how many of them are valid (0 when the range is empty).
+///
+/// The C99 generators in [`codegen`] emit this list, so generated monitors
+/// measure alpha on the same scales as the Rust code that calibrates them.
+///
+/// ```
+/// let (sizes, count) = struktura::dfa_box_sizes(96);
+/// assert_eq!(&sizes[..count], &[16, 17, 18, 19, 20, 21, 22, 23, 24]);
+/// ```
+#[must_use]
+pub fn dfa_box_sizes(n: usize) -> ([usize; 12], usize) {
+    let mut sizes = [0usize; 12];
+    let s_min = 16usize.max(n / 50);
+    let s_max = n / 4;
+    if s_min >= s_max {
+        return (sizes, 0);
+    }
+    let ratio = powf(s_max as f64 / s_min as f64, 1.0 / 11.0);
+    let mut count = 0usize;
+    let mut prev_s = 0usize;
+    for step in 0..12 {
+        let s = (s_min as f64 * powi(ratio, step)) as usize;
+        if s == prev_s || s > s_max {
+            continue;
+        }
+        prev_s = s;
+        sizes[count] = s;
+        count += 1;
+    }
+    (sizes, count)
+}
+
 #[must_use]
 /// Prefix-sum DFA: identical boxes and mathematics to [`dfa_into`], but the
 /// per-segment sums (Σy, Σj·y, Σy²) are O(1) prefix-difference lookups
@@ -346,18 +381,12 @@ pub fn dfa_fast_into(values: &[f64], buf: &mut Vec<f64>) -> DfaResult {
         py2[j + 1] = acc_y2;
     }
 
-    let ratio = powf(s_max as f64 / s_min as f64, 1.0 / 11.0);
+    let (sizes, count) = dfa_box_sizes(n);
     let mut log_s = [0.0f64; 12];
     let mut log_f = [0.0f64; 12];
     let mut pts = 0usize;
-    let mut prev_s = 0usize;
 
-    for step in 0..12 {
-        let s = (s_min as f64 * powi(ratio, step)) as usize;
-        if s == prev_s || s > s_max {
-            continue;
-        }
-        prev_s = s;
+    for &s in &sizes[..count] {
         let num_segs = n / s;
         if num_segs == 0 {
             continue;
@@ -447,23 +476,16 @@ pub fn dfa_scratch(values: &[f64], scratch: &mut [f64]) -> DfaResult {
     // Adaptive box sizes: geometric spacing from max(16, n/50) to n/4.
     // Gives consistent accuracy across signal lengths: short signals
     // get tighter boxes, long signals get wider coverage.
-    let s_min = 16usize.max(n / 50);
-    let s_max = n / 4;
-    if s_min >= s_max {
+    let (sizes, count) = dfa_box_sizes(n);
+    if count == 0 {
         return DfaResult { alpha: 0.5, r_squared: 0.0 };
     }
-    let ratio = powf(s_max as f64 / s_min as f64, 1.0 / 11.0);
 
     let mut log_s = [0.0f64; 12];
     let mut log_f = [0.0f64; 12];
     let mut pts = 0usize;
-    let mut prev_s = 0usize;
 
-    for step in 0..12 {
-        let s = (s_min as f64 * powi(ratio, step)) as usize;
-        if s == prev_s || s > s_max { continue; }
-        prev_s = s;
-
+    for &s in &sizes[..count] {
         let num_segs = n / s;
         if num_segs == 0 { continue; }
 
