@@ -86,8 +86,33 @@ jobs:
           name: sdist
           path: crates/struktura-py/dist/*.tar.gz
 
-  publish:
+  # Ships immediately, no PyPI account needed:
+  #   pip install struktura --find-links https://github.com/koscak-labs/struktura/releases/expanded_assets/py-vX.Y.Z
+  github-release:
     if: startsWith(github.ref, 'refs/tags/py-v')
+    needs: [version-check, wheels, sdist]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - run: ls -la dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: struktura ${{ github.ref_name }} (Python)
+          body: |
+            Python package for struktura, prebuilt for Linux (x86_64, aarch64), macOS (arm64, x86_64) and Windows x64, CPython >= 3.8.
+
+                pip install struktura --find-links https://github.com/${{ github.repository }}/releases/expanded_assets/${{ github.ref_name }}
+          files: dist/*
+
+  # PyPI: runs once the repository variable PYPI_READY is "true" (set after the
+  # PyPI pending publisher and the protected `pypi` environment exist).
+  publish:
+    if: startsWith(github.ref, 'refs/tags/py-v') && vars.PYPI_READY == 'true'
     needs: [version-check, wheels, sdist]
     runs-on: ubuntu-latest
     environment: pypi
