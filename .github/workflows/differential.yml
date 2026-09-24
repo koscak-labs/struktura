@@ -1,0 +1,41 @@
+name: differential
+# Generated flight C must equal the Rust reference it is generated from.
+# Every push and pull request runs each generator's differential test with its
+# fixed default seed; the daily schedule runs it with the date as the seed, so
+# new inputs are tried every day. The seed is printed in the log: replay a red
+# run locally with STRUKTURA_DIFF_SEED=<seed> cargo test --test <file>.
+on:
+  push:
+    branches: [master]
+  pull_request:
+  schedule:
+    - cron: '41 4 * * *'
+  workflow_dispatch:
+jobs:
+  generator:
+    name: ${{ matrix.generator }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - generator: hybrid (generate_hybrid_c)
+            test: hybrid_c_matches_rust
+            filter: ''
+          - generator: c-monitor (generate_c_monitor)
+            test: c_monitor_matches_rust
+            filter: c_monitor_alpha_matches_rust_dfa
+          - generator: cfs-app (generate_cfs_app)
+            test: c_monitor_matches_rust
+            filter: cfs_app_passes_the_window_in_time_order
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: seed
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "STRUKTURA_DIFF_SEED=$(date -u +%Y%j)" >> "$GITHUB_ENV"
+          fi
+          echo "C compiler: $(cc --version | head -1)"
+      - name: differential test
+        run: cargo test --test ${{ matrix.test }} ${{ matrix.filter }} -- --nocapture

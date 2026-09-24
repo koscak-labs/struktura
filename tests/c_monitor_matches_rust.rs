@@ -14,7 +14,7 @@
 
 mod common;
 
-use common::{c_compiler, compile_and_run, scratch, Rng};
+use common::{c_compiler, compile_and_run, diff_seed, scratch, Rng};
 use std::fs;
 use struktura::codegen::{generate_c_monitor, generate_cfs_app};
 
@@ -49,7 +49,8 @@ fn check_c_monitor(cc: &str, window: usize) {
     )
     .unwrap();
 
-    let x = series(0x5EED_0F5A_B1E5 + window as u64, 3 * window + window / 2);
+    let seed = diff_seed("c_monitor_matches_rust", 0x5EED_0F5A_B1E5);
+    let x = series(seed + window as u64, 3 * window + window / 2);
     let input: Vec<String> = x.iter().map(|v| format!("{v:.17e}")).collect();
     let out = compile_and_run(cc, &dir, "harness.c", &(input.join("\n") + "\n"));
     let c: Vec<f64> = out.lines().map(|l| l.trim().parse().unwrap()).collect();
@@ -83,12 +84,16 @@ fn check_c_monitor(cc: &str, window: usize) {
         rust[i],
         c[i]
     );
+    // Printed only on this path, after the C was compiled and compared.
+    println!(
+        "c_monitor_matches_rust: window {window} compared {} windows, max |dalpha| {worst:e}",
+        c.len()
+    );
 }
 
 #[test]
 fn c_monitor_alpha_matches_rust_dfa() {
     let Some(cc) = c_compiler() else {
-        eprintln!("skipping: no C compiler found");
         return;
     };
     for window in [512, 64, 72] {
@@ -99,7 +104,6 @@ fn c_monitor_alpha_matches_rust_dfa() {
 #[test]
 fn cfs_app_passes_the_window_in_time_order() {
     let Some(cc) = c_compiler() else {
-        eprintln!("skipping: no C compiler found");
         return;
     };
     let window = 96;
@@ -137,7 +141,7 @@ fn cfs_app_passes_the_window_in_time_order() {
     )
     .unwrap();
 
-    let x = series(0xCF5, 3 * window + 17);
+    let x = series(diff_seed("cfs_app_time_order", 0xCF5), 3 * window + 17);
     let input: Vec<String> = x.iter().map(|v| format!("{v:.17e}")).collect();
     let out = compile_and_run(&cc, &dir, "harness.c", &(input.join("\n") + "\n"));
     let calls: Vec<Vec<f64>> = out
@@ -156,4 +160,9 @@ fn cfs_app_passes_the_window_in_time_order() {
             "call {k}: window not in time order"
         );
     }
+    // Printed only on this path, after the C was compiled and checked.
+    println!(
+        "cfs_app_time_order: compared {} calls, each on the last {window} samples in time order",
+        calls.len()
+    );
 }

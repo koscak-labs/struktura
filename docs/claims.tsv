@@ -33,3 +33,5 @@ sensitivity-high-synthetic	fast	0	HORIZON=1e5 cargo run -q --release --example s
 limitation-sensitivity-high-clean	fast	0	HORIZON=1e5 cargo run -q --release --example structure_vs_amplitude	| AR(0.7) | 0/30 | 2/30 | 4/30 | && | AR(0.95) | 0/30 | 3/30 | 15/30 |
 nab-sensitivity-high	slow	0	HORIZON=1e5 cargo run -q --release --example nab_eval	TOTAL                      58     116        49        48       0.16   |          48       240       0.80
 control-nab-clean-high	slow	0	HORIZON=1e5 cargo run -q --release --example nab_eval	artificialNoAnomaly         5       0         0         0       0.00
+generated-hybrid-c-equals-rust	fast	0	cargo test -q --test hybrid_c_matches_rust -- --nocapture	hybrid_c_matches_rust: STRUKTURA_DIFF_SEED= && hybrid_c_matches_rust: compared 200 windows && test result: ok. 1 passed
+generated-c-monitor-and-cfs-equal-rust	fast	0	cargo test -q --test c_monitor_matches_rust -- --nocapture	c_monitor_matches_rust: window 512 compared && c_monitor_matches_rust: window 64 compared && c_monitor_matches_rust: window 72 compared && cfs_app_time_order: compared && test result: ok. 2 passed
