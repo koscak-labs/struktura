@@ -1,0 +1,41 @@
+name: CSV page
+
+# Tests playground/csv (the "drop your CSV" page) against the real
+# WebAssembly build: analysis.js in Node, then the page in headless Chromium.
+on:
+  pull_request:
+    paths: ['playground/csv/**', 'crates/struktura-wasm/**', 'src/**', '.github/workflows/csv-page.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Build struktura-wasm (web) into the page
+        run: cd crates/struktura-wasm && wasm-pack build --release --target web --out-dir ../../playground/csv/pkg --out-name struktura
+      - name: analysis.js against the WebAssembly build
+        run: node playground/csv/analysis.test.mjs playground/csv/pkg
+      - name: Page in headless Chromium
+        run: |
+          mkdir -p "$RUNNER_TEMP/pw" && cd "$RUNNER_TEMP/pw" && npm init -y >/dev/null && npm install --no-audit --no-fund playwright@1 >/dev/null
+          npx playwright install --with-deps chromium >/dev/null
+          cp "$GITHUB_WORKSPACE/playground/csv/browser.test.mjs" .
+          node browser.test.mjs "$GITHUB_WORKSPACE/playground/csv"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: csv-page-screenshot
+          path: playground/csv/screenshot.png

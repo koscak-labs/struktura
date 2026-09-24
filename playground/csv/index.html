@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>struktura: drop a CSV, see where your signal changed</title>
+<meta name="description" content="Find where a time series changed its structure. Runs in your browser with WebAssembly; your file never leaves the page.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&family=JetBrains+Mono:wght@400;700&display=swap">
+<style>
+:root {
+  --bg: #0f0f12; --surface: #1a1a22; --border: rgba(255,255,255,0.08);
+  --text: #fff; --dim: rgba(255,255,255,0.62);
+  --green: #a8ff38; --amber: #ffba3a; --red: #ff5e57; --blue: #6cb6ff;
+  --mono: 'JetBrains Mono', ui-monospace, monospace; --sans: 'Inter', system-ui, sans-serif;
+}
+* { box-sizing: border-box; margin: 0; }
+body { background: var(--bg); color: var(--text); font-family: var(--sans); padding: 28px 16px 48px; max-width: 960px; margin: 0 auto; line-height: 1.5; }
+h1 { font-size: 30px; font-weight: 900; letter-spacing: -1px; }
+h1 span { color: var(--green); }
+.sub { color: var(--dim); font-size: 15px; margin: 6px 0 4px; }
+.privacy { color: var(--green); font-size: 13px; margin-bottom: 20px; }
+#drop { border: 2px dashed rgba(255,255,255,0.18); border-radius: 10px; padding: 34px 16px; text-align: center; background: var(--surface); transition: border-color .15s; }
+#drop.over { border-color: var(--green); }
+#drop p { color: var(--dim); font-size: 14px; margin-top: 8px; }
+button, select { background: var(--surface); color: var(--text); border: 1px solid var(--border); padding: 8px 14px; border-radius: 6px; font: 600 13px var(--sans); cursor: pointer; }
+button:hover, select:hover { border-color: var(--green); }
+button.primary { background: var(--green); color: #000; border: none; }
+.row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 16px 0 8px; }
+#verdict { font-size: 20px; font-weight: 700; margin: 18px 0 6px; }
+#verdict.ok { color: var(--green); } #verdict.alarm { color: var(--red); } #verdict.err { color: var(--amber); }
+#detail { color: var(--dim); font-size: 14px; }
+canvas { width: 100%; height: 260px; background: var(--surface); border-radius: 8px; display: block; margin: 14px 0 6px; }
+.legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 12px; color: var(--dim); }
+.legend i { display: inline-block; width: 12px; height: 12px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin: 16px 0; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+.card h3 { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .6px; margin-bottom: 4px; font-weight: 600; }
+.big { font: 700 20px var(--mono); }
+ul#alarms { list-style: none; padding: 0; font-size: 14px; }
+ul#alarms li { padding: 6px 0; border-bottom: 1px solid var(--border); }
+ul#alarms code, pre { font-family: var(--mono); }
+.warn { color: var(--amber); font-size: 13px; margin-top: 6px; }
+details { margin-top: 28px; color: var(--dim); font-size: 14px; }
+summary { cursor: pointer; color: var(--text); font-weight: 600; }
+pre { background: var(--surface); border-radius: 6px; padding: 10px 12px; overflow-x: auto; font-size: 12.5px; color: var(--text); margin: 8px 0; }
+a { color: var(--blue); }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<h1>Where did your signal <span>change?</span></h1>
+<p class="sub">Drop a CSV of any sensor, metric or telemetry. struktura learns what "normal" looks like from the start of the data and flags where the signal's behaviour changes, including changes that stay inside normal limits.</p>
+<p class="privacy">Runs entirely in your browser (Rust compiled to WebAssembly). Your file never leaves this page.</p>
+
+<div id="drop">
+  <button class="primary" id="pick">Choose a CSV file</button>
+  <input type="file" id="file" accept=".csv,.tsv,.txt,text/csv" hidden>
+  <p>or drag it here &nbsp;·&nbsp; <button id="example">try an example</button></p>
+</div>
+
+<div class="row" id="colrow" hidden>
+  <label for="col">Column</label>
+  <select id="col"></select>
+  <span id="fileinfo" class="sub"></span>
+</div>
+
+<div id="result" hidden>
+  <div id="verdict"></div>
+  <div id="detail"></div>
+  <div id="warnings"></div>
+  <canvas id="chart" width="1800" height="520"></canvas>
+  <div class="legend">
+    <span><i style="background:rgba(108,182,255,.25)"></i>learning "normal" (assumed healthy)</span>
+    <span><i style="background:var(--text)"></i>your signal</span>
+    <span><i style="background:var(--red)"></i>detected change</span>
+  </div>
+  <div class="cards">
+    <div class="card"><h3>Rows analysed</h3><div class="big" id="c-rows">-</div></div>
+    <div class="card"><h3>Changes found</h3><div class="big" id="c-alarms">-</div></div>
+    <div class="card"><h3>Whole-series DFA alpha</h3><div class="big" id="c-alpha">-</div></div>
+  </div>
+  <ul id="alarms"></ul>
+</div>
+
+<details>
+  <summary>What this does, and what it assumes</summary>
+  <p style="margin-top:8px">The first part of your data (at least 192 rows, up to 30% of the file) is taken as <b>normal</b>. struktura calibrates its streaming monitor on it, then reads the rest one row at a time and reports where it first stops looking like that normal: a shift in level, a drift, a change in noise structure (detrended fluctuation analysis), stuck values and more. If the start of your file is already faulty, results will be misleading. It is a statistical detector: treat a flag as "look here", not a verdict.</p>
+  <p style="margin-top:8px"><b>DFA alpha</b> summarises how the signal's fluctuations scale: about 0.5 for uncorrelated noise, about 1.0 for 1/f noise, about 1.5 for a random walk.</p>
+</details>
+
+<details open>
+  <summary>Use struktura in your own code</summary>
+  <pre>pip install struktura --find-links https://github.com/koscak-labs/struktura/releases/expanded_assets/py-v1.8.4
+npm install https://github.com/koscak-labs/struktura/releases/download/wasm-v1.8.4/struktura-1.8.4.tgz
+cargo add struktura</pre>
+  <p>Source, CLI binaries, C library and GitHub Action: <a href="https://github.com/koscak-labs/struktura">github.com/koscak-labs/struktura</a></p>
+</details>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>

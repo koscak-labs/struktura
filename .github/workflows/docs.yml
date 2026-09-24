@@ -33,6 +33,13 @@ jobs:
           cp playground/index.html docs/book/playground/
           cp -r playground/pkg docs/book/playground/pkg
           rm -f docs/book/playground/pkg/.gitignore
+      - name: Build the CSV page (released struktura-wasm, web target)
+        run: |
+          (cd crates/struktura-wasm && wasm-pack build --target web --release --out-dir ../../playground/csv/pkg)
+          mkdir -p docs/book/playground/csv
+          cp playground/csv/index.html playground/csv/app.js playground/csv/analysis.js docs/book/playground/csv/
+          cp -r playground/csv/pkg docs/book/playground/csv/pkg
+          rm -f docs/book/playground/csv/pkg/.gitignore
       - name: Setup Pages
         uses: actions/configure-pages@v5
       - name: Upload artifact
