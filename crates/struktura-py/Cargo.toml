@@ -1,6 +1,6 @@
 [package]
 name = "struktura-py"
-version = "1.8.6"
+version = "1.8.7"
 edition = "2021"
 rust-version = "1.70"
 description = "Python bindings for struktura. All computation runs in the Rust crate; this crate only converts arguments."

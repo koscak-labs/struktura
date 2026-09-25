@@ -2,7 +2,7 @@
 
 All notable changes to Struktura are documented here.
 
-## Unreleased
+## v1.8.7 (2026-09-26): multi-channel monitors no longer skip samples after an alarm
 
 - Multi-channel monitors no longer skip samples after an alarm. When one
   channel alarmed, `HybridMonitor::push` / `push_with_validity` stopped feeding
