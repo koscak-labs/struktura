@@ -28,4 +28,24 @@ const a = m.lastAlarm();
 assert.equal(a.leg, leg);
 assert.throws(() => m.push(Float64Array.of(1, 2)), /channels/);
 assert.throws(() => new s.Monitor(white(10), 3), /multiple of channels/);
-console.log('ok', 'white', r.alpha.toFixed(3), 'step alarm', leg, '-', a.explanation);
+// Guard (the CLI's AutoPilot) keeps watching after the first fault; Monitor latches.
+const run = (det, segs) => segs.map(([n, add]) => {
+  let got = 0;
+  for (let i = 0; i < n; i++) {
+    const out = det.push(Float64Array.of(gauss() + add));
+    got += Array.isArray(out) ? out.length : Number(out !== undefined);
+  }
+  return got;
+});
+const segs = [[1500, 0], [150, 8], [3000, 0], [150, 8]];
+const clean = white(2000);
+const g = run(new s.Guard(clean, 1), segs), mon = run(new s.Monitor(clean, 1), segs);
+assert.ok(g[0] === 0 && g[1] > 0 && g[3] > 0, `guard ${g}`);
+assert.equal(mon[3], 0, `monitor ${mon}: latched, the second fault goes unseen`);
+const [raw] = run(new s.Guard(clean, 1, 0), [[150, 8]]);
+const gg = new s.Guard(clean, 1);
+const gap = [];
+for (let i = 0; i < 400; i++) gap.push(...gg.push(Float64Array.of(NaN)));
+assert.ok(gap.some((e) => e.leg === 'missingness'), 'NaN counts as a missing reading');
+assert.ok(gap.every((e) => typeof e.kind === 'string' && typeof e.tick === 'number'));
+console.log('ok', 'white', r.alpha.toFixed(3), 'step alarm', leg, '-', a.explanation, '| guard', g, 'monitor', mon, 'raw', raw);
