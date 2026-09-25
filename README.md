@@ -142,7 +142,7 @@ struktura guard: 3000 samples x 5 channels (motor_current_A, wheel_rpm, imu_acce
   row   2200  ✗ not a real environment change, fault confirmed
   row   2201  ⚠ motor_current_A (15.1x threshold): the signal keeps deviating from what its baseline predicts (a step, a drift, or a change in its pattern)
   row   2208  ⚠ motor_current_A (2.6x threshold): the signal's behavior changed and predictions are failing
-  row   2210  ⚠ motor_current_A (1.8x threshold): this channel disagrees with what the other channels' physics says it should be
+  row   2210  ⚠ motor_current_A (1.7x threshold): this channel disagrees with what the other channels' physics says it should be
   row   2210  ✗ motor_current_A declared dead, using reconstructed values
   6 faults detected across 2000 samples (0 adaptations, 1 quarantines)
 <!-- /example -->
@@ -401,9 +401,9 @@ $ struktura redblue
   | Round | RED coverage | New misses | Corpus cov. after BLUE | Evolved? |
   |-------|--------------|------------|------------------------|----------|
   |     1 |    60.0%     |         48 |              16.7%     | YES |
-  |     2 |    70.8%     |         35 |              21.7%     | YES |
-  |     3 |    68.3%     |         38 |              15.7%     | YES |
-  |     4 |    74.2%     |         31 |              10.7%     | YES |
+  |     2 |    70.8%     |         35 |              20.5%     | YES |
+  |     3 |    68.3%     |         38 |              14.9%     | YES |
+  |     4 |    75.0%     |         30 |              10.0%     | YES |
   |     5 |    64.2%     |         43 |               3.6%     |       no |
   |     6 |    75.0%     |         30 |               0.7%     |       no |
 

@@ -2,6 +2,22 @@
 
 All notable changes to Struktura are documented here.
 
+## Unreleased
+
+- Parity (cross-channel) leg: each channel is now predicted from the other
+  channels' values in the same sample, which is how the model is fitted. When
+  a full sample was pushed, channels later in the column order still held the
+  previous sample, so channels that move together sample by sample (thrust and
+  acceleration, for example) looked inconsistent and a healthy sensor could be
+  declared dead. On NASA OnAIR's simulated `standby_communication_error_1.csv`
+  the false THRUST alarm at row 770 and its quarantine are gone, and the real
+  VOLTAGE fault is still caught at row 995. Channels fed one at a time with
+  `push_channel` still use each other channel's latest value.
+  Output changes elsewhere: on `data/ims_monitor_stream.csv` the drift alarm
+  moves from row 926 to 924; on `examples/rover.csv` the motor current parity
+  score is 1.7x instead of 1.8x; rows 2 to 4 of the `redblue` table change
+  (its headline, 60.0% to 75.0% RED coverage, does not).
+
 ## v1.8.7 (2026-09-26): multi-channel monitors no longer skip samples after an alarm
 
 - Multi-channel monitors no longer skip samples after an alarm. When one

@@ -375,6 +375,9 @@ pub struct HybridMonitor {
     /// Channels switched to virtual mode (dead sensor; reconstruction
     /// substitutes, own legs disabled).
     quarantined: Vec<bool>,
+    /// Parity predictions for the sample being fed by `push_with_validity`,
+    /// computed from that sample's own values (NaN outside that call).
+    sample_pred: Vec<f64>,
     /// Per-leg enable mask: [residual, repeated, dfa, level, cusum, miss, parity].
     /// Legs whose stationarity assumptions a deployment cannot meet
     /// (e.g. level-shift on a naturally trending channel) are disabled
@@ -831,6 +834,7 @@ impl HybridMonitor {
                 q.resize(channels, false);
                 q
             },
+            sample_pred: vec![f64::NAN; channels],
             leg_enabled: [true, true, true, true, true, true, channels >= 2],
             config,
         })
@@ -866,6 +870,20 @@ impl HybridMonitor {
         // An alarm on one channel must not stop the later channels from
         // ingesting this sample: their ticks and rings would fall one sample
         // behind per alarm. Keep feeding them and report the first alarm.
+        //
+        // Parity models are fitted on same-time values. Predict every channel
+        // from this sample before feeding any: otherwise a channel sees this
+        // sample for the channels before it and the previous one for those
+        // after it, which misses badly on channels that move together.
+        for ch in 0..sample.len() {
+            let r = &self.recon[ch];
+            let mut pred = r.bias;
+            for (s, st) in self.state.iter().enumerate() {
+                let x = if valid.get(s).copied().unwrap_or(true) { sample[s] } else { st.prev };
+                pred += r.weights[s] * x;
+            }
+            self.sample_pred[ch] = pred;
+        }
         let mut first: Option<(Leg, Option<AlarmReport>)> = None;
         for (ch, &v) in sample.iter().enumerate() {
             let is_valid = valid.get(ch).copied().unwrap_or(true);
@@ -875,6 +893,7 @@ impl HybridMonitor {
                 self.alarmed = false;
             }
         }
+        self.sample_pred.fill(f64::NAN);
         let (leg, report) = first?;
         self.alarmed = true;
         self.last_alarm = report;
@@ -905,9 +924,13 @@ impl HybridMonitor {
         // Parity prediction must be computed before borrowing state mutably.
         let parity_pred = {
             let r = &self.recon[ch];
-            let mut pred = r.bias;
-            for (s, stx) in self.state.iter().enumerate() {
-                pred += r.weights[s] * stx.prev;
+            let mut pred = self.sample_pred[ch];
+            if pred.is_nan() {
+                // Fed one channel at a time: the latest value of each other channel.
+                pred = r.bias;
+                for (s, stx) in self.state.iter().enumerate() {
+                    pred += r.weights[s] * stx.prev;
+                }
             }
             (pred, r.sd)
         };
@@ -1338,6 +1361,29 @@ mod tests {
         assert!(run_stream(&mut mon, &faulted).is_none());
         mon.reset();
         assert!(run_stream(&mut mon, &faulted).is_some());
+    }
+
+    #[test]
+    fn parity_uses_same_sample_values_for_every_channel() {
+        // b follows a within the same sample. Parity is fitted on same-time
+        // values; before the fix channel 0 was predicted from channel 1's
+        // previous sample, a whole random-walk step off, and a clean stream
+        // raised parity alarms.
+        let mut rng = crate::telemetry_bench::GaussRng::new(7);
+        let n = 3000;
+        let mut a = vec![0.0f64; n];
+        for t in 1..n {
+            a[t] = a[t - 1] + rng.normal(0.0, 1.0);
+        }
+        let b: Vec<f64> = a.iter().map(|x| 2.0 * x + rng.normal(0.0, 0.01)).collect();
+        let calib = vec![a[..1000].to_vec(), b[..1000].to_vec()];
+        let mut mon = HybridMonitor::calibrate(&calib).expect("calibration");
+        for t in 1000..n {
+            if let Some(leg) = mon.push(&[a[t], b[t]]) {
+                assert_ne!(leg, Leg::Parity, "clean coupled stream raised parity at {t}");
+                mon.reset();
+            }
+        }
     }
 
     #[test]
