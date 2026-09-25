@@ -2,7 +2,14 @@
 
 All notable changes to Struktura are documented here.
 
-## Unreleased
+## v1.8.6 (2026-09-25): Guard in Python and JS, index columns skipped, OPS-SAT-AD
+
+- Python and JS bindings: new `Guard`, the same monitor as `struktura guard`
+  (AutoPilot plus the CLI's 50-sample same-leg dedupe). Until now the bindings
+  only exposed `Monitor`, which latches after its first alarm, so binding users
+  saw one alarm and then silence. The JS `Guard` reproduces
+  `struktura guard --baseline 2000 --json` event for event on a test CSV.
+  Reaches users with the py-v1.8.6 and wasm-v1.8.6 packages.
 
 - `guard` no longer monitors a column that rises in even steps (a row index or
   a regular timestamp). On a CSV with a `t,value` layout, 1.8.5 monitored `t`,

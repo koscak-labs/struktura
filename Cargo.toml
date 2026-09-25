@@ -1,6 +1,6 @@
 [package]
 name = "struktura"
-version = "1.8.5"
+version = "1.8.6"
 edition = "2021"
 rust-version = "1.70"
 description = "Time-series anomaly detection with no training data: detrended fluctuation analysis (DFA, Hurst exponent), a self-calibrating streaming monitor for sensors and telemetry, and C99 code generation for embedded and flight software. no_std."
