@@ -28,7 +28,7 @@ export function parseCsv(text) {
 
 /**
  * Analyse one series.
- * s: the struktura WebAssembly module (dfaShort, Monitor).
+ * s: the struktura WebAssembly module (dfaShort, Monitor, Guard).
  * Returns the whole-series alpha, a rolling alpha, and monitor alarms after a
  * calibration prefix that is assumed normal.
  */
@@ -73,23 +73,25 @@ export function analyze(s, values, { calibRows } = {}) {
       }
     } catch (_) { /* the full calibration below reports its own error */ }
   }
-  let m;
+  // Guard is what `struktura guard` runs: it keeps watching after an alarm and
+  // re-learns "normal" when a level shift settles. (A bare Monitor goes quiet
+  // after its first alarm.)
+  let g;
   try {
-    m = new s.Monitor(values.subarray(0, calib), 1);
+    g = new s.Guard(values.subarray(0, calib), 1);
   } catch (e) {
     out.error = `Could not calibrate on the first ${calib} rows: ${e.message || e}`;
     return out;
   }
+  out.recalibrations = 0;
   // Report the start of each alarm episode, not every alarming tick.
   let lastAlarmAt = -Infinity;
   const quiet = 50;
   for (let i = calib; i < n; i++) {
-    const leg = m.push(values.subarray(i, i + 1));
-    if (leg !== undefined) {
-      if (i - lastAlarmAt > quiet) {
-        const a = m.lastAlarm();
-        out.alarms.push({ at: i, leg, explanation: a ? a.explanation : '' });
-      }
+    for (const e of g.push(values.subarray(i, i + 1))) {
+      if (e.kind === 'recalibrated') out.recalibrations++;
+      if (e.kind !== 'alarm' && e.kind !== 'rolled_back') continue;
+      if (i - lastAlarmAt > quiet) out.alarms.push({ at: i, leg: e.leg, explanation: e.explanation });
       lastAlarmAt = i;
     }
   }
