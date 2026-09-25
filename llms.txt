@@ -15,7 +15,7 @@ detection, bearing/rotating-machinery fault detection, cardiac HRV
 monitoring, GNSS scintillation detection, DevOps/production time series
 health monitoring, financial regime detection, genome sequence structure,
 and text-rhythm analysis. It has been tested against real NASA (SMAP/MSL,
-IMS bearing run-to-failure, Voyager 1 magnetometer) and ESA (ESA-ADB Mission 1)
+IMS bearing run-to-failure, Voyager 1 magnetometer) and ESA (OPS-SAT-AD)
 spacecraft telemetry datasets, and against the CWRU bearing dataset.
 
 Algorithm: Peng et al., "Mosaic organization of DNA nucleotide sequences,"

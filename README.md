@@ -102,7 +102,7 @@ Two limits: this is segment classification (one score per labelled segment), not
 
 You have a time series and no labelled faults to train on:
 
-- **Spacecraft and satellite telemetry**: reaction wheels, magnetometers, batteries. Evaluated on NASA SMAP/MSL and ESA-ADB data.
+- **Spacecraft and satellite telemetry**: reaction wheels, magnetometers, batteries. Evaluated on NASA SMAP/MSL and ESA OPS-SAT-AD data.
 - **Predictive maintenance and bearing fault detection**: vibration from rotating machinery (CWRU and NASA IMS datasets).
 - **DevOps metrics**: latency, error rate, throughput drift, piped from stdin.
 - **Heart-rate variability**: DFA α on RR intervals, the metric used in HRV research.
