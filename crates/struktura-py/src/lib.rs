@@ -199,6 +199,128 @@ impl Monitor {
     }
 }
 
+/// What `struktura guard` runs: the monitor inside struktura's AutoPilot. It keeps
+/// watching after an alarm, quarantines a dead channel, and recalibrates after a
+/// level shift that settles into a new normal (rolling back if that fails).
+///
+///     g = Guard([ch0_clean, ch1_clean])
+///     for sample in stream:
+///         for event in g.push(sample):      # [] in the steady state
+///             print(event["kind"], event.get("explanation"))
+#[pyclass(unsendable)]
+struct Guard {
+    inner: stk::autopilot::AutoPilot,
+    channels: usize,
+    dedup: Dedup,
+}
+
+/// Same rule as the CLI's guard output: drop an alarm whose detector already
+/// alarmed within `cooldown` samples.
+struct Dedup {
+    cooldown: u64,
+    tick: u64,
+    recent: Vec<(u64, u8)>,
+}
+
+impl Dedup {
+    fn new(cooldown: u64) -> Dedup {
+        Dedup { cooldown, tick: 0, recent: Vec::new() }
+    }
+
+    fn repeat(&mut self, t: u64, leg: u8) -> bool {
+        let c = self.cooldown;
+        let dup = self.recent.iter().any(|&(lt, l)| l == leg && t - lt < c);
+        self.recent.retain(|&(lt, _)| t - lt < c);
+        self.recent.push((t, leg));
+        dup
+    }
+}
+
+fn alarm_fields(d: &Bound<'_, pyo3::types::PyDict>, r: &stk::monitor::AlarmReport) -> PyResult<()> {
+    d.set_item("leg", leg_name(r.leg))?;
+    d.set_item("channel", r.channel)?;
+    d.set_item("observed", r.observed)?;
+    d.set_item("threshold", r.threshold)?;
+    d.set_item("explanation", stk::monitor::explain_alarm(r))
+}
+
+#[pymethods]
+impl Guard {
+    /// `cooldown`: an alarm from the same detector within this many samples of its
+    /// previous one is not reported again (the CLI uses 50). 0 reports every alarm.
+    #[new]
+    #[pyo3(signature = (clean, cooldown = 50))]
+    fn new(clean: Vec<Vec<f64>>, cooldown: u64) -> PyResult<Self> {
+        let m = HybridMonitor::calibrate(&clean).ok_or_else(|| {
+            PyValueError::new_err(
+                "calibration failed: need at least one channel, equal lengths, and enough clean samples",
+            )
+        })?;
+        let channels = m.channels();
+        Ok(Guard { inner: stk::autopilot::AutoPilot::new(m), channels, dedup: Dedup::new(cooldown) })
+    }
+
+    #[getter]
+    fn channels(&self) -> usize {
+        self.channels
+    }
+
+    /// Feed one sample (one value per channel; NaN counts as a missing reading).
+    /// Returns a list of event dicts, each with "kind" and "tick":
+    /// alarm, quarantined, adaptation_started, recalibrated, rolled_back.
+    fn push<'py>(&mut self, py: Python<'py>, sample: Vec<f64>) -> PyResult<Vec<Bound<'py, pyo3::types::PyDict>>> {
+        use stk::autopilot::Event;
+        if sample.len() != self.channels {
+            return Err(PyValueError::new_err(format!(
+                "sample has {} values, guard has {} channels",
+                sample.len(),
+                self.channels
+            )));
+        }
+        let valid: Vec<bool> = sample.iter().map(|v| v.is_finite()).collect();
+        let clean: Vec<f64> = sample.iter().map(|v| if v.is_finite() { *v } else { 0.0 }).collect();
+        let mut out = Vec::new();
+        let tick = self.dedup.tick;
+        self.dedup.tick += 1;
+        for ev in self.inner.push(&clean, &valid) {
+            if let Event::Alarm { report, .. } = &ev {
+                if self.dedup.repeat(tick, report.leg as u8) {
+                    continue;
+                }
+            }
+            let d = pyo3::types::PyDict::new(py);
+            match ev {
+                Event::Alarm { tick, report, class } => {
+                    d.set_item("kind", "alarm")?;
+                    d.set_item("tick", tick)?;
+                    d.set_item("class", class)?;
+                    alarm_fields(&d, &report)?;
+                }
+                Event::Quarantined { tick, channel } => {
+                    d.set_item("kind", "quarantined")?;
+                    d.set_item("tick", tick)?;
+                    d.set_item("channel", channel)?;
+                }
+                Event::AdaptationStarted { tick } => {
+                    d.set_item("kind", "adaptation_started")?;
+                    d.set_item("tick", tick)?;
+                }
+                Event::Recalibrated { tick } => {
+                    d.set_item("kind", "recalibrated")?;
+                    d.set_item("tick", tick)?;
+                }
+                Event::RolledBack { tick, guard_report } => {
+                    d.set_item("kind", "rolled_back")?;
+                    d.set_item("tick", tick)?;
+                    alarm_fields(&d, &guard_report)?;
+                }
+            }
+            out.push(d);
+        }
+        Ok(out)
+    }
+}
+
 #[pymodule]
 fn struktura(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
@@ -211,5 +333,6 @@ fn struktura(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<DfaResult>()?;
     m.add_class::<Analysis>()?;
     m.add_class::<Monitor>()?;
+    m.add_class::<Guard>()?;
     Ok(())
 }

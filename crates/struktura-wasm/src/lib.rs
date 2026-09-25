@@ -184,3 +184,144 @@ impl Monitor {
         self.inner.reset();
     }
 }
+
+/// One decision or observation from a Guard. `kind` is "alarm", "quarantined",
+/// "adaptation_started", "recalibrated" or "rolled_back"; the alarm fields are
+/// set for "alarm" and "rolled_back", `channel` also for "quarantined".
+#[wasm_bindgen]
+pub struct GuardEvent {
+    kind: &'static str,
+    pub tick: f64,
+    channel: Option<usize>,
+    leg: Option<&'static str>,
+    class: Option<&'static str>,
+    explanation: Option<&'static str>,
+    observed: Option<f64>,
+    threshold: Option<f64>,
+}
+
+#[wasm_bindgen]
+impl GuardEvent {
+    #[wasm_bindgen(getter)]
+    pub fn kind(&self) -> String {
+        self.kind.to_string()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn channel(&self) -> Option<usize> {
+        self.channel
+    }
+    #[wasm_bindgen(getter)]
+    pub fn leg(&self) -> Option<String> {
+        self.leg.map(str::to_string)
+    }
+    #[wasm_bindgen(getter)]
+    pub fn class(&self) -> Option<String> {
+        self.class.map(str::to_string)
+    }
+    #[wasm_bindgen(getter)]
+    pub fn explanation(&self) -> Option<String> {
+        self.explanation.map(str::to_string)
+    }
+    #[wasm_bindgen(getter)]
+    pub fn observed(&self) -> Option<f64> {
+        self.observed
+    }
+    #[wasm_bindgen(getter)]
+    pub fn threshold(&self) -> Option<f64> {
+        self.threshold
+    }
+}
+
+impl GuardEvent {
+    fn bare(kind: &'static str, tick: u64) -> GuardEvent {
+        GuardEvent { kind, tick: tick as f64, channel: None, leg: None, class: None, explanation: None, observed: None, threshold: None }
+    }
+
+    fn with_report(kind: &'static str, tick: u64, r: &stk::monitor::AlarmReport) -> GuardEvent {
+        GuardEvent {
+            channel: Some(r.channel),
+            leg: Some(leg_name(r.leg)),
+            explanation: Some(stk::monitor::explain_alarm(r)),
+            observed: Some(r.observed),
+            threshold: Some(r.threshold),
+            ..GuardEvent::bare(kind, tick)
+        }
+    }
+}
+
+/// What `struktura guard` runs: the monitor inside struktura's AutoPilot. It keeps
+/// watching after an alarm, quarantines a dead channel, and recalibrates after a
+/// level shift that settles into a new normal (rolling back if that fails).
+///
+///   const g = new Guard(cleanFlat, channels);
+///   for (const e of g.push(sample)) console.log(e.kind, e.explanation); // [] in the steady state
+#[wasm_bindgen]
+pub struct Guard {
+    inner: stk::autopilot::AutoPilot,
+    channels: usize,
+    cooldown: u64,
+    tick: u64,
+    recent: Vec<(u64, u8)>,
+}
+
+#[wasm_bindgen]
+impl Guard {
+    /// Calibrate on clean data, laid out as for Monitor (channel-major).
+    /// `cooldown` (default 50, as in the CLI): an alarm from the same detector within
+    /// this many samples of its previous one is not reported again; 0 reports all.
+    #[wasm_bindgen(constructor)]
+    pub fn new(clean: &[f64], channels: usize, cooldown: Option<u32>) -> Result<Guard, JsError> {
+        let m = Monitor::new(clean, channels)?.inner;
+        Ok(Guard {
+            inner: stk::autopilot::AutoPilot::new(m),
+            channels,
+            cooldown: u64::from(cooldown.unwrap_or(50)),
+            tick: 0,
+            recent: Vec::new(),
+        })
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn channels(&self) -> usize {
+        self.channels
+    }
+
+    /// Feed one sample (one value per channel; NaN counts as a missing reading).
+    /// Returns the events this sample produced, usually none.
+    pub fn push(&mut self, sample: &[f64]) -> Result<Vec<GuardEvent>, JsError> {
+        use stk::autopilot::Event;
+        if sample.len() != self.channels {
+            return Err(JsError::new(&format!(
+                "sample has {} values, guard has {} channels",
+                sample.len(),
+                self.channels
+            )));
+        }
+        let valid: Vec<bool> = sample.iter().map(|v| v.is_finite()).collect();
+        let clean: Vec<f64> = sample.iter().map(|v| if v.is_finite() { *v } else { 0.0 }).collect();
+        let (t, c) = (self.tick, self.cooldown);
+        self.tick += 1;
+        let recent = &mut self.recent;
+        Ok(self
+            .inner
+            .push(&clean, &valid)
+            .into_iter()
+            .filter(|ev| {
+                // Same rule as the CLI's guard output: drop a repeat of the same detector.
+                let Event::Alarm { report, .. } = ev else { return true };
+                let leg = report.leg as u8;
+                let dup = recent.iter().any(|&(lt, l)| l == leg && t - lt < c);
+                recent.retain(|&(lt, _)| t - lt < c);
+                recent.push((t, leg));
+                !dup
+            })
+            .map(|ev| match ev {
+                Event::Alarm { tick, report, class } => GuardEvent { class: Some(class), ..GuardEvent::with_report("alarm", tick, &report) },
+                Event::Quarantined { tick, channel } => GuardEvent { channel: Some(channel), ..GuardEvent::bare("quarantined", tick) },
+                Event::AdaptationStarted { tick } => GuardEvent::bare("adaptation_started", tick),
+                Event::Recalibrated { tick } => GuardEvent::bare("recalibrated", tick),
+                Event::RolledBack { tick, guard_report } => GuardEvent::with_report("rolled_back", tick, &guard_report),
+            })
+            .collect())
+    }
+}

@@ -65,7 +65,27 @@ jobs:
           assert r is not None and 0.3 < r.alpha < 0.7, r
           m = struktura.Monitor([[random.gauss(0, 1) for _ in range(2000)]])
           assert all(m.push([random.gauss(0, 1)]) is None for _ in range(200))
-          print("ok without numpy", struktura.__version__, round(r.alpha, 3))
+          # Guard (the CLI's AutoPilot) keeps watching after the first fault; Monitor latches.
+          def run(det, segs):
+              hits = []
+              for n, add in segs:
+                  got = 0
+                  for _ in range(n):
+                      x = random.gauss(0, 1) + add
+                      r = det.push([x])
+                      got += len(r) if isinstance(r, list) else (r is not None)
+                  hits.append(got)
+              return hits
+          segs = [(1500, 0), (150, 8), (3000, 0), (150, 8)]
+          clean = [random.gauss(0, 1) for _ in range(2000)]
+          g, mon = run(struktura.Guard([clean]), segs), run(struktura.Monitor([clean]), segs)
+          assert g[0] == 0 and g[1] > 0 and g[3] > 0, g
+          assert mon[3] == 0, mon  # latched: the second fault goes unseen
+          raw = run(struktura.Guard([clean], cooldown=0), [(150, 8)])
+          gg = struktura.Guard([clean])
+          gap = [e for _ in range(400) for e in gg.push([float("nan")])]
+          assert any(e.get("leg") == "missingness" for e in gap), gap  # NaN = missing reading
+          print("ok without numpy", struktura.__version__, round(r.alpha, 3), "guard", g, "monitor", mon, "raw", raw)
           EOF
           python -m pip install numpy
           python - <<'EOF'
