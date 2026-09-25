@@ -50,6 +50,13 @@ const e = analyze(s, early);
 assert.ok(e.calibrationSuspectRow >= 600, `calibration self-check: ${e.calibrationSuspectRow}`);
 assert.equal(a.calibrationSuspectRow, undefined, 'clean stream flagged its calibration');
 
+// Two separate faults: both reported (a bare Monitor latches after the first one).
+const twice = Float64Array.from({ length: 6000 }, (_, i) => gauss() + ((i >= 2500 && i < 2650) || (i >= 4500 && i < 4650) ? 8 : 0));
+const t2 = analyze(s, twice);
+assert.ok(t2.alarms.some((x) => x.at >= 2500 && x.at < 2700), `first fault: ${JSON.stringify(t2.alarms)}`);
+assert.ok(t2.alarms.some((x) => x.at >= 4500 && x.at < 4700), `second fault: ${JSON.stringify(t2.alarms)}`);
+assert.ok(t2.alarms.every((x) => x.at >= 2500), `alarm before any fault: ${JSON.stringify(t2.alarms)}`);
+
 // The page's own example must be flagged after its change at row 2200.
 const ex = parseCsv(exampleCsv());
 const er = analyze(s, ex.columns[ex.columns.length - 1].values);
