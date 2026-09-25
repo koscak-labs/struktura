@@ -24,7 +24,9 @@ gcc -std=c99 -Wall -Werror -O2 -o harness_native harness.c -lm
 
 echo
 echo "== 3. size_probe: generated monitor's OWN static footprint (Cortex-M3) =="
-arm-none-eabi-gcc -std=c99 -Wall -Werror -O1 -mcpu=cortex-m3 -mthumb \
+# -fno-early-inlining: see the note in step 5 -- required at -O2 on ARM here,
+# harmless at every other level.
+arm-none-eabi-gcc -std=c99 -Wall -Werror -O2 -fno-early-inlining -mcpu=cortex-m3 -mthumb \
     -mfloat-abi=soft -ffreestanding -fno-builtin -nostdlib \
     -T mps2_an385.ld -Wl,--gc-sections \
     -o size_probe.elf startup.c size_probe.c -lm -lgcc
@@ -36,17 +38,19 @@ grep -n 'malloc\|calloc\|realloc\|free(' hybrid_monitor.c && exit 1 || echo "OK:
 
 echo
 echo "== 5. bare-metal ARM build + QEMU run (mps2-an385, Cortex-M3) =="
-echo "   NOTE: -O2 (struktura's own suggested compile line) currently hits a"
-echo "   BusFault under this freestanding/-nostdlib setup (CFSR=0x8200,"
-echo "   imprecise bus error, BFAR poison pattern) -- root cause not yet"
-echo "   isolated. -O1 builds and runs correctly and gives identical"
-echo "   alarm/determinism results, so it is used for the ARM numbers below."
-arm-none-eabi-gcc -std=c99 -Wall -Wno-error -O1 -mcpu=cortex-m3 -mthumb \
+echo "   NOTE: -O2 (struktura's own suggested compile line) needs"
+echo "   -fno-early-inlining here: without it, a stack slot in run_once()"
+echo "   (harness.c) is overwritten once hyb_push()+hyb_dfa_alpha() are"
+echo "   inlined into it, and the run BusFaults (CFSR=0x8200). The generated"
+echo "   C shows no undefined behaviour under ASan/UBSan; whether this is a"
+echo "   GCC 13.2.1 code-generation bug is not established. See"
+echo "   bench/flight/README.md for the evidence."
+arm-none-eabi-gcc -std=c99 -Wall -Wno-error -O2 -fno-early-inlining -mcpu=cortex-m3 -mthumb \
     -mfloat-abi=soft -ffreestanding -fno-builtin -nostdlib \
     -T mps2_an385.ld -Wl,--gc-sections \
-    -o harness_arm_o1.elf startup.c harness.c -lm -lgcc
+    -o harness_arm_o2.elf startup.c harness.c -lm -lgcc
 timeout 60 qemu-system-arm -M mps2-an385 -cpu cortex-m3 -semihosting -nographic \
-    -kernel harness_arm_o1.elf | tee qemu_out.log
+    -kernel harness_arm_o2.elf | tee qemu_out.log
 
 echo
 echo "== done: compare alarms_rust.csv (Rust monitor) against RUN1/RUN2 t=/leg= above =="

@@ -34,15 +34,15 @@ static void sh_write0(const char *s) {
     register const char *r1 __asm__("r1") = s;
     __asm__ volatile("bkpt 0xab" : : "r"(r0), "r"(r1) : "memory");
 }
+/* On 32-bit ARM, SYS_EXIT takes the stop reason itself in r1, not a
+ * pointer to a parameter block (that form is AArch64 / SYS_EXIT_EXTENDED).
+ * ApplicationExit makes QEMU exit 0; any other reason exits 1. */
 static void sh_exit(int code) {
-    static unsigned long block[2];
     register unsigned long r0 __asm__("r0") = 0x18; /* SYS_EXIT */
-    block[0] = 0x20026UL; /* ADP_Stopped_ApplicationExit */
-    block[1] = (unsigned long)code;
-    {
-        register unsigned long *r1 __asm__("r1") = block;
-        __asm__ volatile("bkpt 0xab" : : "r"(r0), "r"(r1) : "memory");
-    }
+    register unsigned long r1 __asm__("r1") =
+        code == 0 ? 0x20026UL  /* ADP_Stopped_ApplicationExit */
+                  : 0x20023UL; /* ADP_Stopped_RunTimeErrorUnknown */
+    __asm__ volatile("bkpt 0xab" : : "r"(r0), "r"(r1) : "memory");
     while (1) {}
 }
 static void put_ulong(unsigned long v) {

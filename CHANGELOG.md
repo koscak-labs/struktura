@@ -4,6 +4,21 @@ All notable changes to Struktura are documented here.
 
 ## Unreleased
 
+- `bench/flight` (embedded-monitor evidence): the bare-metal ARM Cortex-M3
+  QEMU build now passes at `-O2`, struktura's own suggested compile line,
+  instead of falling back to `-O1`. At plain `-O2` a stack slot in the test
+  harness's replay loop is overwritten once GCC's early inlining folds
+  `hyb_push()`/`hyb_dfa_alpha()` into it; `-fno-early-inlining` avoids it.
+  Whether that is a GCC 13.2.1 code-generation bug is not established (one
+  compiler available, no minimized reproducer). The generated monitor shows
+  no undefined behaviour under ASan/UBSan natively, or under UBSan on ARM.
+  `bench/flight/run.sh` now builds the ARM harness and `size_probe` with
+  `-fno-early-inlining`. Alarm tick/leg (1504, REPEATED)
+  and determinism now match Rust and native x86 at every ARM optimization
+  level, `-O0` through `-O3` and `-Os`; flash at `-O2` is 6600 B (was 7120 B
+  at the previous `-O1` fallback), RAM stays 9520 B. See
+  `bench/flight/README.md` for the fault registers, disassembly, and flag
+  bisection.
 - Parity (cross-channel) leg: each channel is now predicted from the other
   channels' values in the same sample, which is how the model is fitted. When
   a full sample was pushed, channels later in the column order still held the

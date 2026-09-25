@@ -69,11 +69,14 @@ neither package and Ubuntu had passwordless sudo, so that's what was used):
 `arm-none-eabi-gcc (15:13.2.rel1-2) 13.2.1 20231009`, `QEMU emulator
 version 8.2.2 (Debian 1:8.2.2+ds-0ubuntu1.18)`.
 
-**Equivalence — IDENTICAL across all three.** Alarm tick 1504, leg
+**Equivalence — IDENTICAL across every level.** Alarm tick 1504, leg
 `REPEATED` (repeated-value/stuck-sensor leg), on:
 - the Rust `HybridMonitor` (`alarms_rust.csv`: `1504,REPEATED`)
 - the generated C compiled natively for x86 (`gcc -O2`)
-- the generated C compiled for Cortex-M3 and run under QEMU (`arm-none-eabi-gcc -O1`, `mps2-an385`)
+- the generated C compiled for Cortex-M3 and run under QEMU
+  (`arm-none-eabi-gcc`, `mps2-an385`), at `-O0`, `-O1`, `-O2`, `-O3`, and
+  `-Os` — see "`-O2` needs `-fno-early-inlining`" below for what makes `-O2`
+  (struktura's own suggested compile line) pass
 
 Decisions (which tick, which leg) match exactly, not just "close" — this is
 integer/enum output, not a floating-point comparison, so there is no
@@ -81,19 +84,27 @@ last-bit ambiguity to report here.
 
 **Determinism.** Each platform ran the fixed stream twice through a fresh
 monitor instance; RUN1 and RUN2 agree (`DETERMINISTIC=1`) on native x86 and
-on ARM/QEMU.
+on ARM/QEMU, at every optimization level.
 
-**Static memory (Cortex-M3, `-O1`, isolated from the test harness via
+**Static memory (Cortex-M3, isolated from the test harness via
 `size_probe.c` — a minimal caller that references `hyb_init`/`hyb_push`
-without embedding the 144000-byte test stream)**:
-```
-   text    data     bss     dec     hex filename
-   7120       0    9520   16640    4100 size_probe.elf
-```
-7120 B flash (monitor code + soft-float `libm`/`libgcc`, since Cortex-M3 has
-no FPU), 9520 B RAM (`.bss`, dominated by the 6-channel `hyb_monitor_t`
-ring buffers: `2 x 96 x 8 B x 6 channels ~= 9216 B` plus scalars), 0 B
-`.data` (all state zero-initialized).
+without embedding the 144000-byte test stream), by optimization level (all
+built with `run.sh`'s size_probe flags, `-fno-early-inlining` and
+`-Wl,--gc-sections`, arm-none-eabi-gcc 13.2.1)**:
+
+| level | flash (`.text`) | RAM (`.bss`) |
+|-------|-----------------:|-------------:|
+| `-O0` | 8644 B | 9520 B |
+| `-O1` | 7128 B | 9520 B |
+| `-O2` | 6600 B | 9520 B |
+| `-O3` | 6872 B | 9520 B |
+| `-Os` | 6284 B | 9520 B |
+
+RAM is constant across levels: `.bss` is dominated by the 6-channel
+`hyb_monitor_t` ring buffers (`2 x 96 x 8 B x 6 channels ~= 9216 B` plus
+scalars), 0 B `.data` (all state zero-initialized). `run.sh` and the root
+`README.md` quote the `-O2` row, matching struktura's own printed
+`generate-hybrid` compile line.
 
 **No dynamic allocation.** `grep -n 'malloc\|calloc\|realloc\|free('
 hybrid_monitor.c` finds nothing. Independently confirmed structurally: the
@@ -116,19 +127,58 @@ hardware, or a cycle-accurate simulator (e.g. Renode), or a QEMU build with
 working DWT/PMU + an instruction-count TCG plugin — none of which were
 available in this timebox.**
 
-**`-O2` blocker.** struktura's own printed compile line for
-`generate-hybrid` is `gcc -std=c99 -Wall -Werror -O2 ...`. Under this
-project's freestanding/`-nostdlib` ARM setup, `-O2` produces a binary that
-**BusFaults** on `mps2-an385` (`CFSR=0x00008200` = imprecise data bus
-error, `BFAR=0xfeedbebf` — a QEMU unmapped-memory poison value, not a real
-address) before printing anything past `MARK-A`. `-O0` and `-O1` both build
-and run correctly with identical results to native x86. Root cause not
-isolated in this timebox (candidates: a miscompile interacting with
-`-ffreestanding -nostdlib -mfloat-abi=soft` at `-O2` specifically, or a
-QEMU TCG bug exposed by the code `-O2` generates — not narrowed further).
-**This means the ARM numbers above are from an `-O1` build, not the `-O2`
-build struktura's own docs tell a user to run** — that gap is the main
-open item, not memory/equivalence/determinism, which are solid.
+**`-O2` needs `-fno-early-inlining` (fixed).** struktura's own printed
+compile line for `generate-hybrid` is `gcc -std=c99 -Wall -Werror -O2 ...`.
+Under this project's freestanding/`-nostdlib` ARM setup, plain `-O2`
+produces a binary that **BusFaults** on `mps2-an385` (`CFSR=0x00008200` =
+imprecise data bus error, `BFAR=0xfeedbec7` in one build, `0xfeedbebf` in
+another) right after printing `MARK-A`, i.e. inside the very first call to
+`run_once()` in `harness.c`.
+
+What was measured (arm-none-eabi-gcc 13.2.1, plain `-O2`, HardFault handler
+in a scratch copy of `startup.c` printing the stacked PC/LR):
+
+- The faulting instruction is `str r2, [r6, #0]`, the store
+  `*out_leg = (int)v;` in `run_once()`. Just before it, `ldrd r5, r6,
+  [sp, #120]` reloads `out_t` and `out_leg` from the stack slot they were
+  spilled to at function entry (`strd r5, r6, [sp, #120]`), and the reloaded
+  value is not the pointer that was stored. With `-fstack-protector-all` the
+  same happens to `out_t` instead (`BFAR=0xfeedbebf`), and the canary does not
+  fire. So something overwrites that stack slot during the replay loop.
+- The only instruction in `run_once()` that stores to `[sp, #120]` directly is
+  that entry spill; the overwrite comes through some other pointer.
+- Flag bisection, one flag at a time on top of `-O2`: `-fno-early-inlining`
+  alone fixes it, and so does `-fno-inline`. `--param max-inline-insns-*`,
+  `-fno-inline-functions[-called-once]`, `-fno-tree-tail-merge`,
+  `-fno-ira-share-spill-slots`, `-fno-strict-aliasing`,
+  `-fno-schedule-insns[2]`, `-fno-shrink-wrap`, `-fno-reorder-blocks`,
+  `-fno-omit-frame-pointer` and `-fno-tree-loop-distribute-patterns` do not.
+  Early inlining folds `hyb_push()` and `hyb_dfa_alpha()` into `run_once()`,
+  giving one function with an 11 KB frame (the monitor struct is a local).
+
+What was checked and found clean:
+
+- The same `harness.c` + `hybrid_monitor.c` built natively (x86-64 gcc) with
+  AddressSanitizer and UndefinedBehaviorSanitizer at `-O0`, `-O2` and `-O3`:
+  no report, alarm at 1504 on the repeated-value leg, deterministic.
+- The ARM `-O2` build with `-fsanitize=undefined -fsanitize=bounds-strict`
+  (trap mode) on `harness.c`: `run_once()` completes with no trap. The first
+  trap is later, in the harness's insertion sort, which runs after the
+  monitor replay. The sanitizer also changes the generated code, so this does
+  not reproduce the original layout.
+- The C `memset` in `startup.c` does not call itself at `-O2` (`-fno-builtin`),
+  and the link uses the `thumb/v7-m/nofp` libgcc and libm.
+
+What is not established: whether this is a GCC code-generation bug or
+something specific to this bare-metal setup. Only one ARM compiler (GCC
+13.2.1) was available, and there is no minimized reproducer, so no compiler
+bug has been reported. What is established: the generated monitor showed no
+undefined behaviour under the sanitizers, and with `-fno-early-inlining` the
+ARM build matches Rust at every optimization level below. `run.sh` passes
+`-fno-early-inlining` on both the `size_probe` and the `harness.c` ARM
+builds; `-Wno-error` is kept for the ARM build (pre-existing warnings from
+the freestanding headers), and `-Wall -Werror` still applies to the native
+x86 build and to `size_probe.c`.
 
 ## Reproducing
 
