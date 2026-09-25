@@ -445,11 +445,11 @@ The run is deterministic (seeded; two runs gave byte-identical output) and takes
 docker build -t struktura . && docker run -v ./data:/data struktura guard /data/sensor.csv
 
 # python (wheels for Linux, macOS, Windows; PyPI coming)
-pip install struktura --find-links https://github.com/koscak-labs/struktura/releases/expanded_assets/py-v1.8.6
+pip install struktura --find-links https://github.com/koscak-labs/struktura/releases/expanded_assets/py-v1.8.7
 python -c "import struktura, random; print(struktura.dfa_short([random.random() for _ in range(70)]).alpha)"
 
 # javascript / node (WebAssembly; a browser build is attached to the same release)
-npm install https://github.com/koscak-labs/struktura/releases/download/wasm-v1.8.6/struktura-1.8.6.tgz
+npm install https://github.com/koscak-labs/struktura/releases/download/wasm-v1.8.7/struktura-1.8.7.tgz
 node -e "const s=require('struktura'); console.log(s.dfaShort(Float64Array.from({length:70},Math.random)).alpha)"
 
 # stream anything through DFA
