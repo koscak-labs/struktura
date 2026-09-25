@@ -11,8 +11,12 @@ All notable changes to Struktura are documented here.
   `guard`, `Guard` in Python/JS and AutoPilot reset after alarms, so a long
   multi-channel run with many alarms could drift far (seen at 3.3M ticks on
   ESA-ADB telemetry). Every channel now ingests every sample and the first
-  alarm of the sample is reported, as before. On the bundled CSVs the `guard`
-  output is unchanged. Found by the ESA-ADB evaluation.
+  alarm of the sample is reported, as before. On the CSVs in `data/` the
+  `guard` output is unchanged. On `examples/rover.csv` (motor current steps
+  at row 2200) a false wheel_rpm alarm at row 2215 is gone, and the faulty
+  motor current sensor is quarantined at row 2210 instead of 2211; that
+  wheel_rpm alarm came from wheel_rpm running behind after each motor current
+  alarm. Found by the ESA-ADB evaluation.
 - `guard` and `copilot-compare` on a file shorter than 192 rows exited with a
   panic (slice out of range); they now report "calibration failed" and exit 2.
 

@@ -137,13 +137,13 @@ $ struktura guard examples/rover.csv --baseline 1000
 struktura guard: 3000 samples x 5 channels (motor_current_A, wheel_rpm, imu_accel_g, battery_soc, temp_motor_C), calibrated on 1000 rows
   row   1644  ⚠ wheel_rpm (1.3x threshold): the signal's behavior changed and predictions are failing
   row   1715  ⚠ imu_accel_g (1.1x threshold): the signal keeps deviating from what its baseline predicts (a step, a drift, or a change in its pattern)
-  row   1725  ⚠ imu_accel_g (1.2x threshold): the signal shifted to a new operating level
+  row   1725  ⚠ imu_accel_g (1.1x threshold): the signal shifted to a new operating level
   row   1725  ↻ environment may have changed, learning new baseline...
   row   2200  ✗ not a real environment change, fault confirmed
   row   2201  ⚠ motor_current_A (15.1x threshold): the signal keeps deviating from what its baseline predicts (a step, a drift, or a change in its pattern)
-  row   2211  ⚠ motor_current_A (1.7x threshold): this channel disagrees with what the other channels' physics says it should be
-  row   2211  ✗ motor_current_A declared dead, using reconstructed values
-  row   2215  ⚠ wheel_rpm (2.0x threshold): the signal's behavior changed and predictions are failing
+  row   2208  ⚠ motor_current_A (2.6x threshold): the signal's behavior changed and predictions are failing
+  row   2210  ⚠ motor_current_A (1.8x threshold): this channel disagrees with what the other channels' physics says it should be
+  row   2210  ✗ motor_current_A declared dead, using reconstructed values
   6 faults detected across 2000 samples (0 adaptations, 1 quarantines)
 <!-- /example -->
 ```
