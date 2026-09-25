@@ -860,18 +860,25 @@ impl HybridMonitor {
     /// `MISS_SPAN` ticks raise [`Leg::Missingness`]. Calibration data is
     /// assumed fully valid.
     pub fn push_with_validity(&mut self, sample: &[f64], valid: &[bool]) -> Option<Leg> {
-        if sample.len() != self.calib.len() {
+        if self.alarmed || sample.len() != self.calib.len() {
             return None;
         }
-        let mut alarm = None;
+        // An alarm on one channel must not stop the later channels from
+        // ingesting this sample: their ticks and rings would fall one sample
+        // behind per alarm. Keep feeding them and report the first alarm.
+        let mut first: Option<(Leg, Option<AlarmReport>)> = None;
         for (ch, &v) in sample.iter().enumerate() {
             let is_valid = valid.get(ch).copied().unwrap_or(true);
             let value = if is_valid { Some(v) } else { None };
             if let Some(leg) = self.push_channel(ch, value) {
-                alarm = Some(leg);
+                first.get_or_insert((leg, self.last_alarm));
+                self.alarmed = false;
             }
         }
-        alarm
+        let (leg, report) = first?;
+        self.alarmed = true;
+        self.last_alarm = report;
+        Some(leg)
     }
 
     /// Feed one sample for ONE channel — channels may arrive at independent
@@ -1331,6 +1338,37 @@ mod tests {
         assert!(run_stream(&mut mon, &faulted).is_none());
         mon.reset();
         assert!(run_stream(&mut mon, &faulted).is_some());
+    }
+
+    #[test]
+    fn alarm_on_one_channel_does_not_skip_later_channels() {
+        // Channel 0 steps far off its baseline and alarms again after each
+        // reset. Every channel must still ingest every sample: before the fix
+        // the channels after the alarming one skipped that sample, so their
+        // own tick counters fell behind by one per alarm.
+        let calib = synth_spacecraft(700, 100);
+        let mut signal = synth_spacecraft(700, 200);
+        let (lo, hi) = calib[0].iter().fold((f64::MAX, f64::MIN), |(l, h), &v| (l.min(v), h.max(v)));
+        for v in signal[0][200..].iter_mut() {
+            *v += 50.0 * (hi - lo);
+        }
+        let mut mon = HybridMonitor::calibrate(&calib).expect("calibration");
+        let mut sample = vec![0.0f64; signal.len()];
+        let mut alarms = 0;
+        for t in 0..700 {
+            for (ch, s) in sample.iter_mut().enumerate() {
+                *s = signal[ch][t];
+            }
+            if mon.push(&sample).is_some() {
+                alarms += 1;
+                assert_eq!(mon.last_alarm().expect("report").channel, 0);
+                mon.reset();
+            }
+        }
+        assert!(alarms > 10, "stuck channel 0 should alarm repeatedly, got {alarms}");
+        for (ch, st) in mon.state.iter().enumerate() {
+            assert_eq!(st.t, 700, "channel {ch} ingested {} of 700 samples", st.t);
+        }
     }
 
     #[test]

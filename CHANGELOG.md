@@ -2,6 +2,20 @@
 
 All notable changes to Struktura are documented here.
 
+## Unreleased
+
+- Multi-channel monitors no longer skip samples after an alarm. When one
+  channel alarmed, `HybridMonitor::push` / `push_with_validity` stopped feeding
+  the channels after it for that sample, so each alarm followed by `reset()`
+  put every later channel one sample behind (its tick counter and rings).
+  `guard`, `Guard` in Python/JS and AutoPilot reset after alarms, so a long
+  multi-channel run with many alarms could drift far (seen at 3.3M ticks on
+  ESA-ADB telemetry). Every channel now ingests every sample and the first
+  alarm of the sample is reported, as before. On the bundled CSVs the `guard`
+  output is unchanged. Found by the ESA-ADB evaluation.
+- `guard` and `copilot-compare` on a file shorter than 192 rows exited with a
+  panic (slice out of range); they now report "calibration failed" and exit 2.
+
 ## v1.8.6 (2026-09-25): Guard in Python and JS, index columns skipped, OPS-SAT-AD
 
 - Python and JS bindings: new `Guard`, the same monitor as `struktura guard`

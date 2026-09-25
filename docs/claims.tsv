@@ -24,6 +24,7 @@ limitation-short-calibration	fast	0	CALIB=512 cargo run -q --release --example s
 evolve-coverage	slow	0	struktura evolve	71.0% && 97.0% && 71.0% (gen 1) -> 92.0% (gen 10)
 control-sylv-healthy-quiet	fast	0	head -499 data/sylv_spike.csv | struktura guard - --baseline 333 --quiet-drift	HEALTHY, 166 samples, no anomalies
 limitation-quiet-spike	fast	1	struktura guard data/sylv_spike.csv --quiet-drift	1 faults detected
+limitation-guard-short-file	fast	2	struktura guard data/ims_timeline.csv	calibration failed (need >= 192 samples, got 25)
 nab-default	slow	0	cargo run -q --release --example nab_eval	TOTAL                      58     116        36        35       0.12   |          48       240       0.80
 nab-quiet	slow	0	QUIET=1 cargo run -q --release --example nab_eval	TOTAL                      58     116        35        33       0.11   |          48       240       0.80
 control-nab-clean	slow	0	QUIET=1 cargo run -q --release --example nab_eval	artificialNoAnomaly         5       0         0         0       0.00

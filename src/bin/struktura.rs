@@ -4047,7 +4047,7 @@ fn run_guard(content: &str, baseline_n: usize, json: bool, cfg: struktura::monit
     }
     let n = rows.len();
     let ncols = rows[0].len();
-    let calib_n = if baseline_n > 0 { baseline_n.min(n) } else { (n / 3).clamp(192, 100_000) };
+    let calib_n = if baseline_n > 0 { baseline_n } else { (n / 3).clamp(192, 100_000) }.min(n);
 
     let channels: Vec<Vec<f64>> = (0..ncols)
         .map(|ch| rows.iter().map(|r| r.get(ch).copied().unwrap_or(0.0)).collect())
@@ -4719,7 +4719,7 @@ fn cmd_copilot_compare(args: &[String]) {
     if rows.is_empty() { eprintln!("no numeric rows"); process::exit(2); }
     let n = rows.len();
     let ncols = rows[0].len();
-    let calib_n = (n / 3).clamp(192, 100_000);
+    let calib_n = (n / 3).clamp(192, 100_000).min(n);
 
     let channels: Vec<Vec<f64>> = (0..ncols)
         .map(|ch| rows.iter().map(|r| r.get(ch).copied().unwrap_or(0.0)).collect())
