@@ -3841,11 +3841,13 @@ fn run_guard_watch(path: &str, baseline_n: usize, json: bool, poll_ms: u64, cfg:
         }
     };
 
-    let mut last_alarm: Vec<(usize, u8)> = Vec::new();
+    // Repeats of one channel's leg within the cooldown are one fault; another
+    // channel on the same leg is another fault.
+    let mut last_alarm: Vec<(usize, (usize, u8))> = Vec::new();
     const ALARM_COOLDOWN: usize = 50;
     let mut emit_dedup = |t: usize, ev: &struktura::autopilot::Event, json: bool| {
         if let struktura::autopilot::Event::Alarm { report, .. } = ev {
-            let leg_id = report.leg as u8;
+            let leg_id = (report.channel, report.leg as u8);
             let dup = last_alarm.iter().any(|&(lt, ll)| ll == leg_id && t.saturating_sub(lt) < ALARM_COOLDOWN);
             last_alarm.retain(|&(lt, _)| t.saturating_sub(lt) < ALARM_COOLDOWN);
             last_alarm.push((t, leg_id));
@@ -4233,7 +4235,7 @@ fn run_guard(content: &str, baseline_n: usize, json: bool, cfg: struktura::monit
     let mut valid: Vec<bool> = vec![true; ncols];
     // Deduplicate sustained faults: suppress same-leg same-channel alarms
     // for 50 samples after the first. A real fault fires once, not 120x.
-    let mut last_alarm: Vec<(usize, u8)> = Vec::new(); // (last_t, leg_id)
+    let mut last_alarm: Vec<(usize, (usize, u8))> = Vec::new(); // (last_t, (channel, leg_id))
     const ALARM_COOLDOWN: usize = 50;
 
     for t in calib_n..n {
@@ -4246,7 +4248,7 @@ fn run_guard(content: &str, baseline_n: usize, json: bool, cfg: struktura::monit
         for ev in ap.push(&sample, &valid) {
             match &ev {
                 Event::Alarm { report, class, .. } => {
-                    let leg_id = report.leg as u8;
+                    let leg_id = (report.channel, report.leg as u8);
                     let dup = last_alarm.iter().any(|&(lt, ll)| ll == leg_id && t - lt < ALARM_COOLDOWN);
                     last_alarm.retain(|&(lt, _)| t - lt < ALARM_COOLDOWN);
                     last_alarm.push((t, leg_id));
@@ -4901,7 +4903,7 @@ fn cmd_copilot_compare(args: &[String]) {
     let mut first_dfa_alarm: Option<usize> = None;
     let mut first_confirmed: Option<usize> = None;
     let mut first_bool_alarm: Option<usize> = None;
-    let mut last_alarm_leg: Vec<(usize, u8)> = Vec::new();
+    let mut last_alarm_leg: Vec<(usize, (usize, u8))> = Vec::new();
 
     // Header
     println!();
@@ -4928,7 +4930,7 @@ fn cmd_copilot_compare(args: &[String]) {
         for ev in ap.push(&sample, &valid) {
             match &ev {
                 Event::Alarm { report, .. } => {
-                    let leg_id = report.leg as u8;
+                    let leg_id = (report.channel, report.leg as u8);
                     let dup = last_alarm_leg.iter().any(|&(lt, ll)| ll == leg_id && t.saturating_sub(lt) < 50);
                     last_alarm_leg.retain(|&(lt, _)| t.saturating_sub(lt) < 50);
                     last_alarm_leg.push((t, leg_id));

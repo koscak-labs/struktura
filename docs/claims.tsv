@@ -14,13 +14,13 @@ voyager-alpha	fast	0	struktura voyager	alpha=0.989 && alpha=0.801 && inconclusiv
 heliopause-alpha	fast	0	struktura heliopause	1.137 && 1.056 && inconclusive
 genome-chr1-alpha	slow	0	gunzip -c data/genome/chr1_human.fa.gz > "${TMPDIR:-/tmp}/chr1_human.fa" && struktura genome "${TMPDIR:-/tmp}/chr1_human.fa"	Bases:      248956422 && overall α=0.967  R²=0.9803
 ims-first-alarm	fast	0	struktura ims	recording 970 && 984
-guard-sylv	fast	1	struktura guard data/sylv_spike.csv	row    500 && 2 faults detected
-guard-blank-cell-right-column	fast	1	awk 'function r(){x=(x*16807)%2147483647; return x/2147483647} BEGIN{x=12345; print "a,b,c"; for(t=0;t<600;t++){a=r(); bv=r(); c=r(); b=(t>=400&&t<410)?"":sprintf("%.4f",bv); printf "%.4f,%s,%.4f\n",a,b,c}}' | struktura guard - --baseline 300	row    403  ⚠ b (1.0x threshold): data stopped arriving on this channel && b declared dead && 1 faults detected
+guard-sylv	fast	1	struktura guard data/sylv_spike.csv	row    500 &&   2 faults detected
+guard-blank-cell-right-column	fast	1	awk 'function r(){x=(x*16807)%2147483647; return x/2147483647} BEGIN{x=12345; print "a,b,c"; for(t=0;t<600;t++){a=r(); bv=r(); c=r(); b=(t>=400&&t<410)?"":sprintf("%.4f",bv); printf "%.4f,%s,%.4f\n",a,b,c}}' | struktura guard - --baseline 300	row    403  ⚠ b (1.0x threshold): data stopped arriving on this channel && b declared dead &&   1 faults detected
 control-jittered-timestamp-ignored	fast	0	awk 'function r(){x=(x*16807)%2147483647; return x/2147483647} BEGIN{x=777; print "Timestamp,value"; ts=1690000000000000000; for(t=0;t<1200;t++){ts+=10000000+int(r()*700000); printf "%.0f,%.4f\n",ts,r()}}' | struktura guard -	not monitoring Timestamp (always increasing and named like a time column) && HEALTHY, 800 samples, no anomalies
-guard-quoted-header-names	fast	1	awk 'function r(){x=(x*16807)%2147483647; return x/2147483647} BEGIN{x=777; print "a,\"Temp, C\",pressure"; for(t=0;t<600;t++){a=r(); bv=r(); c=r(); p=(t>=400&&t<410)?"":sprintf("%.4f",c); printf "%.4f,%.4f,%s\n",a,bv,p}}' | struktura guard - --baseline 300	row    403  ⚠ pressure (1.0x threshold): data stopped arriving on this channel && pressure declared dead && 1 faults detected
+guard-quoted-header-names	fast	1	awk 'function r(){x=(x*16807)%2147483647; return x/2147483647} BEGIN{x=777; print "a,\"Temp, C\",pressure"; for(t=0;t<600;t++){a=r(); bv=r(); c=r(); p=(t>=400&&t<410)?"":sprintf("%.4f",c); printf "%.4f,%.4f,%s\n",a,bv,p}}' | struktura guard - --baseline 300	row    403  ⚠ pressure (1.0x threshold): data stopped arriving on this channel && pressure declared dead &&   1 faults detected
 control-epoch-ns-timestamp-ignored	fast	0	awk 'function r(){x=(x*16807)%2147483647; return x/2147483647} BEGIN{x=777; print "Timestamp,value"; ts=1690000000000000000; for(t=0;t<1200;t++){ts+=int(r()*300); printf "%.0f,%.4f\n",ts,r()}}' | struktura guard -	not monitoring Timestamp (always increasing and named like a time column) && HEALTHY, 800 samples, no anomalies
 guard-constant-baseline-channel	fast	1	awk 'function r(){x=(x*16807)%2147483647; return x/2147483647} BEGIN{x=4242; print "temp,valve"; for(t=0;t<1200;t++){v=(t>=700 && t%100<50)?1:0; printf "%.4f,%d\n",20+r(),v}}' | struktura guard - --baseline 400	note: valve is constant in the calibration rows && row    700  ⚠ valve (changed; constant in its baseline)
-guard-rover	fast	1	struktura guard examples/rover.csv --baseline 1000	fault confirmed && row   2201  ⚠ motor_current_A && row   2592  ✓ motor_current_A readings healthy again && row   2595  ⚠ battery_soc && 7 faults detected
+guard-rover	fast	1	struktura guard examples/rover.csv --baseline 1000	fault confirmed && row   2201  ⚠ motor_current_A && row   2592  ✓ motor_current_A readings healthy again && row   2595  ⚠ battery_soc && row   2292  ⚠ imu_accel_g &&   17 faults detected across 2000 samples (0 adaptations, 2 quarantines)
 control-sylv-healthy	fast	0	head -499 data/sylv_spike.csv | struktura guard - --baseline 333	HEALTHY, 166 samples, no anomalies
 control-rover-healthy	fast	0	head -1601 examples/rover.csv | struktura guard - --baseline 1000	HEALTHY, 600 samples, no anomalies
 control-monitor-clean	fast	0	struktura monitor-perf	Alarms on clean stream:            0
@@ -29,7 +29,7 @@ control-structure-vs-amp-clean	fast	0	cargo run -q --release --example structure
 limitation-short-calibration	fast	0	CALIB=512 cargo run -q --release --example structure_vs_amplitude	clean AR(0.95): LevelShift 6
 evolve-coverage	slow	0	struktura evolve	71.0% && 97.0% && 71.0% (gen 1) -> 92.0% (gen 10)
 control-sylv-healthy-quiet	fast	0	head -499 data/sylv_spike.csv | struktura guard - --baseline 333 --quiet-drift	HEALTHY, 166 samples, no anomalies
-limitation-quiet-spike	fast	1	struktura guard data/sylv_spike.csv --quiet-drift	1 faults detected
+limitation-quiet-spike	fast	1	struktura guard data/sylv_spike.csv --quiet-drift	  1 faults detected
 limitation-guard-short-file	fast	2	struktura guard data/ims_timeline.csv	calibration failed (need >= 192 samples, got 25)
 nab-default	slow	0	cargo run -q --release --example nab_eval	TOTAL                      58     116        45        46       0.15   |          48       240       0.80
 nab-quiet	slow	0	QUIET=1 cargo run -q --release --example nab_eval	TOTAL                      58     116        44        45       0.15   |          48       240       0.80
@@ -45,8 +45,8 @@ nab-sensitivity-high	slow	0	HORIZON=1e5 cargo run -q --release --example nab_eva
 control-nab-clean-high	slow	0	HORIZON=1e5 cargo run -q --release --example nab_eval	artificialNoAnomaly         5       0         0         0       0.00
 generated-hybrid-c-equals-rust	fast	0	cargo test -q --test hybrid_c_matches_rust -- --nocapture	hybrid_c_matches_rust: STRUKTURA_DIFF_SEED= && hybrid_c_matches_rust: compared 200 windows && test result: ok. 1 passed
 generated-c-monitor-and-cfs-equal-rust	fast	0	cargo test -q --test c_monitor_matches_rust -- --nocapture	c_monitor_matches_rust: window 512 compared && c_monitor_matches_rust: window 64 compared && c_monitor_matches_rust: window 72 compared && cfs_app_time_order: compared && test result: ok. 2 passed
-control-index-column-ignored	fast	1	awk 'BEGIN{print "t,value"} {print NR-1","$0}' data/sylv_spike.csv | struktura guard -	not monitoring t && 2 faults detected across 667 samples (0 adaptations, 0 quarantines)
-control-epoch-subsecond-column-ignored	fast	1	awk 'BEGIN{print "t,value"} {printf "%.3f,%s\n",1727000000+(NR-1)*0.1,$0}' data/sylv_spike.csv | struktura guard -	not monitoring t && 2 faults detected across 667 samples (0 adaptations, 0 quarantines)
+control-index-column-ignored	fast	1	awk 'BEGIN{print "t,value"} {print NR-1","$0}' data/sylv_spike.csv | struktura guard -	not monitoring t &&   2 faults detected across 667 samples (0 adaptations, 0 quarantines)
+control-epoch-subsecond-column-ignored	fast	1	awk 'BEGIN{print "t,value"} {printf "%.3f,%s\n",1727000000+(NR-1)*0.1,$0}' data/sylv_spike.csv | struktura guard -	not monitoring t &&   2 faults detected across 667 samples (0 adaptations, 0 quarantines)
 # esa-adb-mission1 (not run by this script: needs the ESA-ADB repository, the Mission 1 download
 #   and Python 3.8, about 14 minutes): docs/scoreboard/esa-adb.md, struktura 38cb83e, 3/29 Anomaly
 #   events at p = 0.048 against 20 time shifts. Re-run with that page's commands before quoting it

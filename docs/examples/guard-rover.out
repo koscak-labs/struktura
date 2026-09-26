@@ -6,10 +6,20 @@ struktura guard: 3000 samples x 5 channels (motor_current_A, wheel_rpm, imu_acce
   row   1725  ↻ environment may have changed, learning new baseline...
   row   2200  ✗ not a real environment change, fault confirmed
   row   2201  ⚠ motor_current_A (1.2x threshold): the signal keeps deviating from what its baseline predicts (a step, a drift, or a change in its pattern)
+  row   2204  ⚠ wheel_rpm (1.5x threshold): the signal keeps deviating from what its baseline predicts (a step, a drift, or a change in its pattern)
   row   2208  ⚠ motor_current_A (2.6x threshold): the signal's behavior changed and predictions are failing
   row   2210  ⚠ motor_current_A (1.7x threshold): this channel disagrees with what the other channels' physics says it should be
   row   2210  ✗ motor_current_A declared dead, using reconstructed values
+  row   2214  ⚠ imu_accel_g (1.3x threshold): the signal's behavior changed and predictions are failing
+  row   2216  ⚠ wheel_rpm (3.3x threshold): the signal's behavior changed and predictions are failing
+  row   2292  ⚠ imu_accel_g (1.1x threshold): the signal keeps deviating from what its baseline predicts (a step, a drift, or a change in its pattern)
+  row   2356  ⚠ imu_accel_g (1.1x threshold): the signal keeps deviating from what its baseline predicts (a step, a drift, or a change in its pattern)
+  row   2441  ⚠ imu_accel_g (1.1x threshold): the signal keeps deviating from what its baseline predicts (a step, a drift, or a change in its pattern)
+  row   2545  ⚠ imu_accel_g (1.0x threshold): the signal keeps deviating from what its baseline predicts (a step, a drift, or a change in its pattern)
   row   2592  ✓ motor_current_A readings healthy again, monitoring it again
   row   2595  ⚠ battery_soc (1.4x threshold): this channel disagrees with what the other channels' physics says it should be
   row   2595  ✗ battery_soc declared dead, using reconstructed values
-  7 faults detected across 2000 samples (0 adaptations, 2 quarantines)
+  row   2730  ⚠ imu_accel_g (1.0x threshold): the signal keeps deviating from what its baseline predicts (a step, a drift, or a change in its pattern)
+  row   2757  ⚠ imu_accel_g (1.8x threshold): the signal's behavior changed and predictions are failing
+  row   2938  ⚠ imu_accel_g (1.2x threshold): the signal keeps deviating from what its baseline predicts (a step, a drift, or a change in its pattern)
+  17 faults detected across 2000 samples (0 adaptations, 2 quarantines)

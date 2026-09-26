@@ -4,6 +4,20 @@ All notable changes to Struktura are documented here.
 
 ## Unreleased
 
+- `guard`, `guard --watch` and `copilot-compare` merged repeat alarms by
+  leg alone, so a second sensor alarming on the same leg within 50 rows
+  of another was dropped (two sensors stuck 20 rows apart: 1 fault
+  reported). A dropped alarm also restarted the 50-row window, so once
+  alarms kept coming, every later alarm on that leg on any channel stayed
+  hidden. Repeats are now merged per channel and leg. On
+  `examples/rover.csv` this shows 10 alarms that were hidden: `wheel_rpm`
+  during the motor overcurrent, and `imu_accel_g` from row 2214 to the end,
+  where the scripted bearing fault keeps growing (the IMU's mean rises
+  from 1.000 to 1.021 and its spread doubles). The summary goes from 7 to
+  17; it counts alarms, not distinct faults, and the README says so. The
+  ledger's fault-count expectations are now anchored ("7 faults detected"
+  also matched "17 faults detected"). The bundled data/ CSVs are
+  unchanged.
 - `guard`: a channel that is constant in the calibration rows (a valve, a
   status flag) has no noise to measure against, so its residual scale sits
   at the 1e-9 floor and any change alarms. That part is deliberate; what was
