@@ -67,6 +67,7 @@ struct Score {
     free_steps: [usize; 4],
 }
 
+#[allow(clippy::needless_range_loop)] // channel-major data, indexed by step
 fn run(seed: u64, fault: Option<(RoverFault, Vec<usize>)>) -> Score {
     let mut sim = RoverSim::new(seed);
     let truth = match fault {
