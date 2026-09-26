@@ -100,8 +100,22 @@ struct ParsedCsv {
     delim: char,
 }
 
+/// Fields of one CSV line: split on `delim` outside double quotes, so a
+/// quoted header such as `"Temp, C"` stays one field; splitting it put every
+/// later name on the wrong column.
 fn split_fields(line: &str, delim: char) -> Vec<&str> {
-    line.split(delim).map(|s| s.trim().trim_matches('"')).collect()
+    let mut fields = Vec::new();
+    let (mut start, mut quoted) = (0, false);
+    for (i, c) in line.char_indices() {
+        if c == '"' {
+            quoted = !quoted;
+        } else if c == delim && !quoted {
+            fields.push(&line[start..i]);
+            start = i + c.len_utf8();
+        }
+    }
+    fields.push(&line[start..]);
+    fields.into_iter().map(|s| s.trim().trim_matches('"')).collect()
 }
 
 /// The data columns of one row. A blank or unparseable cell stays in its own
@@ -138,6 +152,20 @@ fn parse_multi_csv(content: &str) -> ParsedCsv {
                 col_names = fields.iter().map(|s| s.to_string()).collect();
                 header_seen = true;
                 continue;
+            }
+            while col_names.last().is_some_and(|s| s.is_empty()) {
+                col_names.pop();
+            }
+            if header_seen && col_names.len() > fields.len() {
+                // More names than columns: they cannot be matched, and
+                // numbered channels beat names on the wrong sensors. (Fewer
+                // names just leave the last columns numbered.)
+                eprintln!(
+                    "  header has {} fields, data rows have {}: channels are numbered instead of named",
+                    col_names.len(),
+                    fields.len()
+                );
+                col_names.clear();
             }
             if header_seen && !col_names.is_empty() {
                 col_names = col_names.iter().zip(mask.iter())
@@ -196,7 +224,10 @@ impl ParsedCsv {
             let evenly_rising = n >= 3
                 && step > 0.0
                 && col.windows(2).all(|w| ((w[1] - w[0]) - step).abs() <= tol);
-            let always_rising = n >= 3 && col.windows(2).all(|w| w[1] > w[0]);
+            // Never decreasing and rising overall, not strictly increasing:
+            // epoch nanoseconds (~1.7e18) as f64 repeat values 256 apart.
+            let always_rising =
+                n >= 3 && col.windows(2).all(|w| w[1] >= w[0]) && col[n - 1] > col[0];
             let name = self.ch_name(ch);
             if self.ncols > 1 && evenly_rising {
                 dropped.push(DroppedColumn { name, even: true });
@@ -4932,6 +4963,18 @@ fn cmd_copilot_compare(args: &[String]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quoted_delimiter_stays_in_its_field() {
+        assert_eq!(split_fields("a,\"Temp, C\",pressure", ','), ["a", "Temp, C", "pressure"]);
+        assert_eq!(split_fields("1.5;\"x;y\";", ';'), ["1.5", "x;y", ""]);
+        let p = parse_multi_csv("a,\"Temp, C\",pressure\n1,2,3\n4,5,6\n");
+        assert_eq!(p.col_names, ["a", "Temp, C", "pressure"]);
+        // More header fields than data fields: numbered, not shifted.
+        let p = parse_multi_csv("a,Temp, C,pressure\n1,2,3\n4,5,6\n");
+        assert!(p.col_names.is_empty());
+        assert_eq!(p.ch_name(2), "ch2");
+    }
 
     /// Data policy: a malformed row (wrong field count, or a value that
     /// doesn't parse as a number) must not be dropped -- dropping it would

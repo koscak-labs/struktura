@@ -4,6 +4,20 @@ All notable changes to Struktura are documented here.
 
 ## Unreleased
 
+- CSV input (`guard`, `watch`, `report`), two audit findings:
+  - A quoted field containing the delimiter (a header like `"Temp, C"`)
+    was split in two, so every later name landed on the wrong column: a
+    dead `pressure` channel was reported as `C`. Fields now split only
+    outside quotes. When a header still has more fields than the data rows,
+    channels are numbered (`ch0`, `ch1`, ...) with a warning instead of
+    named wrongly.
+  - A time column in epoch nanoseconds (~1.7e18) repeats values as f64
+    (256 apart), so it was not "always increasing", got monitored, and
+    raised three false faults and a "declared dead". A time-named column now
+    only has to never decrease and rise overall.
+  Ledger rows guard-quoted-header-names and
+  control-epoch-ns-timestamp-ignored, and a unit test, each failing before
+  the fix. `guard` output is unchanged on all 16 bundled CSVs.
 - `analyze()` and `acr()` no longer depend on the units of the data. Both
   treated a series as constant when its spread was below a fixed 1e-12
   (1e-15 for `acr`'s sum of squares), so a real signal recorded in small
