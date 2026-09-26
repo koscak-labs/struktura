@@ -10,9 +10,9 @@
 //! - **Self-calibrating.** All thresholds are learned from a clean
 //!   calibration stream; no magic numbers tuned per deployment.
 //!
-//! Five orthogonal detector legs, OR-fused (measured on the coupled
-//! spacecraft benchmark: 6/6 detectable fault types at 100% event
-//! detection, 0 false alarms across 200K clean samples):
+//! Seven detector legs, OR-fused (measured on the coupled spacecraft
+//! benchmark: 6/6 detectable fault types at 100% event detection, 0 false
+//! alarms across 200K clean samples):
 //! 1. AR(1) residual — spikes, steps, correlation loss (instant)
 //! 2. repeated-value run — stuck sensors (calibrated per-channel limit,
 //!    auto-disabled for channels that legitimately saturate)
@@ -20,6 +20,9 @@
 //! 4. rolling-mean level shift — regime changes (cancels the dominant
 //!    periodic driver when `ROLL` matches its period)
 //! 5. residual CUSUM — slow drift (cumulative mean shift in residuals)
+//! 6. missingness — data stopped arriving (invalid samples within a span)
+//! 7. cross-channel parity — a channel that disagrees with what the others
+//!    predict (two or more channels only)
 //!
 //! # Bounded work per tick (`push`)
 //!
@@ -57,7 +60,7 @@
 //! estimate the Gumbel moments adequately, each leg's expected false-alarm
 //! rate is ≤ 1 per `DESIGN_HORIZON` samples BEFORE persistence rules, which
 //! only lower it. Measured evidence: 0 alarms over 200,000 clean samples
-//! (97.7× the calibration length) with all six legs armed.
+//! (97.7× the calibration length) with all legs armed.
 //!
 //! **What is NOT guaranteed.** Channels violating assumption (1) at
 //! calibration scale — e.g. random-walk channels whose level wanders

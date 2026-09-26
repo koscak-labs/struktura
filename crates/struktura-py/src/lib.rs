@@ -270,7 +270,7 @@ impl Guard {
 
     /// Feed one sample (one value per channel; NaN counts as a missing reading).
     /// Returns a list of event dicts, each with "kind" and "tick":
-    /// alarm, quarantined, adaptation_started, recalibrated, rolled_back.
+    /// alarm, quarantined, unquarantined, adaptation_started, recalibrated, rolled_back.
     fn push<'py>(&mut self, py: Python<'py>, sample: Vec<f64>) -> PyResult<Vec<Bound<'py, pyo3::types::PyDict>>> {
         use stk::autopilot::Event;
         if sample.len() != self.channels {
