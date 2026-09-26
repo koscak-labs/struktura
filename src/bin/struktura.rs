@@ -3714,7 +3714,7 @@ fn cmd_guard(args: &[String]) {
                 println!("struktura guard <file.csv> [--baseline N] [--sensitivity normal|high] [--json] [--watch] [--webhook URL] [--quiet-drift]");
                 println!("  Monitor any CSV for anomalies. Exit: 0=healthy 1=fault 2=error");
                 println!("  --sensitivity  normal (default): fewest false alarms. high: catches more, alarms more");
-                println!("                 (NAB: 45 -> 57 of 116 windows, 46 -> 55 false alarms; clean slow-wander");
+                println!("                 (NAB: 45 -> 55 of 116 windows, 46 -> 54 false alarms; clean slow-wander");
                 println!("                 synthetic streams 0 -> 2-3 of 30)");
                 println!("  --quiet-drift  Clip what the drift leg sees; small effect (NAB: 46 -> 45 false alarms,");
                 println!("                 45 -> 44 windows); a spike only the drift leg catches is found later or not at all");
@@ -3751,7 +3751,7 @@ fn cmd_guard(args: &[String]) {
 
 /// Threshold design horizon for `--sensitivity high`: 1 expected false alarm
 /// per 1e5 clean samples instead of the default 1e6. On NAB (episode
-/// counting) this takes guard from 45 to 57 of 116 windows and from 46 to 55
+/// counting) this takes guard from 45 to 55 of 116 windows and from 46 to 54
 /// false alarms (36 -> 49 and 35 -> 48 before quarantined sensors could
 /// recover, when the horizon was chosen from a sweep of 1e3..1e7 on the same
 /// benchmark: examples/nab_eval.rs with HORIZON=...).

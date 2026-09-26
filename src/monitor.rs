@@ -1214,6 +1214,23 @@ impl HybridMonitor {
         self.quarantined.get(ch).copied().unwrap_or(false)
     }
 
+    /// How many samples each channel has taken, on its own clock.
+    #[must_use]
+    pub fn channel_ticks(&self) -> Vec<u64> {
+        self.state.iter().map(|s| s.t).collect()
+    }
+
+    /// Take channel `ch`'s calibration and reconstruction model from `other`
+    /// (a monitor over the same channels). A monitor recalibrated while `ch`
+    /// was quarantined saw only reconstructed readings for it; judged against
+    /// that, its real readings would never pass the recovery checks.
+    pub fn adopt_channel(&mut self, ch: usize, other: &HybridMonitor) {
+        if ch < self.calib.len() && other.calib.len() == self.calib.len() {
+            self.calib[ch] = other.calib[ch].clone();
+            self.recon[ch] = other.recon[ch].clone();
+        }
+    }
+
     /// Return a quarantined channel to normal operation. If it has recovered,
     /// its rings are refilled with its own recent readings in place of the
     /// reconstructed ones, and its detector state starts clean.

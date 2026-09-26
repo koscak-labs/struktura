@@ -114,6 +114,14 @@ pub fn recovery_span(flaps: u32) -> usize {
     RECOVER_SPAN << flaps.min(MAX_FLAPS)
 }
 
+/// Alarms that point at a broken sensor rather than a change in the system:
+/// a stuck value, missing data, or a channel that no longer agrees with the
+/// others. These quarantine the channel.
+fn is_sensor_failure(r: &AlarmReport, class: &str) -> bool {
+    matches!(r.leg, Leg::RepeatedValue | Leg::Missingness)
+        || (r.leg == Leg::Parity && class == "cross_channel_inconsistency")
+}
+
 /// Flap count after a new quarantine at `tick`: one more if the channel was
 /// released less than its current span ago, else back to zero.
 fn next_flaps(flaps: u32, released_at: Option<u64>, tick: u64) -> u32 {
@@ -163,6 +171,8 @@ impl AutoPilot {
         let mut events = Vec::new();
         let tick = self.tick;
         self.tick += 1;
+        // A sensor failure found in any mode is quarantined after the match.
+        let mut failure: Option<(AlarmReport, &'static str)> = None;
 
         match &mut self.mode {
             Mode::Monitoring => {
@@ -180,19 +190,9 @@ impl AutoPilot {
                 if let Some(_leg) = alarm {
                     if let Some(report) = self.monitor.last_alarm() {
                         let class = classify_alarm(&report);
-                        let sensor_failure = matches!(report.leg, Leg::RepeatedValue | Leg::Missingness)
-                            || (report.leg == Leg::Parity && class == "cross_channel_inconsistency");
                         match report.leg {
                             // Sensor-failure signatures → quarantine the channel
-                            _ if sensor_failure => {
-                                let ch = report.channel;
-                                self.monitor.reset();
-                                self.monitor.quarantine(ch);
-                                self.quarantined[ch] = true;
-                                self.flaps[ch] = next_flaps(self.flaps[ch], self.released_at[ch], tick);
-                                events.push(Event::Alarm { tick, report, class });
-                                events.push(Event::Quarantined { tick, channel: ch });
-                            }
+                            _ if is_sensor_failure(&report, class) => failure = Some((report, class)),
                             // Environment may have changed → guarded adaptation,
                             // unless the same channel already forced a recent
                             // recalibration: that pattern is a sustained trend
@@ -256,15 +256,28 @@ impl AutoPilot {
                         sample[ch]
                     };
                     buffer[ch].push(v);
-                    // Keep the old monitor's state warm (no alarms read).
-                    let _ = self.monitor.push_channel(ch, Some(v));
+                }
+                // Keep the current monitor up to date. A sensor failure it finds
+                // ends the collection: that channel would otherwise be calibrated
+                // into the new baseline (a stuck run would even switch its
+                // repeated-value leg off there).
+                if self.monitor.push_with_validity(sample, valid).is_some() {
+                    if let Some(report) = self.monitor.last_alarm() {
+                        let class = classify_alarm(&report);
+                        if is_sensor_failure(&report, class) {
+                            failure = Some((report, class));
+                        }
+                    }
                 }
                 self.monitor.reset();
-                if buffer[0].len() >= *target {
+                if failure.is_none() && buffer[0].len() >= *target {
                     match HybridMonitor::calibrate(buffer) {
                         Some(mut candidate) => {
                             for ch in 0..self.channels {
                                 if self.quarantined[ch] {
+                                    // Its candidate data were reconstructed,
+                                    // not measured: keep its old calibration.
+                                    candidate.adopt_channel(ch, &self.monitor);
                                     candidate.quarantine(ch);
                                 }
                             }
@@ -279,8 +292,11 @@ impl AutoPilot {
             }
             Mode::Guarding { candidate, fed } => {
                 *fed += 1;
+                // Keep the current monitor up to date too, so a rollback
+                // resumes from the present rather than from before the trial.
+                let _ = self.monitor.push_with_validity(sample, valid);
+                self.monitor.reset();
                 if candidate.push_with_validity(sample, valid).is_some() {
-                    // New regime is itself unstable → rollback.
                     let guard_report = candidate.last_alarm().unwrap_or(AlarmReport {
                         leg: Leg::LevelShift,
                         channel: 0,
@@ -289,8 +305,16 @@ impl AutoPilot {
                         threshold: 0.0,
                         hit_gap: 0,
                     });
-                    events.push(Event::RolledBack { tick, guard_report });
-                    self.mode = Mode::Monitoring;
+                    let class = classify_alarm(&guard_report);
+                    if is_sensor_failure(&guard_report, class) {
+                        // A sensor failed, not the new regime: quarantine it
+                        // and drop the candidate.
+                        failure = Some((guard_report, class));
+                    } else {
+                        // New regime is itself unstable → rollback.
+                        events.push(Event::RolledBack { tick, guard_report });
+                        self.mode = Mode::Monitoring;
+                    }
                 } else if *fed >= GUARD_WINDOW {
                     // Guard passed; the candidate takes over.
                     let mut accepted = match core::mem::replace(&mut self.mode, Mode::Monitoring)
@@ -303,6 +327,16 @@ impl AutoPilot {
                     events.push(Event::Recalibrated { tick });
                 }
             }
+        }
+        if let Some((report, class)) = failure {
+            let ch = report.channel;
+            self.mode = Mode::Monitoring;
+            self.monitor.reset();
+            self.monitor.quarantine(ch);
+            self.quarantined[ch] = true;
+            self.flaps[ch] = next_flaps(self.flaps[ch], self.released_at[ch], tick);
+            events.push(Event::Alarm { tick, report, class });
+            events.push(Event::Quarantined { tick, channel: ch });
         }
         events
     }
@@ -538,5 +572,127 @@ mod tests {
         // Without back-off: a cycle every 550 samples, about 30 here.
         assert!(releases >= 1, "the sensor is healthy between sticks: it must come back sometimes");
         assert!(quarantines <= 6, "{quarantines} quarantines, {releases} releases: no back-off");
+    }
+
+    fn sd(c: &[f64]) -> f64 {
+        let m = c.iter().sum::<f64>() / c.len() as f64;
+        (c.iter().map(|x| (x - m) * (x - m)).sum::<f64>() / c.len() as f64).sqrt()
+    }
+
+    /// Three channels: a = s + its own noise, b = 3 s (almost noise-free), c
+    /// independent; s is a slow AR(0.99). a's own noise is what the other
+    /// channels cannot reconstruct.
+    fn coupled(n: usize, seed: u64) -> Vec<Vec<f64>> {
+        let mut rng = crate::telemetry_bench::GaussRng::new(seed);
+        let (mut s, mut c) = (0.0f64, 0.0f64);
+        let mut out: Vec<Vec<f64>> = (0..3).map(|_| Vec::with_capacity(n)).collect();
+        for _ in 0..n {
+            s = 0.99 * s + rng.normal(0.0, 0.1);
+            c = 0.8 * c + rng.normal(0.0, 1.0);
+            out[0].push(s + rng.normal(0.0, 0.3));
+            out[1].push(3.0 * s + rng.normal(0.0, 0.05));
+            out[2].push(c);
+        }
+        out
+    }
+
+    /// A channel that is quarantined when a regime change is adapted to must
+    /// still come back: the new monitor's calibration for it was fitted on
+    /// reconstructed readings, which lack its own noise, so judged against
+    /// that calibration its real readings never passed the recovery checks.
+    #[test]
+    fn channel_quarantined_through_a_recalibration_still_recovers() {
+        let n = 6000usize;
+        let calib = coupled(2048, 31);
+        let stream = coupled(n, 32);
+        let sd_c = sd(&calib[2]);
+        let mut ap = AutoPilot::new(HybridMonitor::calibrate(&calib).expect("calibration"));
+        let valid = [true; 3];
+        let (mut quarantined, mut recal, mut released) = (None, None, None);
+        for t in 0..n {
+            let mut sample = [stream[0][t], stream[1][t], stream[2][t]];
+            if (300..700).contains(&t) {
+                sample[0] = stream[0][300]; // a frozen: quarantined
+            }
+            if t >= 400 {
+                sample[2] += 5.0 * sd_c; // regime change on c while a is quarantined
+            }
+            for ev in ap.push(&sample, &valid) {
+                match ev {
+                    Event::Quarantined { tick, channel: 0 } => { quarantined.get_or_insert(tick); }
+                    Event::Recalibrated { tick } => { recal.get_or_insert(tick); }
+                    Event::Unquarantined { tick, channel: 0 } => { released.get_or_insert(tick); }
+                    _ => {}
+                }
+            }
+        }
+        let q = quarantined.expect("a must be quarantined while frozen");
+        let r = recal.expect("the regime change on c must be adapted to");
+        assert!(q < r, "quarantined at {q}, recalibrated at {r}: the test needs q < r");
+        let rel = released.expect("a is healthy from 700: it must come back after the recalibration");
+        assert!(rel > r && rel < r + 1000, "recalibrated at {r}, released at {rel}");
+    }
+
+    /// A sensor that fails while a new baseline is being collected must be
+    /// quarantined, not calibrated into the new baseline.
+    #[test]
+    fn sensor_failure_during_recalibration_is_quarantined() {
+        let n = 8000usize;
+        let calib = synth_spacecraft(2048, 6160 + 100);
+        let stream = synth_spacecraft(n, 6160 + 200);
+        let sds: Vec<f64> = calib.iter().map(|c| sd(c)).collect();
+        let mut ap = AutoPilot::new(HybridMonitor::calibrate(&calib).expect("calibration"));
+        let valid = [true; 6];
+        let mut sample = [0.0f64; 6];
+        let (mut adapting, mut quarantined) = (None, None);
+        for t in 0..n {
+            for ch in 0..6 {
+                let mut v = stream[ch][t] + if t >= 3000 { 0.8 * sds[ch] } else { 0.0 };
+                if ch == 4 && t >= 3150 {
+                    v = stream[4][3150] + 0.8 * sds[4];
+                }
+                sample[ch] = v;
+            }
+            for ev in ap.push(&sample, &valid) {
+                match ev {
+                    Event::AdaptationStarted { tick } => { adapting.get_or_insert(tick); }
+                    Event::Quarantined { tick, channel: 4 } => { quarantined.get_or_insert(tick); }
+                    _ => {}
+                }
+            }
+        }
+        let a = adapting.expect("the level shift at 3000 must start an adaptation");
+        assert!(a < 3150, "adaptation started at {a}: the test needs it before the failure");
+        let q = quarantined.expect("ch4, stuck from 3150, must be quarantined");
+        assert!(q < 3450, "ch4 quarantined only at {q}");
+    }
+
+    /// While a candidate monitor is on trial, the current one keeps taking
+    /// samples, so a rollback resumes from an up-to-date monitor.
+    #[test]
+    fn rollback_resumes_from_an_up_to_date_monitor() {
+        let n = 3000usize;
+        let calib = coupled(2048, 41);
+        let stream = coupled(n, 42);
+        let mut ap = AutoPilot::new(HybridMonitor::calibrate(&calib).expect("calibration"));
+        let valid = [true; 3];
+        let mut rollbacks = 0;
+        for t in 0..n {
+            let mut sample = [stream[0][t], stream[1][t], stream[2][t]];
+            // Shift the common source s (a by d, b by 3 d): a consistent regime
+            // change that starts an adaptation, then a runaway during the trial.
+            let d = if t >= 400 { 3.0 + if t >= 900 { 0.01 * (t - 900) as f64 } else { 0.0 } } else { 0.0 };
+            sample[0] += d;
+            sample[1] += 3.0 * d;
+            for ev in ap.push(&sample, &valid) {
+                if let Event::RolledBack { .. } = ev {
+                    rollbacks += 1;
+                    for (ch, &k) in ap.monitor().channel_ticks().iter().enumerate() {
+                        assert_eq!(k, t as u64 + 1, "at the rollback (sample {t}) channel {ch} had taken {k} samples");
+                    }
+                }
+            }
+        }
+        assert!(rollbacks >= 1, "the runaway during the trial must roll the adaptation back");
     }
 }

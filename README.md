@@ -78,7 +78,7 @@ Reproduce with `cargo run --release --example structure_vs_amplitude` (0.4 s), o
 | detector (116 labelled windows) | windows caught | false alarms | per 1,000 samples | streaming | builds for Cortex-M |
 |---|---|---|---|---|---|
 | **struktura `guard`** | 45 | **46** | **0.15** | yes | **yes** |
-| **struktura `guard --sensitivity high`** | 57 | 55 | 0.18 | yes | **yes** |
+| **struktura `guard --sensitivity high`** | 55 | 54 | 0.18 | yes | **yes** |
 | extended-isolation-forest 0.2.3 | 47 | 168 | 0.56 | no (batch) | no |
 | limit check (1.5 × p95, 3 in a row) | 48 | 240 | 0.80 | yes | trivial |
 | EWMA chart (λ 0.2, 3σ) | 68 | 758 | 2.53 | yes | trivial |
@@ -86,7 +86,7 @@ Reproduce with `cargo run --release --example structure_vs_amplitude` (0.4 s), o
 | ankane STL (anomaly_detection 0.4.0) | 69 | 954 | 3.19 | no (batch) | no |
 | grafana augurs BOCPD (augurs-changepoint 0.10.2) | 77 | 1,461 | 4.88 | no (batch) | no |
 
-`guard` raises by far the fewest false alarms and, at its default setting, catches the fewest windows. That trade suits paging a person, where false alarms are what gets a monitor switched off. `--sensitivity high` catches more windows than the limit check (57 vs 48) with under a quarter of its false alarms (55 vs 240). That setting was chosen from a sweep of five on this same benchmark (before sensor recovery existed), so treat it as optimistic; on clean synthetic slow-wander streams it raises 2-3 false alarms in 30 where the default raises none. If you need to catch every labelled window and can triage many alarms, BOCPD, STL or even an EWMA chart catch more. The isolation forest timed out on 10 of the 58 series (quantized values) and those count as no alarms, so its row understates it; it is not seeded, so its row varies between runs (182 false alarms in an earlier run). On the clean control series every detector here is silent.
+`guard` raises by far the fewest false alarms and, at its default setting, catches the fewest windows. That trade suits paging a person, where false alarms are what gets a monitor switched off. `--sensitivity high` catches more windows than the limit check (55 vs 48) with under a quarter of its false alarms (54 vs 240). That setting was chosen from a sweep of five on this same benchmark (before sensor recovery existed), so treat it as optimistic; on clean synthetic slow-wander streams it raises 2-3 false alarms in 30 where the default raises none. If you need to catch every labelled window and can triage many alarms, BOCPD, STL or even an EWMA chart catch more. The isolation forest timed out on 10 of the 58 series (quantized values) and those count as no alarms, so its row understates it; it is not seeded, so its row varies between runs (182 false alarms in an earlier run). On the clean control series every detector here is silent.
 
 Up to 1.8.7 these rows were lower (default 36 windows, 35 false alarms; high 49 and 48): a sensor `guard` quarantined, for example a series that sat on one value for a while, stayed quarantined for good, so the rest of that series was never watched. Now a quarantined sensor is checked on its own readings and comes back after 192 healthy samples in a row. That recovery rule was set in advance, not tuned on NAB. The opt-in `--quiet-drift` changes little (46 → 45 false alarms, 45 → 44 windows).
 
@@ -145,7 +145,7 @@ struktura guard: 3000 samples x 5 channels (motor_current_A, wheel_rpm, imu_acce
   row   1725  ⚠ imu_accel_g (1.1x threshold): the signal shifted to a new operating level
   row   1725  ↻ environment may have changed, learning new baseline...
   row   2200  ✗ not a real environment change, fault confirmed
-  row   2201  ⚠ motor_current_A (15.1x threshold): the signal keeps deviating from what its baseline predicts (a step, a drift, or a change in its pattern)
+  row   2201  ⚠ motor_current_A (1.2x threshold): the signal keeps deviating from what its baseline predicts (a step, a drift, or a change in its pattern)
   row   2208  ⚠ motor_current_A (2.6x threshold): the signal's behavior changed and predictions are failing
   row   2210  ⚠ motor_current_A (1.7x threshold): this channel disagrees with what the other channels' physics says it should be
   row   2210  ✗ motor_current_A declared dead, using reconstructed values

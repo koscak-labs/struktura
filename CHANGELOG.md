@@ -4,6 +4,33 @@ All notable changes to Struktura are documented here.
 
 ## Unreleased
 
+- AutoPilot during a recalibration (found by the six-dimension audit, each
+  finding reproduced by an independent verifier):
+  - A channel quarantined while a new baseline was collected got its new
+    calibration from reconstructed readings, which lack its own noise, so
+    its real readings never passed the recovery checks again: quarantined
+    for good. The candidate now keeps that channel's previous calibration.
+  - A sensor that failed while the baseline was collected raised nothing
+    and was calibrated into the new baseline (a stuck run even switched its
+    stuck-value check off there). The current monitor now takes whole
+    samples with their validity during collection, and a stuck, missing or
+    inconsistent sensor ends the collection and is quarantined. A sensor
+    failure on the candidate during its trial is quarantined too, instead
+    of being reported as an unstable new regime.
+  - The current monitor was not fed during the 300-sample trial, so after a
+    rollback it resumed with rings and previous values up to 300 samples
+    stale, and the first sample after it could raise a spurious drift
+    alarm. It is now fed throughout.
+  Tests: channel_quarantined_through_a_recalibration_still_recovers,
+  sensor_failure_during_recalibration_is_quarantined,
+  rollback_resumes_from_an_up_to_date_monitor (all three fail without the
+  fix). Effects: NAB default and `--quiet-drift` unchanged; `--sensitivity
+  high` 57 -> 55 windows, 55 -> 54 false alarms (two borderline drift
+  alarms no longer cross their threshold after the corrected state, on
+  ambient_temperature_system_failure and ec2_request_latency_system_failure).
+  `examples/rover.csv`: the motor current alarm at row 2201 is 1.2x its
+  threshold, not 15.1x; the 15.1x came from the stale monitor after the
+  rollback at row 2200.
 - Generated hybrid C (`generate-hybrid`): new `hyb_push_sample(m, x, &ch)`
   feeds one sample of every channel and returns the first alarm and its
   channel, and new `hyb_reset(m)` clears what `HybridMonitor::reset` clears.
