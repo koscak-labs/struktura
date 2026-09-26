@@ -94,6 +94,25 @@ fn random_walk(seed: u64, n: usize) -> Vec<f64> {
         .collect()
 }
 
+/// Forward-filled telemetry: a quantized random walk that holds each value
+/// for 1 to 90 samples, so many windows contain box sizes that see only a
+/// constant run (F exactly 0). Rounding noise there once gave alpha off by up
+/// to 285 between Rust and the generated C on ESA-ADB data.
+fn forward_filled(seed: u64, n: usize) -> Vec<f64> {
+    let mut rng = Rng(seed | 1);
+    let (mut x, mut hold) = (0.0, 0usize);
+    (0..n)
+        .map(|_| {
+            if hold == 0 {
+                x += (rng.normal() * 2.0).round() * 0.25;
+                hold = 1 + (rng.uniform() * 90.0) as usize;
+            }
+            hold -= 1;
+            x
+        })
+        .collect()
+}
+
 /// White noise, then AR(1), then a slow drift -- a blend of regimes in one
 /// run, as the other differential tests in this crate use.
 fn blended_series(seed: u64, n: usize) -> Vec<f64> {
@@ -567,10 +586,11 @@ fn cli_generators_match_rust_dfa() {
     // representative window (the blended series above already mixes
     // regimes, but not one of these in isolation).
     let window = 96usize;
-    let series: [(&str, Vec<f64>); 3] = [
+    let series: [(&str, Vec<f64>); 4] = [
         ("white", white_noise(diff_seed("cli_generators_match_rust_white", 0x5EED_0001), 3 * window)),
         ("ar1", ar1_series(diff_seed("cli_generators_match_rust_ar1", 0x5EED_0002), 3 * window)),
         ("random_walk", random_walk(diff_seed("cli_generators_match_rust_rw", 0x5EED_0003), 3 * window)),
+        ("forward_filled", forward_filled(diff_seed("cli_generators_match_rust_ff", 0x5EED_0004), 12 * window)),
     ];
     for (name, x) in &series {
         let rust = rust_alphas(x, window);

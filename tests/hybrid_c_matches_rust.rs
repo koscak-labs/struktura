@@ -65,6 +65,19 @@ fn window(rng: &mut Rng, family: usize) -> Vec<f64> {
                 v.push(a * (f * i as f64).sin() + rng.normal());
             }
         }
+        5 => {
+            // Forward-filled telemetry: a constant run, then a quantized tail.
+            // Box sizes inside the run have F exactly 0; rounding noise there
+            // gave alpha off by up to 285 between Rust and C on ESA-ADB.
+            let flat = 60 + (rng.next_u64() % 31) as usize;
+            let mut x = (rng.normal() * 4.0).round() * 0.25;
+            for i in 0..WINDOW {
+                if i >= flat {
+                    x += (rng.normal() * 2.0).round() * 0.25;
+                }
+                v.push(x);
+            }
+        }
         _ => {
             let slope = 0.1 * rng.normal();
             for i in 0..WINDOW {
@@ -105,7 +118,7 @@ fn hybrid_c_dfa_alpha_matches_rust() {
         .expect("calibration")
         .export();
 
-    let windows: Vec<Vec<f64>> = (0..5)
+    let windows: Vec<Vec<f64>> = (0..6)
         .flat_map(|f| (0..40).map(move |_| f))
         .map(|f| window(&mut rng, f))
         .collect();

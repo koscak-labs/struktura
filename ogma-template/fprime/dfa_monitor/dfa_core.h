@@ -47,11 +47,16 @@ static dfa_result_t dfa_compute(double *values, int n) {
     for (i = 0; i < n; i++) mean += values[i];
     mean /= (double)n;
 
-    double cum = 0.0;
+    double cum = 0.0, ss = 0.0;
     for (i = 0; i < n; i++) {
         cum += values[i] - mean;
         values[i] = cum;
+        ss += cum * cum;
     }
+    /* A box whose F is at most 1e-12 of the profile's RMS measures only
+       rounding (a box inside a constant run) and gives no point of the fit,
+       as struktura's FLAT_BOX_REL. */
+    double floor2 = 1e-12 * 1e-12 * (ss / (double)n);
 
     double log_s[DFA_BOX_SLOTS], log_f[DFA_BOX_SLOTS];
     int pts = 0;
@@ -83,10 +88,10 @@ static dfa_result_t dfa_compute(double *values, int n) {
             }
             f2_sum += resid / k;
         }
-        double f = sqrt(f2_sum / (double)num_segs);
-        if (f > 0.0) {
+        double f2 = f2_sum / (double)num_segs;
+        if (f2 > floor2) {
             log_s[pts] = log((double)s);
-            log_f[pts] = log(f);
+            log_f[pts] = log(sqrt(f2));
             pts++;
         }
     }

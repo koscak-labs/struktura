@@ -252,6 +252,7 @@ pub fn dfa_short(values: &[f64]) -> Option<DfaResult> {
         profile.push(cum);
     }
 
+    let floor2 = flat_floor2(&profile);
     let hi = (n / 4).max(5);
     let ratio = powf(hi as f64 / 4.0, 1.0 / 9.0);
     let mut log_s = [0.0f64; 10];
@@ -272,26 +273,15 @@ pub fn dfa_short(values: &[f64]) -> Option<DfaResult> {
         let sx = k * (k - 1.0) / 2.0;
         let sx2 = k * (k - 1.0) * (2.0 * k - 1.0) / 6.0;
         let det = k * sx2 - sx * sx;
-        let box_msr = |seg: &[f64]| {
-            let (mut sy, mut sxy, mut sy2) = (0.0f64, 0.0f64, 0.0f64);
-            for (j, &y) in seg.iter().enumerate() {
-                sy += y;
-                sxy += j as f64 * y;
-                sy2 += y * y;
-            }
-            let a0 = (sx2 * sy - sx * sxy) / det;
-            let a1 = (k * sxy - sx * sy) / det;
-            (sy2 - a0 * sy - a1 * sxy).max(0.0) / k
-        };
         let mut f2 = 0.0f64;
         for b in 0..nb {
-            f2 += box_msr(&profile[b * s..(b + 1) * s]);
-            f2 += box_msr(&profile[n - (b + 1) * s..n - b * s]);
+            f2 += box_rss_fast(&profile[b * s..(b + 1) * s], k, sx, sx2, det) / k;
+            f2 += box_rss_fast(&profile[n - (b + 1) * s..n - b * s], k, sx, sx2, det) / k;
         }
-        let f = sqrt(f2 / (2 * nb) as f64);
-        if f > 0.0 {
+        let f2 = f2 / (2 * nb) as f64;
+        if f2 > floor2 {
             log_s[pts] = ln(s as f64);
-            log_f[pts] = ln(f);
+            log_f[pts] = ln(sqrt(f2));
             pts += 1;
         }
     }
@@ -299,6 +289,66 @@ pub fn dfa_short(values: &[f64]) -> Option<DfaResult> {
         return None;
     }
     Some(linreg(&log_s[..pts], &log_f[..pts]))
+}
+
+/// Residual sum of squares of the least-squares line through one box of the
+/// profile, summed from the residuals themselves. The one-pass identity
+/// Σy² − a0·Σy − a1·Σxy cancels down to rounding noise of order ε·Σy², so a
+/// box inside a constant run (true fluctuation exactly 0) came out as a tiny
+/// positive F that entered the fit as a wild point: alpha -1.6 in Rust and
+/// -13.7 in the generated C on the same ESA-ADB window. Residuals leave noise
+/// of order ε·|y|, far below [`FLAT_BOX_REL`].
+fn box_rss(seg: &[f64]) -> f64 {
+    let k = seg.len() as f64;
+    let ibar = (k - 1.0) / 2.0;
+    let ybar = seg.iter().sum::<f64>() / k;
+    let sxx = k * (k * k - 1.0) / 12.0;
+    let sxy: f64 = seg.iter().enumerate().map(|(i, &y)| (i as f64 - ibar) * (y - ybar)).sum();
+    let b = sxy / sxx;
+    seg.iter()
+        .enumerate()
+        .map(|(i, &y)| {
+            let r = (y - ybar) - b * (i as f64 - ibar);
+            r * r
+        })
+        .sum()
+}
+
+/// A one-pass residual below this fraction of the magnitudes it was computed
+/// from may be nothing but their rounding, so [`box_rss`] recomputes it. Real
+/// fluctuations sit far above it and keep the fast value unchanged.
+pub const REFINE_REL: f64 = 1e-9;
+
+/// One box's residual sum of squares: the one-pass least-squares identity
+/// (x = 0..k-1, with sx, sx2, det of that x), or [`box_rss`] when the identity
+/// cancels to within [`REFINE_REL`] of its terms.
+fn box_rss_fast(seg: &[f64], k: f64, sx: f64, sx2: f64, det: f64) -> f64 {
+    let (mut sy, mut sxy, mut sy2) = (0.0f64, 0.0f64, 0.0f64);
+    for (i, &y) in seg.iter().enumerate() {
+        sy += y;
+        sxy += i as f64 * y;
+        sy2 += y * y;
+    }
+    let a0 = (sx2 * sy - sx * sxy) / det;
+    let a1 = (k * sxy - sx * sy) / det;
+    let resid = sy2 - a0 * sy - a1 * sxy;
+    if resid <= REFINE_REL * (sy2 + (a0 * sy).abs() + (a1 * sxy).abs()) {
+        box_rss(seg)
+    } else {
+        resid
+    }
+}
+
+/// A box size whose fluctuation F is at most this fraction of the profile's
+/// RMS measures nothing but rounding (a box inside a constant run) and gives
+/// no point of the fit.
+pub const FLAT_BOX_REL: f64 = 1e-12;
+
+/// Mean square of a profile: with [`FLAT_BOX_REL`], the floor below which a
+/// box's F² is rounding, not fluctuation.
+fn flat_floor2(profile: &[f64]) -> f64 {
+    let ms = profile.iter().map(|y| y * y).sum::<f64>() / profile.len() as f64;
+    FLAT_BOX_REL * FLAT_BOX_REL * ms
 }
 
 /// Box sizes that [`dfa`], [`dfa_into`], [`dfa_fast_into`] and
@@ -348,7 +398,9 @@ pub fn dfa_box_sizes(n: usize) -> ([usize; 12], usize) {
 /// n is large enough that the prefix magnitude dwarfs a segment's sum; for
 /// the streaming-monitor window sizes (≤ a few thousand samples) agreement
 /// with [`dfa_into`] is at machine precision (verified to 1e-12 in tests).
-/// `buf` is a scratch buffer, grown to 3(n+1) and reused across calls.
+/// A box whose one-pass value is within reach of its own rounding is
+/// recomputed from its residuals (see [`REFINE_REL`]).
+/// `buf` is a scratch buffer, grown to 4n+3 and reused across calls.
 pub fn dfa_fast_into(values: &[f64], buf: &mut Vec<f64>) -> DfaResult {
     let n = values.len();
     if n < 64 {
@@ -365,9 +417,10 @@ pub fn dfa_fast_into(values: &[f64], buf: &mut Vec<f64>) -> DfaResult {
     // One pass: profile y_j = cumsum(x - mean), prefix arrays
     // Py[k] = Σ_{j<k} y_j, PJy[k] = Σ_{j<k} j·y_j, Py2[k] = Σ_{j<k} y_j².
     buf.clear();
-    buf.resize(3 * (n + 1), 0.0);
+    buf.resize(4 * n + 3, 0.0);
     let (py, rest) = buf.split_at_mut(n + 1);
-    let (pjy, py2) = rest.split_at_mut(n + 1);
+    let (pjy, rest) = rest.split_at_mut(n + 1);
+    let (py2, profile) = rest.split_at_mut(n + 1);
     let mut cum = 0.0f64;
     let mut acc_y = 0.0f64;
     let mut acc_jy = 0.0f64;
@@ -383,7 +436,10 @@ pub fn dfa_fast_into(values: &[f64], buf: &mut Vec<f64>) -> DfaResult {
         py[j + 1] = acc_y;
         pjy[j + 1] = acc_jy;
         py2[j + 1] = acc_y2;
+        profile[j] = cum;
     }
+    // py2[n] is the profile's Σy², summed in the same order as flat_floor2.
+    let floor2 = FLAT_BOX_REL * FLAT_BOX_REL * (py2[n] / n as f64);
 
     let (sizes, count) = dfa_box_sizes(n);
     let mut log_s = [0.0f64; 12];
@@ -412,13 +468,16 @@ pub fn dfa_fast_into(values: &[f64], buf: &mut Vec<f64>) -> DfaResult {
             let sy2 = py2[b] - py2[a];
             let a0 = (sx2 * sy - sx * sxy) / det;
             let a1 = (k * sxy - sx * sy) / det;
-            let resid = (sy2 - a0 * sy - a1 * sxy).max(0.0);
+            let mut resid = sy2 - a0 * sy - a1 * sxy;
+            if resid <= REFINE_REL * (py2[b] + (a0 * sy).abs() + (a1 * sxy).abs()) {
+                resid = box_rss(&profile[a..b]);
+            }
             f2_sum += resid / k;
         }
-        let f = sqrt(f2_sum / num_segs as f64);
-        if f > 0.0 {
+        let f2 = f2_sum / num_segs as f64;
+        if f2 > floor2 {
             log_s[pts] = ln(s as f64);
-            log_f[pts] = ln(f);
+            log_f[pts] = ln(sqrt(f2));
             pts += 1;
         }
     }
@@ -488,42 +547,24 @@ pub fn dfa_scratch(values: &[f64], scratch: &mut [f64]) -> DfaResult {
     let mut log_s = [0.0f64; 12];
     let mut log_f = [0.0f64; 12];
     let mut pts = 0usize;
+    let floor2 = flat_floor2(buf);
 
     for &s in &sizes[..count] {
         let num_segs = n / s;
         if num_segs == 0 { continue; }
-
-        // Precompute sx, sx2, det (depend only on s, not data).
         let k = s as f64;
         let sx = k * (k - 1.0) / 2.0;
         let sx2 = k * (k - 1.0) * (2.0 * k - 1.0) / 6.0;
         let det = k * sx2 - sx * sx;
-        if det.abs() < 1e-15 { continue; }
-
         let mut f2_sum = 0.0;
         for seg in 0..num_segs {
-            let start = seg * s;
-            // Single pass: accumulate sy, sxy, sy2, then use the least-squares
-            // identity RSS = Σy² − a0Σy − a1Σxy (cross terms collapse via the
-            // normal equations) instead of a second residual pass.
-            let mut sy = 0.0;
-            let mut sxy = 0.0;
-            let mut sy2 = 0.0;
-            for i in 0..s {
-                let yi = buf[start + i];
-                sy += yi;
-                sxy += i as f64 * yi;
-                sy2 += yi * yi;
-            }
-            let a0 = (sx2 * sy - sx * sxy) / det;
-            let a1 = (k * sxy - sx * sy) / det;
-            let resid = (sy2 - a0 * sy - a1 * sxy).max(0.0);
-            f2_sum += resid / k;
+            let box_y = &buf[seg * s..(seg + 1) * s];
+            f2_sum += box_rss_fast(box_y, k, sx, sx2, det) / k;
         }
-        let f = sqrt(f2_sum / num_segs as f64);
-        if f > 0.0 {
+        let f2 = f2_sum / num_segs as f64;
+        if f2 > floor2 {
             log_s[pts] = ln(s as f64);
-            log_f[pts] = ln(f);
+            log_f[pts] = ln(sqrt(f2));
             pts += 1;
         }
     }
@@ -928,6 +969,41 @@ impl BaselineTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A window that is constant except for a quantized tail, like
+    /// forward-filled telemetry: box sizes that tile only the constant part
+    /// have a fluctuation of exactly 0. Rounding noise must not turn that into
+    /// a point of the fit, so alpha must not depend on the offset of the data
+    /// (the noise does). ESA-ADB Mission 1 channel 42, t=2535177, W=256 gave
+    /// alpha -1.61 in Rust and -13.73 in the generated C.
+    fn flat_then_tail(n: usize, flat: usize) -> Vec<f64> {
+        let tail = [0.3, 0.3, 0.6, 0.9, 0.9, 1.2, 0.6, 1.5, 1.8, 1.2, 2.1];
+        (0..n).map(|i| if i < flat { 0.0 } else { tail[(i - flat) % tail.len()] }).collect()
+    }
+
+    #[test]
+    fn dfa_ignores_box_sizes_that_only_see_a_constant_run() {
+        for (n, flat) in [(256, 230), (256, 200), (72, 69), (1024, 1000)] {
+            let x = flat_then_tail(n, flat);
+            let mut buf = Vec::new();
+            let mut scratch = vec![0.0; n];
+            let base = dfa(&x);
+            for off in [1.0, 1000.0, 1.0e6] {
+                let y: Vec<f64> = x.iter().map(|v| v + off).collect();
+                for (name, r) in [
+                    ("dfa", dfa(&y)),
+                    ("dfa_scratch", dfa_scratch(&y, &mut scratch)),
+                    ("dfa_fast_into", dfa_fast_into(&y, &mut buf)),
+                ] {
+                    assert!(
+                        (r.alpha - base.alpha).abs() < 1e-6 && (r.r_squared - base.r_squared).abs() < 1e-6,
+                        "n {n} flat {flat} offset {off} {name}: alpha {} r2 {} vs {} {}",
+                        r.alpha, r.r_squared, base.alpha, base.r_squared
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn analyze_does_not_depend_on_units() {

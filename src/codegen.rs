@@ -47,11 +47,16 @@ static dfa_result_t dfa_compute(double *values, int n) {{
     /* Cumulative profile, computed in place: `values` is scratch the caller
        rebuilds on every call and does not read again afterward, so this
        overwrites it instead of using a second window-sized array. */
-    double cum = 0.0;
+    double cum = 0.0, ss = 0.0;
     for (i = 0; i < n; i++) {{
         cum += values[i] - mean;
         values[i] = cum;
+        ss += cum * cum;
     }}
+    /* A box whose F is at most 1e-12 of the profile's RMS measures only
+       rounding (a box inside a constant run) and gives no point of the fit,
+       as struktura's FLAT_BOX_REL. */
+    double floor2 = 1e-12 * 1e-12 * (ss / (double)n);
 
     /* DFA: measure fluctuation at each box size */
     double log_s[DFA_BOX_SLOTS], log_f[DFA_BOX_SLOTS];
@@ -84,10 +89,10 @@ static dfa_result_t dfa_compute(double *values, int n) {{
             }}
             f2_sum += resid / k;
         }}
-        double f = sqrt(f2_sum / (double)num_segs);
-        if (f > 0.0) {{
+        double f2 = f2_sum / (double)num_segs;
+        if (f2 > floor2) {{
             log_s[pts] = log((double)s);
-            log_f[pts] = log(f);
+            log_f[pts] = log(sqrt(f2));
             pts++;
         }}
     }}
@@ -439,21 +444,37 @@ pub fn generate_hybrid_c(export: &crate::monitor::MonitorExport) -> String {
     // C alpha is on the same scale as the calibrated alpha_mean and alpha_sd.
     let (sizes, count) = crate::dfa_box_sizes(crate::monitor::WINDOW);
     let boxes: Vec<String> = sizes[..count].iter().map(|b| b.to_string()).collect();
+    // Same operations, in the same order, as the Rust box_rss.
+    s.push_str("/* Residual sum of squares of the least-squares line through y[0..s),\n");
+    s.push_str(" * summed from the residuals: the one-pass identity cancels to rounding\n");
+    s.push_str(" * on a box inside a constant run. As struktura's box_rss. */\n");
+    s.push_str("static double hyb_box_rss(const double *y, int s) {\n");
+    s.push_str("    double k = (double)s, ibar = (k - 1.0) / 2.0, ybar = 0.0, sxy = 0.0, rss = 0.0, b;\n");
+    s.push_str("    int i;\n");
+    s.push_str("    for (i = 0; i < s; i++) ybar += y[i];\n    ybar /= k;\n");
+    s.push_str("    for (i = 0; i < s; i++) sxy += ((double)i - ibar) * (y[i] - ybar);\n");
+    s.push_str("    b = sxy / (k * (k * k - 1.0) / 12.0);\n");
+    s.push_str("    for (i = 0; i < s; i++) {\n");
+    s.push_str("        double r = (y[i] - ybar) - b * ((double)i - ibar);\n");
+    s.push_str("        rss += r * r;\n    }\n    return rss;\n}\n\n");
     s.push_str("static double hyb_dfa_alpha(const double *v, int n) {\n");
     s.push_str(&format!(
         "    static const int BOXES[{count}] = {{{}}};\n",
         boxes.join(", ")
     ));
-    s.push_str("    double mean = 0.0, cum = 0.0;\n    double y[HYB_WINDOW];\n");
+    s.push_str("    double mean = 0.0, cum = 0.0, ss = 0.0, floor2;\n    double y[HYB_WINDOW];\n");
     s.push_str(&format!("    double log_s[{count}], log_f[{count}];\n    int i, b, pts = 0;\n"));
     s.push_str("    for (i = 0; i < n; i++) mean += v[i];\n    mean /= (double)n;\n");
-    s.push_str("    for (i = 0; i < n; i++) { cum += v[i] - mean; y[i] = cum; }\n");
+    s.push_str("    for (i = 0; i < n; i++) { cum += v[i] - mean; y[i] = cum; ss += cum * cum; }\n");
+    s.push_str("    /* A box whose F is at most 1e-12 of the profile's RMS measures only\n");
+    s.push_str("     * rounding and gives no point of the fit (FLAT_BOX_REL). */\n");
+    s.push_str("    floor2 = 1e-12 * 1e-12 * (ss / (double)n);\n");
     s.push_str(&format!("    for (b = 0; b < {count}; b++) {{\n        int s = BOXES[b];\n"));
     s.push_str("        int num_segs = n / s;\n        double k = (double)s;\n");
     s.push_str("        double sx = k * (k - 1.0) / 2.0;\n");
     s.push_str("        double sx2 = k * (k - 1.0) * (2.0 * k - 1.0) / 6.0;\n");
     s.push_str("        double det = k * sx2 - sx * sx;\n");
-    s.push_str("        double f2 = 0.0, f;\n        int seg;\n");
+    s.push_str("        double f2 = 0.0;\n        int seg;\n");
     s.push_str("        if (num_segs == 0 || s > n / 4) continue;\n");
     s.push_str("        for (seg = 0; seg < num_segs; seg++) {\n");
     s.push_str("            int st = seg * s;\n");
@@ -465,10 +486,12 @@ pub fn generate_hybrid_c(export: &crate::monitor::MonitorExport) -> String {
     s.push_str("            a0 = (sx2 * sy - sx * sxy) / det;\n");
     s.push_str("            a1 = (k * sxy - sx * sy) / det;\n");
     s.push_str("            resid = sy2 - a0 * sy - a1 * sxy;\n");
-    s.push_str("            if (resid < 0.0) resid = 0.0;\n");
+    s.push_str("            /* Within rounding of its own terms: recompute (REFINE_REL). */\n");
+    s.push_str("            if (resid <= 1e-9 * (sy2 + fabs(a0 * sy) + fabs(a1 * sxy)))\n");
+    s.push_str("                resid = hyb_box_rss(y + st, s);\n");
     s.push_str("            f2 += resid / k;\n        }\n");
-    s.push_str("        f = sqrt(f2 / (double)num_segs);\n");
-    s.push_str("        if (f > 0.0) { log_s[pts] = log((double)s); log_f[pts] = log(f); pts++; }\n");
+    s.push_str("        f2 /= (double)num_segs;\n");
+    s.push_str("        if (f2 > floor2) { log_s[pts] = log((double)s); log_f[pts] = log(sqrt(f2)); pts++; }\n");
     s.push_str("    }\n    if (pts < 3) return 0.5;\n    {\n");
     s.push_str("        double n_ = (double)pts, sxa = 0, sya = 0, sxya = 0, sx2a = 0;\n");
     s.push_str("        for (i = 0; i < pts; i++) {\n");

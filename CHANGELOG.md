@@ -4,6 +4,47 @@ All notable changes to Struktura are documented here.
 
 ## Unreleased
 
+- DFA on windows with a constant run (forward-filled or quantized
+  telemetry). A box size that tiles only the constant part has a
+  fluctuation of exactly 0, but the one-pass least-squares identity
+  (Σy² − a0·Σy − a1·Σxy, and its prefix-sum form in `dfa_fast_into`, which
+  the monitor uses) cancels to rounding noise there, and the log of that
+  noise entered the fit as a wild point. Found by the
+  github-profile-space-robotics session, which compared the generated C
+  with Rust on all 7.36 million ESA-ADB Mission 1 test rows: 47 to 700
+  windows per window size differed by more than 1e-3 in alpha, up to 285,
+  and on those windows neither side was right (Rust -1.61 and C -13.73 on
+  one window). Now:
+  - a box whose one-pass residual is within 1e-9 of the terms it was
+    computed from is recomputed from its residuals (`REFINE_REL`), which
+    leaves noise of order 1e-16 of the profile instead of 1e-8;
+  - a box size whose F is at most 1e-12 of the profile's RMS
+    (`FLAT_BOX_REL`) gives no point of the fit. On ESA-ADB, with residuals,
+    rounding stays below 2.1e-16 and real fluctuations above 1.4e-5 of the
+    profile RMS (measured by the same session on every box of every window
+    at sizes 72, 256 and 1024).
+  The same rule is in `dfa`, `dfa_into`, `dfa_scratch`, `dfa_fast_into`,
+  `dfa_short`, the generated hybrid C, the shared `dfa_core.h` of
+  `codegen`/`generate`, and `ogma-template/`. On a 256-sample window that
+  is constant for 230 samples, alpha is 1.52; it was -5.84, and -6.05 for
+  the same window shifted by 1. Tests: dfa_ignores_box_sizes_that_only_see_
+  a_constant_run (alpha must not depend on the offset of the data), a
+  forward-filled family in tests/hybrid_c_matches_rust.rs (now 240
+  windows) and a forward-filled series in tests/cli_generators_match_rust.rs;
+  both fail with the fix reverted on either side (e.g. C 80.85 vs Rust 6.66,
+  C 9.39 vs Rust -0.52). Where the one-pass value is accurate nothing
+  changes (on synthetic spacecraft telemetry no window's alpha moved by
+  more than 1.4e-11), and no bundled CSV's guard, check or copilot-compare
+  output changed. NAB: the same windows are caught with one false alarm
+  fewer in every mode (default 45 windows / 46 -> 45 false alarms,
+  `--quiet-drift` 44 / 45 -> 44, `--sensitivity high` 55 / 54 -> 53).
+  `struktura redblue` and `struktura evolve`, whose RED probes include
+  stuck faults, now cover 59.2% -> 73.3% (was 60.0% -> 75.0%) and 69% ->
+  90% with a 97% peak (was 71% -> 92%): part of the old coverage came from
+  rounding noise. Cost: `monitor-perf` mean per-sample
+  time +17% on this host (2.6 -> 3.1 µs, best of 6 runs), because boxes near
+  exact fit are now recomputed (4.6% of boxes on the synthetic spacecraft
+  data).
 - `struktura generate --cfs|--fprime|--ros` (the cFS app, F Prime component,
   and ROS 2 node directory generators) generated C/C++ whose alpha did not
   match Rust `dfa()` on the same data: `dfa_core.h` used a fixed box list
@@ -258,8 +299,12 @@ All notable changes to Struktura are documented here.
   35 -> 46 false alarms; `--sensitivity high` 49 -> 57 windows, 48 -> 55
   false alarms; `--quiet-drift` 35 -> 44 windows, 33 -> 45 false alarms;
   clean control series still silent. `examples/rover.csv`: the motor current
-  sensor comes back at row 2592 after its fault ends, and the scripted
-  battery drain from row 2600, missed before, is reported at 2595.
+  sensor comes back at row 2592 after its fault ends. The battery alarm that
+  follows at row 2595 is not the scripted drain, which starts at 2600 (the
+  battery's slope goes from -2.0e-5 to -3.2e-4 per row there): it is the
+  battery's normal discharge outside its calibrated range, seen by the
+  parity leg once no sensor is quarantined. (An earlier version of this
+  entry called it the drain.)
   Reported by the ESA-ADB evaluation. Checked on non-NAB data by the
   oura-26 session: in 40 seeded runs no still-faulty sensor was released,
   and alarms before the first release are identical on 49 files.

@@ -8,13 +8,13 @@ $ struktura redblue
 
   | Round | RED coverage | New misses | Corpus cov. after BLUE | Evolved? |
   |-------|--------------|------------|------------------------|----------|
-  |     1 |    60.0%     |         48 |              16.7%     | YES |
-  |     2 |    70.8%     |         35 |              20.5%     | YES |
-  |     3 |    68.3%     |         38 |              14.9%     | YES |
-  |     4 |    75.0%     |         30 |              10.0%     | YES |
-  |     5 |    64.2%     |         43 |               3.6%     |       no |
-  |     6 |    75.0%     |         30 |               0.7%     |       no |
+  |     1 |    59.2%     |         49 |              18.4%     | YES |
+  |     2 |    70.0%     |         36 |              18.8%     | YES |
+  |     3 |    65.8%     |         41 |              13.5%     | YES |
+  |     4 |    71.7%     |         34 |               9.3%     | YES |
+  |     5 |    60.8%     |         47 |               2.9%     |       no |
+  |     6 |    73.3%     |         32 |               1.4%     |       no |
 
-  RED coverage: 60.0% (round 1) -> 75.0% (round 6)
+  RED coverage: 59.2% (round 1) -> 73.3% (round 6)
   Evolved config: res_span=20 dfa_persist=2 roll_persist=7 cusum_k=1.00 horizon=147553
   Zero-clean-alarm law verified on every accepted mutation.

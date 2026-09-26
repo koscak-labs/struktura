@@ -77,8 +77,8 @@ Reproduce with `cargo run --release --example structure_vs_amplitude` (0.4 s), o
 
 | detector (116 labelled windows) | windows caught | false alarms | per 1,000 samples | streaming | builds for Cortex-M |
 |---|---|---|---|---|---|
-| **struktura `guard`** | 45 | **46** | **0.15** | yes | **yes** |
-| **struktura `guard --sensitivity high`** | 55 | 54 | 0.18 | yes | **yes** |
+| **struktura `guard`** | 45 | **45** | **0.15** | yes | **yes** |
+| **struktura `guard --sensitivity high`** | 55 | 53 | 0.18 | yes | **yes** |
 | extended-isolation-forest 0.2.3 | 47 | 168 | 0.56 | no (batch) | no |
 | limit check (1.5 × p95, 3 in a row) | 48 | 240 | 0.80 | yes | trivial |
 | EWMA chart (λ 0.2, 3σ) | 68 | 758 | 2.53 | yes | trivial |
@@ -170,7 +170,7 @@ struktura guard: 3000 samples x 5 channels (motor_current_A, wheel_rpm, imu_acce
 <!-- /example -->
 ```
 
-That is the full output; `examples/rover.csv` is a simulated rover with three scripted faults and ships in the repo: a wheel bearing degrading from row 1500, a motor overcurrent from 2200 to about 2400, and faster battery drain from 2600. All three are reported. The bearing keeps degrading to the end of the file (the IMU's spread doubles), so `imu_accel_g` keeps alarming (8 alarms from row 2214 on); "17 faults" counts alarms, not distinct faults. A quarantined sensor is watched on its own readings and comes back once they are healthy again (motor current, row 2592). The battery drain is reported as the battery reading disagreeing with the other channels, not as battery degradation.
+That is the full output; `examples/rover.csv` is a simulated rover with three scripted faults and ships in the repo: a wheel bearing degrading from row 1500, a motor overcurrent from 2200 to about 2400, and faster battery drain from 2600. Two of them are reported: the bearing (`wheel_rpm` from row 1644, `imu_accel_g` from 1715; it keeps degrading to the end of the file and the IMU's spread doubles, so `imu_accel_g` keeps alarming, 8 alarms from row 2214 on) and the motor overcurrent (from row 2201). The battery alarm at row 2595 comes five rows before the drain starts: the battery's normal discharge has taken it outside the range calibrated on the first 1,000 rows, and the parity leg sees that as soon as motor current is released at 2592 (parity is off while any sensor is quarantined). The battery is then quarantined, so the faster drain from 2600 is not reported on its own. "17 faults" counts alarms, not distinct faults. A quarantined sensor is watched on its own readings and comes back once they are healthy again (motor current, row 2592).
 
 A dead sensor is quarantined and its value reconstructed from the other channels (R² > 0.9). A permanent environment change is re-learned through a guarded candidate baseline, which is rolled back if the new regime is really a fault. Drift that looks like a regime change is refused.
 
@@ -180,12 +180,12 @@ A dead sensor is quarantined and its value reconstructed from the other channels
 
 | generation | coverage of RED's 100 synthetic probes | detector legs |
 |---|---|---|
-| 1 | 71% | 2 |
-| 4 | 89% | 5 |
+| 1 | 69% | 2 |
+| 4 | 86% | 5 |
 | 9 | 97% (peak) | 6 |
-| 10 (final) | 92% | 6 |
+| 10 (final) | 90% | 6 |
 
-The six legs it kept include variance, residual-trend and derivative-volatility monitors that were not written by hand. Parameter tuning alone (`struktura redblue`, below) stops at 75%. Faults are synthetic, and the zero-clean-alarm check uses 12 clean seeds. Re-run on 2026-09-24 with `struktura evolve`.
+The six legs it kept include variance, residual-trend and derivative-volatility monitors that were not written by hand. Parameter tuning alone (`struktura redblue`, below) stops at 73%. Faults are synthetic, and the zero-clean-alarm check uses 12 clean seeds. Re-run on 2026-09-26 with `struktura evolve`.
 
 ## 🛡️ Validation
 
@@ -421,14 +421,14 @@ $ struktura redblue
 
   | Round | RED coverage | New misses | Corpus cov. after BLUE | Evolved? |
   |-------|--------------|------------|------------------------|----------|
-  |     1 |    60.0%     |         48 |              16.7%     | YES |
-  |     2 |    70.8%     |         35 |              20.5%     | YES |
-  |     3 |    68.3%     |         38 |              14.9%     | YES |
-  |     4 |    75.0%     |         30 |              10.0%     | YES |
-  |     5 |    64.2%     |         43 |               3.6%     |       no |
-  |     6 |    75.0%     |         30 |               0.7%     |       no |
+  |     1 |    59.2%     |         49 |              18.4%     | YES |
+  |     2 |    70.0%     |         36 |              18.8%     | YES |
+  |     3 |    65.8%     |         41 |              13.5%     | YES |
+  |     4 |    71.7%     |         34 |               9.3%     | YES |
+  |     5 |    60.8%     |         47 |               2.9%     |       no |
+  |     6 |    73.3%     |         32 |               1.4%     |       no |
 
-  RED coverage: 60.0% (round 1) -> 75.0% (round 6)
+  RED coverage: 59.2% (round 1) -> 73.3% (round 6)
   Evolved config: res_span=20 dfa_persist=2 roll_persist=7 cusum_k=1.00 horizon=147553
   Zero-clean-alarm law verified on every accepted mutation.
 <!-- /example -->
