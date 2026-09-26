@@ -5,18 +5,23 @@ verbatim from the evaluation directory. The paths inside them are the author's m
 
 **What the record shows:**
 - The protocol was written before the first run.
-- It was amended thirteen times, and each amendment says what had been seen when it was written.
+- It was amended fourteen times, and each amendment says what had been seen when it was written.
 - It covers guard at struktura 1.8.5 (Amendment 3), f1f00f2 (Amendment 9), a49534a (Amendment 10),
   38cb83e (Amendment 11) and ccd86c5, the DFA flat-box fix (Amendment 12).
 - Amendment 13 is branch fix/parity-isolation (45b92ec). It did worse on this data and was not
   merged.
 - The report's follow-up to Amendment 13 checks guard's recovery back-off on channel 45.
+- Amendment 14 is branch fix/recovery-level (dac7c4c) against master faf1434. It was not merged.
+  - It detected more events: 8 of 29 against 3.
+  - It raised about 16 times the alarms (2,254 against 136) and nearly 4 times the quarantines (527
+    against 138).
 - It also covers the benchmark's `struktura_dfa` algorithm (Amendments 4-8), which is not on the
   scoreboard page.
 
 **File times (local, CEST).** The protocol file is appended to, so its time is that of the last
 amendment. These are local file times, not an independent timestamp.
-- `PROTOCOL.md`: 2026-09-26 14:43:15 (Amendment 12 appended)
+- `PROTOCOL.md`: 2026-09-26 23:10:24 (Amendment 14 appended)
+- dac7c4c prediction `run-dac7c4c/preds/guard.npz`: 2026-09-26 23:18:51
 - 38cb83e prediction `run-38cb83e/preds/guard.npz`: 2026-09-26 08:39:27
 - ccd86c5 prediction `run-ccd86c5/preds/guard.npz`: 2026-09-26 12:18:46
 
@@ -239,6 +244,19 @@ to 38cb83e). Reported whatever it gives: event kinds, alarm legs, alarm classes 
 same push loop), quarantine/unquarantine counts, and, if the prediction matrix differs, all six official metrics
 against 20 regenerated circular shifts. Decision rule stated by the maintainers before the run: the branch stays
 off master if quarantines or false alarms get worse or recall drops.
+
+## Amendment 14 (2026-09-26, written BEFORE the run below; requested by the struktura maintainers)
+Guard on commit dac7c4c (local branch fix/recovery-level, not pushed; on top of master faf1434). Recovery path
+only (src/monitor.rs, src/autopilot.rs): while parity is suspended because another channel is quarantined, a
+recovering channel needs its level back in the calibrated band before release, and a level alarm within the
+probation window after such a release re-quarantines it (class offset_after_recovery) instead of adapting.
+Baseline: master faf1434 differs from ccd86c5 only in src/bin/struktura.rs (the CLI binary, not compiled into the
+Python module), so the ccd86c5 run (Amendment 12, identical to 38cb83e) is the master baseline. Wheel built in my
+own worktree and target dir from dac7c4c, installed .pyd hash-checked. Same data, calibration block, cooldown 50,
+esa-adb/eval scripts. Reported whatever it gives: event kinds, alarm legs, alarm classes (including
+offset_after_recovery), quarantines/releases/adaptations per channel against the baseline, and, if the prediction
+matrix differs, all six official metrics against 20 regenerated circular shifts. No merge until reported (the
+maintainers' gate).
 ```
 
 ## Analysis report
@@ -358,7 +376,8 @@ for every channel, 20 seeds. p = (1 + #shifts >= observed) / 21, floor 0.048. `l
   (0.138), so there is no recall claim for causal mode. Affiliation F0.5 beats every shift and every random-runs
   control.
 - Amendment 7 rerun: grid of 12 (window 128-1024, threshold 2.5/3.5/5.0, causal), selection on train by channel
-  F0.5 picked w128 t2.5. On test it beats its shifts on no metric (smallest p 0.095). Tuning does not help;
+  F0.5 picked w128 t2.5. On test it beats its shifts on no metric (smallest p 0.238 on Anomaly labels; 0.095 is the RareEvent+Anomaly
+channel F0.5 row, corrected 2026-09-26 after an independent recount). Tuning does not help;
   defaults kept.
 
 ## Amendments 9-10 (2026-09-26): Guard with quarantine recovery (f1f00f2) and recovery back-off (a49534a)
@@ -427,4 +446,29 @@ span the replayed flap count implies, 3 quick re-fails (healthy gaps 23, 61, 68 
 median healthy gap 11,729. The back-off works as designed: ch45 sticks once every ~10k-50k rows of this
 forward-filled data, each healthy stretch is longer than the span, so the flap count resets and each stuck run
 costs one quarantine of about 192 samples.
+
+## Amendment 14 (2026-09-26): guard on dac7c4c (branch fix/recovery-level, not merged) vs master faf1434
+
+Both built in their own worktrees and target dirs, installed .pyd hash-checked (dac7c4c 73681f1c, faf1434
+3c3e76f0). Master faf1434 was built and run directly: predictions byte-identical to ccd86c5 (136 alarm ticks,
+0 cells differ). Independently confirmed by oura-0c's node npz diff (struktura-recovery/RESULT.md, Run 10).
+Events faf1434 -> dac7c4c: alarm 136 -> 2,254; quarantined 138 -> 527 (by channel 41..46 [25,15,17,14,48,19] ->
+[230,26,85,51,109,26]); unquarantined 134 -> 527; adaptation_started 10 -> 1,116; recalibrated 7 -> 707;
+rolled_back 0 -> 372; legs level_shift 9 -> 1,609, repeated_value 104 -> 464, residual_cusum 18 -> 357, dfa 0 -> 155,
+parity 4 -> 20, residual 1 -> 21; offset_after_recovery 19. Prediction matrix 2,626 vs 136 alarm ticks, 2,606 cells
+differ, first at tick 306,558. Rows with >= 2 channels quarantined: 14,717 (15 periods) -> 1,063,708 (18 periods).
+Where it diverges (full event streams, `run-*/events_*.csv`, `run-dac7c4c/events_compare.log`): all six channels are
+quarantined at rows 297,666-297,720 in both. Master releases ch46 at 306,548, alarms (level_shift/spike) at 306,558,
+adapts, recalibrates at 307,258 and releases all channels. The fix keeps ch46 quarantined (level not back in the
+calibrated band while parity is suspended), does not adapt, and releases every channel at 314,958 on the old
+calibration; adaptation attempts then recur through the rest of the file.
+Official metrics vs 20 regenerated shifts (master = 38cb83e/ccd86c5/faf1434 in brackets): Anomaly EW recall 0.276 =
+8/29 (0.103 = 3/29) p 0.048, EW precision 0.003 (0.030), EW F0.5 0.004 (0.035) p 0.048, alarming precision 0.229
+(0.167) p 0.333, AFF F0.5 0.574 (0.429) p 0.048, channel F0.5 0.175 (0.085) p 0.048. RareEvent+Anomaly EW recall
+0.446 = 29/65 (0.169 = 11/65) p 0.048, EW precision 0.012 (0.102), EW F0.5 0.014 (0.111) p 0.048, alarming
+precision 0.192 (0.289) p 0.429, AFF F0.5 0.573 (0.479) p 0.048, channel F0.5 0.288 (0.124) p 0.048. ADTQC
+0.932 / 0.879. So recall rose (8/29, 29/65, above every shift) while event-wise precision fell tenfold with about
+16x the alarms. Under the rule stated before the run (stays off master if quarantines or false alarms get worse or
+recall drops): quarantines and alarms are worse, so it stays off master; recall did not drop.
+`run-dac7c4c/{guard.log,compare.log,classes.log,summary.md,run.log}`, `run-faf1434/{guard.log,compare.log}`.
 ```
