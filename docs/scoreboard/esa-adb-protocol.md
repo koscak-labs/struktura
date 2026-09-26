@@ -5,15 +5,18 @@ verbatim from the evaluation directory. The paths inside them are the author's m
 
 **What the record shows:**
 - The protocol was written before the first run.
-- It was amended twelve times, and each amendment says what had been seen when it was written.
+- It was amended thirteen times, and each amendment says what had been seen when it was written.
 - It covers guard at struktura 1.8.5 (Amendment 3), f1f00f2 (Amendment 9), a49534a (Amendment 10),
   38cb83e (Amendment 11) and ccd86c5, the DFA flat-box fix (Amendment 12).
+- Amendment 13 is branch fix/parity-isolation (45b92ec). It did worse on this data and was not
+  merged.
+- The report's follow-up to Amendment 13 checks guard's recovery back-off on channel 45.
 - It also covers the benchmark's `struktura_dfa` algorithm (Amendments 4-8), which is not on the
   scoreboard page.
 
 **File times (local, CEST).** The protocol file is appended to, so its time is that of the last
 amendment. These are local file times, not an independent timestamp.
-- `PROTOCOL.md`: 2026-09-26 12:17:49 (Amendment 12 appended)
+- `PROTOCOL.md`: 2026-09-26 14:43:15 (Amendment 12 appended)
 - 38cb83e prediction `run-38cb83e/preds/guard.npz`: 2026-09-26 08:39:27
 - ccd86c5 prediction `run-ccd86c5/preds/guard.npz`: 2026-09-26 12:18:46
 
@@ -224,6 +227,18 @@ may change. Same data (prep output), same calibration block, cooldown 50, same s
 prediction matrix is byte-identical to 38cb83e/a342c16, that is reported and nothing else is re-scored; otherwise
 the 20 circular shifts are regenerated and all 21 predictions scored with the official code, reported whatever
 they score.
+
+## Amendment 13 (2026-09-26, written BEFORE the run below; requested by the struktura maintainers)
+Guard on branch fix/parity-isolation, head 45b92ec (NOT on master; on top of master fe32e6a, whose src equals
+ccd86c5). Parity leg only: a channel is quarantined only if it stays inconsistent whichever single other channel
+is left out, otherwise the alarm is class "cross_channel_ambiguous" and nothing is quarantined (with a hold);
+channels whose calibration values or reconstruction residual are >= 50% explained by a line in time are not
+parity targets. Wheel built from a FRESH clone at 45b92ec (own target dir), installed .pyd hash-checked. Same
+data, calibration block, cooldown 50, esa-adb/eval scripts. Baseline = the ccd86c5 run (Amendment 12, identical
+to 38cb83e). Reported whatever it gives: event kinds, alarm legs, alarm classes (separate counting pass with the
+same push loop), quarantine/unquarantine counts, and, if the prediction matrix differs, all six official metrics
+against 20 regenerated circular shifts. Decision rule stated by the maintainers before the run: the branch stays
+off master if quarantines or false alarms get worse or recall drops.
 ```
 
 ## Analysis report
@@ -386,4 +401,30 @@ gave -1.606352 / 0.023052, so the fix is in the module. Guard prediction matrix 
 (136 alarm ticks, 0 cells differ), event kinds and alarm legs identical: the DFA leg raised no alarm on this data
 before or after. Per the amendment, nothing re-scored; the page's 38cb83e scores hold for ccd86c5.
 `run-ccd86c5/guard.log`, `run-ccd86c5/compare.log`.
+
+## Amendment 13 (2026-09-26): guard on branch fix/parity-isolation 45b92ec (not on master)
+
+Fresh clone, installed .pyd hash-checked; class counts from `guard_classes.py`, each run with its own hash-checked
+wheel. Prediction matrix differs from master (ccd86c5): 228 vs 136 alarm ticks, 196 cells.
+Master -> 45b92ec: alarm 136 -> 228; quarantined 138 -> 232 (channel 45: 48 -> 146, others within 3);
+unquarantined 134 -> 229; adaptation_started 10 -> 9; repeated_value/stuck 104 -> 201; parity 4
+cross_channel_inconsistency -> 2 cross_channel_ambiguous (reported channels 41 and 43); level_shift 9 -> 8;
+residual_cusum 18 -> 15; residual 1 -> 2. Alarm ticks per channel 41..46 [42,5,23,12,41,13] -> [42,5,20,11,140,10].
+Official metrics vs 20 regenerated shifts (master in brackets): Anomaly EW recall 0.103 (0.103) p 0.048, EW F0.5
+0.018 (0.035) p 0.048, channel F0.5 0.082 (0.085) p 0.048, AFF F0.5 0.362 (0.429) p 0.238 (was 0.048), alarming
+precision 0.167 (0.167) p 0.476. RareEvent+Anomaly EW recall 0.154 = 10/65 (0.169 = 11/65) p 0.048, EW F0.5 0.056
+(0.111), AFF F0.5 0.403 (0.479) p 0.048, channel F0.5 0.111 (0.124), alarming precision 0.303 (0.289) p 0.381.
+ADTQC 0.992 / 0.895. Under the rule stated before the run (stays off master if quarantines or false alarms get
+worse or recall drops): quarantines +94, alarms +92, R+A recall -1 event, so it stays off master on this data.
+`run-45b92ec/{guard.log,compare.log,classes.log,summary.md,run.log}`.
+
+Follow-up (maintainers asked whether the recovery back-off counter misbehaves on channel 45): every ch45
+quarantine, release and alarm logged on master (ccd86c5, same predictions as 38cb83e) and on 45b92ec
+(`ch45_timeline.py`), then the back-off rule of autopilot.rs (next_flaps, recovery_span) replayed over those
+ticks (`ch45_replay.py`, `ch45_replay.log`). Master: 48 quarantines, 47 releases, 0 releases shorter than the
+span the replayed flap count implies, 3 quick re-fails (healthy gaps 23, 61, 68 samples), median healthy gap
+43,779 rows, median quarantine 192 samples (max 9,585). 45b92ec: 146 / 145, 0 short releases, 3 quick re-fails,
+median healthy gap 11,729. The back-off works as designed: ch45 sticks once every ~10k-50k rows of this
+forward-filled data, each healthy stretch is longer than the span, so the flap count resets and each stuck run
+costs one quarantine of about 192 samples.
 ```
