@@ -4,6 +4,17 @@ All notable changes to Struktura are documented here.
 
 ## Unreleased
 
+- `guard`: a channel that is constant in the calibration rows (a valve, a
+  status flag) has no noise to measure against, so its residual scale sits
+  at the 1e-9 floor and any change alarms. That part is deliberate; what was
+  wrong is that guard said nothing at calibration and then printed the
+  floor's artifact as the alarm's size ("155402461.9x threshold" for a
+  valve going 0 -> 1). guard now names such channels at calibration, says a
+  `--baseline` covering their normal changes avoids it, and prints
+  "changed; constant in its baseline" instead of the ratio (JSON adds
+  `"baseline_constant":true`). With a baseline that covers the switching,
+  the same valve raises nothing. Ledger row guard-constant-baseline-channel.
+  The monitor and the generated C are unchanged. (Audit finding.)
 - CSV input (`guard`, `watch`, `report`), two audit findings:
   - A quoted field containing the delimiter (a header like `"Temp, C"`)
     was split in two, so every later name landed on the wrong column: a

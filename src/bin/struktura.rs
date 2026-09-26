@@ -4214,6 +4214,19 @@ fn run_guard(content: &str, baseline_n: usize, json: bool, cfg: struktura::monit
     let ch_name = |idx: usize| -> String {
         col_names.get(idx).cloned().unwrap_or_else(|| format!("ch{}", idx))
     };
+    // A channel that was constant in its baseline has no noise to measure
+    // against: its residual scale sits at the 1e-9 floor, any change alarms,
+    // and observed/threshold is an artifact of the floor (1.5e8x for a 0 -> 1
+    // valve). Say so instead of printing that ratio.
+    let baseline_constant = |ap: &AutoPilot, ch: usize| {
+        ap.monitor().export().channels.get(ch).is_some_and(|c| c.ar_sd <= 1e-9)
+    };
+    if !json {
+        for ch in (0..ncols).filter(|&ch| baseline_constant(&ap, ch)) {
+            eprintln!("  note: {} is constant in the calibration rows: any change is reported, and how far it is over the threshold is not meaningful; a --baseline that covers its normal changes avoids this",
+                ch_name(ch));
+        }
+    }
     let mut alarm_count = 0usize;
     let mut adapt_count = 0usize;
     let mut quarantine_count = 0usize;
@@ -4242,9 +4255,12 @@ fn run_guard(content: &str, baseline_n: usize, json: bool, cfg: struktura::monit
                     let explanation = struktura::monitor::explain_alarm(report);
                     let name = ch_name(report.channel);
                     let score_ratio = report.observed / report.threshold.max(1e-12);
+                    let flat = baseline_constant(&ap, report.channel);
                     if json {
-                        println!("{{\"event\":\"alarm\",\"t\":{},\"channel\":\"{}\",\"class\":\"{}\",\"score_ratio\":{:.2},\"explanation\":\"{}\"}}",
-                            t, name, class, score_ratio, explanation);
+                        println!("{{\"event\":\"alarm\",\"t\":{},\"channel\":\"{}\",\"class\":\"{}\",\"score_ratio\":{:.2},{}\"explanation\":\"{}\"}}",
+                            t, name, class, score_ratio, if flat { "\"baseline_constant\":true," } else { "" }, explanation);
+                    } else if flat {
+                        eprintln!("  row {:>6}  ⚠ {} (changed; constant in its baseline): {}", t, name, explanation);
                     } else {
                         eprintln!("  row {:>6}  ⚠ {} ({:.1}x threshold): {}", t, name, score_ratio, explanation);
                     }
