@@ -4,6 +4,28 @@ All notable changes to Struktura are documented here.
 
 ## Unreleased
 
+- Documented limitation (README, Limitations; `examples/recovery_offset_eval.rs`,
+  ledger row limitation-recovery-offset-without-parity): a quarantined
+  sensor that comes back while parity is suspended, because another channel
+  is quarantined, is judged on its own readings only. A constant offset
+  passes the recovery checks, and the next adaptation can make it the
+  baseline. The oura-26/oura-0c session's scenario s8 has two sensors stuck,
+  one of them back +5: released 10 of 10 seeds, offset adapted to 10 of 10.
+  The healthy control is released 10 of 10 with no adaptation.
+  A fix was built and rejected (branch fix/recovery-level):
+  - release only once the level is back in the calibrated band;
+  - then probation, where a level alarm re-quarantines instead of adapting.
+  It fixed s8 and changed nothing on NAB or the bundled CSVs, but failed on
+  ESA-ADB Mission 1 (github-profile-space-robotics session, protocol
+  Amendment 14): alarms 136 -> 2,254, quarantines 138 -> 527, adaptations
+  10 -> 1,116. There, outages end at a genuinely new level, and the rule
+  blocked the one recalibration that absorbs it. The extra alarms did catch
+  more labelled events (Anomaly event-wise recall 3/29 -> 8/29, Rare Event
+  + Anomaly 11/65 -> 29/65), but event-wise precision fell about tenfold
+  (Anomaly 0.030 -> 0.003, F0.5 0.035 -> 0.004). More alarms and
+  quarantines fail the merge rule. On the simulated rover it
+  held back a healthy sensor whose level had moved with the battery
+  discharge.
 - `struktura rover` (the demo) printed at most one alarm per 200 steps
   across all channels, so recurring thermal alarms hid others: the battery
   cell degradation it scripts at step 2600 was detected (battery voltage at
