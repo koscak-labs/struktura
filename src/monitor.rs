@@ -342,6 +342,8 @@ struct ChannelState {
     ring: [f64; WINDOW],
     roll_ring: [f64; ROLL],
     prev: f64,
+    /// Change from the previous sample to `prev` (0 for a missing sample).
+    dlast: f64,
     run: usize,
     cusum_pos: f64,
     cusum_neg: f64,
@@ -381,16 +383,24 @@ pub struct HybridMonitor {
     scratch: Vec<f64>,
     alarmed: bool,
     last_alarm: Option<AlarmReport>,
-    /// Cross-channel reconstruction models (analytical redundancy).
+    /// Cross-channel reconstruction models (analytical redundancy), in
+    /// levels: virtual readings and the recovery check.
     recon: Vec<Reconstructor>,
-    /// Parity-leg threshold (Gumbel return level of calibration parity z).
+    /// The same models fitted on sample-to-sample changes: the parity leg.
+    drecon: Vec<Reconstructor>,
+    /// Parity-leg threshold (Gumbel return level of calibration parity z,
+    /// on changes).
     parity_thr: f64,
+    /// Threshold of the level models' z, for the recovery check.
+    level_parity_thr: f64,
     /// Channels switched to virtual mode (dead sensor; reconstruction
     /// substitutes, own legs disabled).
     quarantined: Vec<bool>,
     /// Parity predictions for the sample being fed by `push_with_validity`,
     /// computed from that sample's own values (NaN outside that call).
     sample_pred: Vec<f64>,
+    /// The same for the change models: predicted change of each channel.
+    dsample_pred: Vec<f64>,
     /// Per-leg enable mask: [residual, repeated, dfa, level, cusum, miss, parity].
     /// Legs whose stationarity assumptions a deployment cannot meet
     /// (e.g. level-shift on a naturally trending channel) are disabled
@@ -787,21 +797,36 @@ impl HybridMonitor {
         // standardized reconstruction error.
         let recon: Vec<Reconstructor> =
             (0..channels).map(|t| fit_reconstructor(clean, t)).collect();
+        // The parity leg compares changes, not levels. A level model fitted on
+        // a short calibration borrows whatever trend a source had there (a
+        // battery discharging linearly) and extrapolates it into a channel
+        // that only moved with it by chance: on the simulated rover a healthy
+        // sensor was quarantined in every clean run about 100 samples after
+        // calibration. Sample-to-sample changes carry the coupling (a wheel
+        // stall moves current and speed together) without the trends.
+        let diffs: Vec<Vec<f64>> =
+            clean.iter().map(|c| c.windows(2).map(|w| w[1] - w[0]).collect()).collect();
+        let drecon: Vec<Reconstructor> =
+            (0..channels).map(|t| fit_reconstructor(&diffs, t)).collect();
         // Parity needs at least two channels: with one, every reconstructor has
         // zero sources, so `pred == bias == mean` and the leg degenerates to a raw
         // |v - mean| / sd z-score that duplicates the residual leg without the
         // AR(1) term (koscak-labs/struktura#16). Inert below two channels.
-        let parity_thr = if channels >= 2 {
-            let mut parity_scores = Vec::with_capacity(length);
-            for t in 0..length {
+        let parity_level = |models: &[Reconstructor], data: &[Vec<f64>]| {
+            if channels < 2 {
+                return f64::INFINITY;
+            }
+            let n = data[0].len();
+            let mut parity_scores = Vec::with_capacity(n);
+            for t in 0..n {
                 let mut mz = 0.0f64;
                 for ch in 0..channels {
-                    let r = &recon[ch];
+                    let r = &models[ch];
                     let mut pred = r.bias;
-                    for (s, c) in clean.iter().enumerate() {
+                    for (s, c) in data.iter().enumerate() {
                         pred += r.weights[s] * c[t];
                     }
-                    let z = (clean[ch][t] - pred).abs() / r.sd;
+                    let z = (data[ch][t] - pred).abs() / r.sd;
                     if z > mz {
                         mz = z;
                     }
@@ -809,9 +834,9 @@ impl HybridMonitor {
                 parity_scores.push(mz);
             }
             gumbel_return_level(&parity_scores, config.design_horizon)
-        } else {
-            f64::INFINITY
         };
+        let parity_thr = parity_level(&drecon, &diffs);
+        let level_parity_thr = parity_level(&recon, clean);
 
         let state = clean
             .iter()
@@ -819,6 +844,7 @@ impl HybridMonitor {
                 ring: [0.0; WINDOW],
                 roll_ring: [0.0; ROLL],
                 prev: c[length - 1],
+                dlast: 0.0,
                 run: 1,
                 cusum_pos: 0.0,
                 cusum_neg: 0.0,
@@ -845,13 +871,16 @@ impl HybridMonitor {
             alarmed: false,
             last_alarm: None,
             recon,
+            drecon,
             parity_thr,
+            level_parity_thr,
             quarantined: {
                 let mut q = Vec::with_capacity(channels);
                 q.resize(channels, false);
                 q
             },
             sample_pred: vec![f64::NAN; channels],
+            dsample_pred: vec![f64::NAN; channels],
             leg_enabled: [true, true, true, true, true, true, channels >= 2],
             config,
         })
@@ -900,6 +929,13 @@ impl HybridMonitor {
                 pred += r.weights[s] * x;
             }
             self.sample_pred[ch] = pred;
+            let d = &self.drecon[ch];
+            let mut dpred = d.bias;
+            for (s, st) in self.state.iter().enumerate() {
+                let x = if valid.get(s).copied().unwrap_or(true) { sample[s] } else { st.prev };
+                dpred += d.weights[s] * (x - st.prev);
+            }
+            self.dsample_pred[ch] = dpred;
         }
         let mut first: Option<(Leg, Option<AlarmReport>)> = None;
         for (ch, &v) in sample.iter().enumerate() {
@@ -911,6 +947,7 @@ impl HybridMonitor {
             }
         }
         self.sample_pred.fill(f64::NAN);
+        self.dsample_pred.fill(f64::NAN);
         let (leg, report) = first?;
         self.alarmed = true;
         self.last_alarm = report;
@@ -941,11 +978,14 @@ impl HybridMonitor {
                 }
                 _ => None,
             };
-            let (res_thr, parity_thr) = (self.res_thr, self.parity_thr);
+            // Recovery is judged in levels: a sensor back with a constant
+            // offset changes like the others do, so only levels can catch it.
+            let (res_thr, parity_thr) = (self.res_thr, self.level_parity_thr);
             let cc = &self.calib[ch];
             let st = &mut self.state[ch];
             let t = st.t;
             st.t += 1;
+            st.dlast = virt - st.prev;
             st.prev = virt;
             st.ring[(t % WINDOW as u64) as usize] = virt;
             st.roll_ring[(t % ROLL as u64) as usize] = virt;
@@ -966,13 +1006,13 @@ impl HybridMonitor {
         }
         // Parity prediction must be computed before borrowing state mutably.
         let parity_pred = {
-            let r = &self.recon[ch];
-            let mut pred = self.sample_pred[ch];
+            let r = &self.drecon[ch];
+            let mut pred = self.dsample_pred[ch];
             if pred.is_nan() {
-                // Fed one channel at a time: the latest value of each other channel.
+                // Fed one channel at a time: the latest change of each other channel.
                 pred = r.bias;
                 for (s, stx) in self.state.iter().enumerate() {
-                    pred += r.weights[s] * stx.prev;
+                    pred += r.weights[s] * stx.dlast;
                 }
             }
             (pred, r.sd)
@@ -989,6 +1029,7 @@ impl HybridMonitor {
         if t == 0 {
             if let Some(v) = value {
                 st.prev = v;
+                st.dlast = 0.0;
                 st.ring[0] = v;
                 st.roll_ring[0] = v;
             }
@@ -999,6 +1040,7 @@ impl HybridMonitor {
             Some(v) => v,
             None => {
                 // Missing sample: forward-fill rings, count for leg 6.
+                st.dlast = 0.0;
                 st.ring[(t % WINDOW as u64) as usize] = st.prev;
                 st.roll_ring[(t % ROLL as u64) as usize] = st.prev;
                 if self.leg_enabled[5] {
@@ -1043,6 +1085,7 @@ impl HybridMonitor {
         } else {
             st.run = 1;
         }
+        st.dlast = v - st.prev;
         st.prev = v;
         st.ring[(t % WINDOW as u64) as usize] = v;
         st.roll_ring[(t % ROLL as u64) as usize] = v;
@@ -1066,12 +1109,12 @@ impl HybridMonitor {
                 return Some(Leg::Residual);
             }
         }
-        // Leg 7: cross-channel parity (2-in-20 persistence). Skipped while
-        // any channel is quarantined — a substituted reading would feed the
-        // predictor its own reconstruction.
+        // Leg 7: cross-channel parity on changes (2-in-20 persistence).
+        // Skipped while any channel is quarantined — a substituted reading
+        // would feed the predictor its own reconstruction.
         if self.leg_enabled[6] && !self.quarantined.iter().any(|&q| q) {
             let (pred, sd) = parity_pred;
-            let pz = (v - pred).abs() / sd;
+            let pz = (st.dlast - pred).abs() / sd;
             if pz > self.parity_thr {
                 for i in 1..RES_HITS {
                     st.parity_hit_times[i - 1] = st.parity_hit_times[i];
@@ -1228,6 +1271,7 @@ impl HybridMonitor {
         if ch < self.calib.len() && other.calib.len() == self.calib.len() {
             self.calib[ch] = other.calib[ch].clone();
             self.recon[ch] = other.recon[ch].clone();
+            self.drecon[ch] = other.drecon[ch].clone();
         }
     }
 
@@ -1242,6 +1286,7 @@ impl HybridMonitor {
                 st.ring = st.q_ring;
                 st.roll_ring = st.q_ring;
                 st.prev = st.q_prev;
+                st.dlast = 0.0;
                 st.run = st.q_run;
             }
             st.q_good = 0;
@@ -1416,6 +1461,49 @@ mod tests {
         let mon2 = HybridMonitor::calibrate(&two).expect("calibration");
         assert!(mon2.leg_enabled[6], "parity must stay enabled with two channels");
         assert!(mon2.parity_thr.is_finite());
+    }
+
+    /// First parity alarm on the simulated rover, calibrated on steps
+    /// 0..1000 and streamed 1000..3000 (examples/parity_eval.rs).
+    fn rover_first_parity_alarm(seed: u64, fault: Option<crate::rover::RoverFault>) -> Option<(usize, usize)> {
+        let mut sim = crate::rover::RoverSim::new(seed);
+        if let Some(f) = fault {
+            sim.inject(1500, f);
+        }
+        let data = sim.run(3000);
+        let calib: Vec<Vec<f64>> = data.iter().map(|c| c[..1000].to_vec()).collect();
+        let mut mon = HybridMonitor::calibrate(&calib).expect("calibration");
+        // The parity leg alone: other legs firing first would reset its hits.
+        mon.leg_enabled = [false, false, false, false, false, false, true];
+        let mut sample = vec![0.0f64; data.len()];
+        for t in 1000..3000 {
+            for (ch, c) in data.iter().enumerate() {
+                sample[ch] = c[t];
+            }
+            if mon.push(&sample).is_some() {
+                let r = mon.last_alarm().expect("report");
+                if r.leg == Leg::Parity {
+                    return Some((t, r.channel));
+                }
+                mon.reset();
+            }
+        }
+        None
+    }
+
+    /// The parity leg compares changes, not levels. Fitted on levels over a
+    /// 1,000-step calibration, it reconstructed the rover's comm signal from
+    /// the battery's linear discharge and quarantined that healthy sensor
+    /// about 100 steps after calibration in every clean run. A stalled wheel,
+    /// which breaks how current and the other channels change together, must
+    /// still be caught by parity on the stalled wheel.
+    #[test]
+    fn parity_on_changes_keeps_quiet_on_trends_and_catches_a_stall() {
+        for seed in 1..=10 {
+            assert_eq!(rover_first_parity_alarm(seed, None), None, "seed {seed}: parity alarm on a clean run");
+        }
+        let stall = rover_first_parity_alarm(7, Some(crate::rover::RoverFault::WheelStall { wheel: 2 }));
+        assert!(matches!(stall, Some((t, 2)) if t >= 1500), "stall not caught on the stalled wheel: {stall:?}");
     }
 
     #[test]
