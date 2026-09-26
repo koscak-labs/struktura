@@ -570,27 +570,24 @@ fn solve_linear(a: &mut [f64], b: &mut [f64], n: usize) -> bool {
 }
 
 /// A channel is no parity target when a straight line in time explains at
-/// least this share of its calibration reconstruction residual.
+/// least this share of its calibration values or of its reconstruction
+/// residual.
 const PARITY_TREND_R2: f64 = 0.5;
 
-/// R² of a straight line in time through channel `ch`'s calibration
-/// reconstruction residuals (`resid[t * channels + ch]`); 0 when they are
-/// constant.
-fn residual_trend_r2(resid: &[f64], channels: usize, ch: usize, length: usize) -> f64 {
+/// R² of a straight line in time through `y(0..length)`, from centred sums;
+/// 0 when `y` is constant.
+fn trend_r2(y: impl Fn(usize) -> f64, length: usize) -> f64 {
     let n = length as f64;
-    let (mut st, mut stt, mut sr, mut srr, mut str_) = (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    let tbar = (n - 1.0) / 2.0;
+    let ybar = (0..length).map(&y).sum::<f64>() / n;
+    let (mut sty, mut stt, mut syy) = (0.0f64, 0.0f64, 0.0f64);
     for t in 0..length {
-        let (x, r) = (t as f64, resid[t * channels + ch]);
-        st += x;
-        stt += x * x;
-        sr += r;
-        srr += r * r;
-        str_ += x * r;
+        let (dt, dy) = (t as f64 - tbar, y(t) - ybar);
+        sty += dt * dy;
+        stt += dt * dt;
+        syy += dy * dy;
     }
-    let cov = str_ / n - (st / n) * (sr / n);
-    let var_t = stt / n - (st / n) * (st / n);
-    let var_r = srr / n - (sr / n) * (sr / n);
-    if var_t > 0.0 && var_r > 0.0 { cov * cov / (var_t * var_r) } else { 0.0 }
+    if stt > 0.0 && syy > 0.0 { sty * sty / (stt * syy) } else { 0.0 }
 }
 
 /// Fit `target = bias + Σ w_j · source_j` (j ≠ target) by least squares
@@ -873,13 +870,19 @@ impl HybridMonitor {
                 }
             }
         }
-        // A channel whose reconstruction residual still carries a time trend
-        // (a battery's state of charge, integrated from the others) has no
-        // static relation to them: once it leaves its calibrated range the
-        // relation extrapolates, and parity blamed its normal discharge. Such
-        // a channel is no parity target, and stays out of the threshold.
+        // A channel dominated by a time trend during calibration (a battery's
+        // state of charge) has no stationary relation to the others: fitted
+        // on trending data the relation is mostly the shared trend, and once
+        // the channel leaves its calibrated range it extrapolates, so parity
+        // blamed a battery's normal discharge. The same holds when the
+        // reconstruction leaves a trend in the residual. Such a channel is no
+        // parity target, and stays out of the threshold.
         let parity_target: Vec<bool> = (0..channels)
-            .map(|ch| channels >= 2 && residual_trend_r2(&resid_buf, channels, ch, length) < PARITY_TREND_R2)
+            .map(|ch| {
+                channels >= 2
+                    && trend_r2(|t| clean[ch][t], length) < PARITY_TREND_R2
+                    && trend_r2(|t| resid_buf[t * channels + ch], length) < PARITY_TREND_R2
+            })
             .collect();
         let parity_thr = if parity_target.iter().any(|&p| p) {
             let parity_scores: Vec<f64> = (0..length)

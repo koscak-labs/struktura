@@ -3711,8 +3711,10 @@ fn cmd_rover() {
 
     let valid = [true; ROVER_CHANNELS];
     let mut sample = [0.0f64; ROVER_CHANNELS];
-    let mut _last_leg = 255u8;
-    let mut last_t = 0usize;
+    // Repeats of one channel's leg within 200 samples are one fault; another
+    // channel is another fault (a single 200-sample window over all channels
+    // hid the battery alarms behind recurring thermal ones).
+    let mut last_alarm: Vec<(usize, (usize, u8))> = Vec::new();
     let mut alarm_count = 0usize;
     let mut q_count = 0usize;
     for t in 1000..3000 {
@@ -3720,9 +3722,12 @@ fn cmd_rover() {
         for ev in ap.push(&sample, &valid) {
             match &ev {
                 Event::Alarm { report, class, .. } => {
-                    let lid = report.leg as u8;
-                    if t - last_t < 200 { continue; }
-                    _last_leg = lid; last_t = t; alarm_count += 1;
+                    let key = (report.channel, report.leg as u8);
+                    let dup = last_alarm.iter().any(|&(lt, k)| k == key && t - lt < 200);
+                    last_alarm.retain(|&(lt, _)| t - lt < 200);
+                    last_alarm.push((t, key));
+                    if dup { continue; }
+                    alarm_count += 1;
                     let ch_name = ROVER_CHANNEL_NAMES.get(report.channel).unwrap_or(&"?");
                     let explanation = if *class == "cross_channel_ambiguous" { AMBIGUOUS_PARITY } else { explain_alarm(report) };
                     println!("  t={:>5}  ⚠ {}: {}", t, ch_name, explanation);
