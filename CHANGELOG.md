@@ -19,7 +19,11 @@ All notable changes to Struktura are documented here.
   ESA-ADB Mission 1 (github-profile-space-robotics session, protocol
   Amendment 14): alarms 136 -> 2,254, quarantines 138 -> 527, adaptations
   10 -> 1,116. There, outages end at a genuinely new level, and the rule
-  blocked the one recalibration that absorbs it. On the simulated rover it
+  blocked the one recalibration that absorbs it. The extra alarms did catch
+  more labelled events (Anomaly event-wise recall 3/29 -> 8/29, Rare Event
+  + Anomaly 11/65 -> 29/65), but event-wise precision fell about tenfold
+  (Anomaly 0.030 -> 0.003, F0.5 0.035 -> 0.004). More alarms and
+  quarantines fail the merge rule. On the simulated rover it
   held back a healthy sensor whose level had moved with the battery
   discharge.
 - `struktura rover` (the demo) printed at most one alarm per 200 steps
