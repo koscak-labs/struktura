@@ -49,9 +49,15 @@ All notable changes to Struktura are documented here.
   - every bundled CSV's `guard`, `guard --json` and `copilot-compare`
     byte-identical;
   - the oura-26 session's other 89 recovery files byte-identical;
-  - `examples/parity_eval.rs` totals identical. In its SEEDS=60 BREAKDOWN=1
-    list, 7 false battery-voltage level alarms in fault runs fire 22-224
-    samples later, same count; not traced.
+  - `examples/parity_eval.rs` totals identical. In 8 of the 60 fault runs
+    the known false parity quarantine at ~1100 (comm_signal, once
+    battery_soc) and the scripted wheel-current fault at ~1510 leave two
+    channels quarantined. There, master released the falsely quarantined
+    channel at 2299-2328, because parity was suspended, not because it had
+    cleared it: the clean runs of the same seeds never release it. The
+    fix keeps it quarantined, as the clean runs do. In 7 of those runs the
+    next false battery-voltage level alarm then fires 22-224 samples later
+    (same count).
   oura-0c reproduced the outputs independently on its frozen 119-file
   harness: 228 of 238 identical, only the s8 files differ, and 0 of 20
   failures on two new one-channel scenarios.
