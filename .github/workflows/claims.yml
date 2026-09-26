@@ -32,11 +32,37 @@ jobs:
           mkdir -p "$RUNNER_TEMP/opssat"
           curl -fsSL --retry 3 -o "$RUNNER_TEMP/opssat/segments.csv" "https://zenodo.org/records/12588359/files/segments.csv?download=1"
           echo "dab2e01e873c93590692b50a7cc312d9cce4d5ba7e69ce8015603c47a8ffb97b  $RUNNER_TEMP/opssat/segments.csv" | sha256sum -c -
+      # UCR Anomaly Archive 2021 (examples/ucr_eval.rs, docs/scoreboard/ucr.md),
+      # pinned by the hash of the archive the published numbers came from.
+      - name: fetch UCR anomaly archive
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: |
+          mkdir -p "$RUNNER_TEMP/ucr" && cd "$RUNNER_TEMP/ucr"
+          curl -fsSL --retry 3 -O https://www.cs.ucr.edu/~eamonn/time_series_data_2018/UCR_TimeSeriesAnomalyDatasets2021.zip
+          echo "ac4b991c701e620ae9cc5ebd57ae45593a36cc9c0b6ed5e3c4b7e466cf4783d4  UCR_TimeSeriesAnomalyDatasets2021.zip" | sha256sum -c -
+          unzip -q UCR_TimeSeriesAnomalyDatasets2021.zip 'AnomalyDatasets_2021/UCR_TimeSeriesAnomalyDatasets2021/FilesAreInHere/UCR_Anomaly_FullData/*'
+      # PhysioNet nsr2db and chf2db 1.0.0 (examples/hrv_eval.rs, docs/scoreboard/hrv.md):
+      # each checksum list pinned by its own hash, every file checked against it.
+      - name: fetch PhysioNet nsr2db and chf2db
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: |
+          for pair in nsr2db:8c4a45bc0cfcee86ac3427425d3e82d0194242de289d9efa7df99d823d50b4f9 chf2db:3a8cc781670b9cd85e3ab888bef73c74e9d486e6ff5937ac63ab34513eac5e3b; do
+            db=${pair%%:*}; sums=${pair#*:}
+            mkdir -p "$RUNNER_TEMP/physionet/$db" && cd "$RUNNER_TEMP/physionet/$db"
+            curl -fsSL --retry 3 -O "https://physionet.org/files/$db/1.0.0/SHA256SUMS.txt"
+            echo "$sums  SHA256SUMS.txt" | sha256sum -c -
+            for f in $(grep -oE '[^ ]+\.(hea|ecg)$|RECORDS$' SHA256SUMS.txt); do
+              curl -fsSL --retry 3 -O "https://physionet.org/files/$db/1.0.0/$f"
+            done
+            grep -E ' (RECORDS|[^ ]+\.(hea|ecg))$' SHA256SUMS.txt | sha256sum -c --quiet -
+          done
       - name: check-claims.sh
         env:
           STRUKTURA_BIN: ${{ github.workspace }}/target/release/struktura
           NAB_DIR: ${{ runner.temp }}/nab
           OPSSAT_DIR: ${{ runner.temp }}/opssat
+          UCR_DIR: ${{ runner.temp }}/ucr/AnomalyDatasets_2021/UCR_TimeSeriesAnomalyDatasets2021/FilesAreInHere/UCR_Anomaly_FullData
+          PHYSIONET_DIR: ${{ runner.temp }}/physionet
         run: |
           chmod +x scripts/check-claims.sh
           if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then

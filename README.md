@@ -98,6 +98,11 @@ Reproduce: clone NAB (commit `ea702d7`) and run `NAB_DIR=path/to/NAB cargo run -
 
 Two limits: this is segment classification (one score per labelled segment), not the streaming `guard`; and the nominal reference per channel comes from the training labels, so it is not fully unsupervised. Details: [docs/scoreboard/opssat.md](docs/scoreboard/opssat.md). Reproduce with `OPSSAT_DIR=path/to/data cargo run --release --example opssat_eval` (weekly in CI, data pinned by SHA-256).
 
+More scoreboards, each with its protocol, controls and limits, re-run weekly in CI on hash-pinned data:
+
+- [UCR Anomaly Archive](docs/scoreboard/ucr.md), 250 series with one anomaly each: `guard`'s first alarm is within tolerance on 67/250 (0.268). It stays silent on 151 series, and a plain largest-first-difference baseline scores 0.312; the difference between the two is not significant (McNemar p = 0.215).
+- [Heart-rate variability](docs/scoreboard/hrv.md), PhysioNet heart failure (29) vs healthy (54): the short-term DFA exponent is lower in heart failure (AUC 0.829), but SDNN alone separates the groups at least as well (0.897) and alpha1 adds nothing on top of it. Not a diagnostic.
+
 ## 🎯 Who it is for
 
 You have a time series and no labelled faults to train on:
