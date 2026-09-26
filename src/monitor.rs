@@ -1198,7 +1198,20 @@ impl HybridMonitor {
     /// quarantined) consistent with the other channels.
     #[must_use]
     pub fn recovered(&self, ch: usize) -> bool {
-        ch < self.quarantined.len() && self.quarantined[ch] && self.state[ch].q_good >= RECOVER_SPAN
+        self.healthy_run(ch) >= RECOVER_SPAN && self.is_quarantined(ch)
+    }
+
+    /// Consecutive real readings of a quarantined channel that have passed
+    /// the recovery checks so far (0 when not quarantined or just failed).
+    #[must_use]
+    pub fn healthy_run(&self, ch: usize) -> usize {
+        if self.is_quarantined(ch) { self.state[ch].q_good } else { 0 }
+    }
+
+    /// Whether a channel is currently quarantined.
+    #[must_use]
+    pub fn is_quarantined(&self, ch: usize) -> bool {
+        self.quarantined.get(ch).copied().unwrap_or(false)
     }
 
     /// Return a quarantined channel to normal operation. If it has recovered,

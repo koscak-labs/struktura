@@ -30,8 +30,10 @@
 
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
+#[cfg(not(feature = "std"))]
+use alloc::vec;
 
-use crate::monitor::{classify_alarm, AlarmReport, HybridMonitor, Leg};
+use crate::monitor::{classify_alarm, AlarmReport, HybridMonitor, Leg, RECOVER_SPAN};
 
 /// Samples of the new regime collected before candidate calibration.
 pub const RECAL_WINDOW: usize = 400;
@@ -54,7 +56,7 @@ pub enum Event {
     /// A channel was declared dead and switched to virtual mode.
     Quarantined { tick: u64, channel: usize },
     /// A quarantined channel's own readings passed the recovery checks for
-    /// [`crate::monitor::RECOVER_SPAN`] samples; it is monitored again.
+    /// [`recovery_span`] samples in a row; it is monitored again.
     Unquarantined { tick: u64, channel: usize },
     /// A level shift triggered adaptation; candidate collection started.
     AdaptationStarted { tick: u64 },
@@ -89,10 +91,37 @@ pub struct AutoPilot {
     /// (one fault, one report) and adaptation stays refused while the
     /// trend persists.
     drift_latch: Vec<Option<u64>>,
+    /// Per channel: tick of the last release from quarantine, and how many
+    /// times in a row it failed again before staying healthy for its
+    /// current recovery span. Each such flap doubles the span.
+    released_at: Vec<Option<u64>>,
+    flaps: Vec<u32>,
 }
 
 /// A drift latch decays after this many quiet samples on the channel.
 pub const DRIFT_LATCH_DECAY: u64 = 2000;
+
+/// A channel that fails again soon after release has its recovery span
+/// doubled each time, up to `RECOVER_SPAN << MAX_FLAPS`. On data where a
+/// sensor keeps sticking (forward-filled gaps), quarantine/release cycles
+/// then grow logarithmically with the stream length instead of linearly.
+pub const MAX_FLAPS: u32 = 10;
+
+/// Healthy samples a quarantined channel needs before release, after
+/// `flaps` quick re-failures.
+#[must_use]
+pub fn recovery_span(flaps: u32) -> usize {
+    RECOVER_SPAN << flaps.min(MAX_FLAPS)
+}
+
+/// Flap count after a new quarantine at `tick`: one more if the channel was
+/// released less than its current span ago, else back to zero.
+fn next_flaps(flaps: u32, released_at: Option<u64>, tick: u64) -> u32 {
+    match released_at {
+        Some(r) if tick.saturating_sub(r) < recovery_span(flaps) as u64 => (flaps + 1).min(MAX_FLAPS),
+        _ => 0,
+    }
+}
 
 impl AutoPilot {
     #[must_use]
@@ -113,6 +142,12 @@ impl AutoPilot {
                 d.resize(channels, None);
                 d
             },
+            released_at: {
+                let mut r = Vec::with_capacity(channels);
+                r.resize(channels, None);
+                r
+            },
+            flaps: vec![0; channels],
         }
     }
 
@@ -133,36 +168,30 @@ impl AutoPilot {
             Mode::Monitoring => {
                 let alarm = self.monitor.push_with_validity(sample, valid);
                 for ch in 0..self.channels {
-                    if self.quarantined[ch] && self.monitor.recovered(ch) {
+                    if self.quarantined[ch]
+                        && self.monitor.healthy_run(ch) >= recovery_span(self.flaps[ch])
+                    {
                         self.monitor.unquarantine(ch);
                         self.quarantined[ch] = false;
+                        self.released_at[ch] = Some(tick);
                         events.push(Event::Unquarantined { tick, channel: ch });
                     }
                 }
                 if let Some(_leg) = alarm {
                     if let Some(report) = self.monitor.last_alarm() {
                         let class = classify_alarm(&report);
+                        let sensor_failure = matches!(report.leg, Leg::RepeatedValue | Leg::Missingness)
+                            || (report.leg == Leg::Parity && class == "cross_channel_inconsistency");
                         match report.leg {
                             // Sensor-failure signatures → quarantine the channel
-                            Leg::RepeatedValue | Leg::Missingness => {
+                            _ if sensor_failure => {
+                                let ch = report.channel;
                                 self.monitor.reset();
-                                self.monitor.quarantine(report.channel);
-                                self.quarantined[report.channel] = true;
+                                self.monitor.quarantine(ch);
+                                self.quarantined[ch] = true;
+                                self.flaps[ch] = next_flaps(self.flaps[ch], self.released_at[ch], tick);
                                 events.push(Event::Alarm { tick, report, class });
-                                events.push(Event::Quarantined {
-                                    tick,
-                                    channel: report.channel,
-                                });
-                            }
-                            Leg::Parity if class == "cross_channel_inconsistency" => {
-                                self.monitor.reset();
-                                self.monitor.quarantine(report.channel);
-                                self.quarantined[report.channel] = true;
-                                events.push(Event::Alarm { tick, report, class });
-                                events.push(Event::Quarantined {
-                                    tick,
-                                    channel: report.channel,
-                                });
+                                events.push(Event::Quarantined { tick, channel: ch });
                             }
                             // Environment may have changed → guarded adaptation,
                             // unless the same channel already forced a recent
@@ -475,5 +504,39 @@ mod tests {
         assert!((3200..8000).contains(&(r as usize)), "released at {r}");
         let a = fault_alarm.expect("the step on the recovered sensor must be reported");
         assert!((8000..8100).contains(&(a as usize)), "fault alarm at {a}");
+    }
+
+    /// A sensor that keeps sticking (300 samples stuck, 250 healthy, over
+    /// and over, like forward-filled gaps) must not produce a quarantine and
+    /// a release every cycle: each quick re-failure doubles its recovery span.
+    #[test]
+    fn flapping_sensor_backs_off() {
+        let n = 20_000usize;
+        let calib = synth_spacecraft(2048, 99 + 100);
+        let stream = synth_spacecraft(n, 99 + 200);
+        let mon = HybridMonitor::calibrate(&calib).expect("calibration");
+        let mut ap = AutoPilot::new(mon);
+        let valid = [true; 6];
+        let mut sample = [0.0f64; 6];
+        let (mut quarantines, mut releases) = (0usize, 0usize);
+        for t in 0..n {
+            for ch in 0..6 {
+                let mut v = stream[ch][t];
+                if ch == 2 && t >= 3000 && (t - 3000) % 550 < 300 {
+                    v = stream[2][t - (t - 3000) % 550];
+                }
+                sample[ch] = v;
+            }
+            for ev in ap.push(&sample, &valid) {
+                match ev {
+                    Event::Quarantined { channel: 2, .. } => quarantines += 1,
+                    Event::Unquarantined { channel: 2, .. } => releases += 1,
+                    _ => {}
+                }
+            }
+        }
+        // Without back-off: a cycle every 550 samples, about 30 here.
+        assert!(releases >= 1, "the sensor is healthy between sticks: it must come back sometimes");
+        assert!(quarantines <= 6, "{quarantines} quarantines, {releases} releases: no back-off");
     }
 }

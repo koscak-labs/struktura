@@ -42,7 +42,15 @@ All notable changes to Struktura are documented here.
   clean control series still silent. `examples/rover.csv`: the motor current
   sensor comes back at row 2592 after its fault ends, and the scripted
   battery drain from row 2600, missed before, is reported at 2595.
-  Reported by the ESA-ADB evaluation.
+  Reported by the ESA-ADB evaluation. Checked on non-NAB data by the
+  oura-26 session: in 40 seeded runs no still-faulty sensor was released,
+  and alarms before the first release are identical on 49 files.
+  A channel that fails again soon after release waits twice as long the
+  next time (`recovery_span`: 192, 384, 768, ... up to 1024x). On
+  forward-filled ESA-ADB data, recovery without this cycled 2,568 times
+  (2,356 stuck-value alarms); a sensor sticking 300 of every 550 samples
+  now cycles at most 6 times in 20,000 samples instead of 31 (tested).
+  NAB, the bundled CSVs and the examples are unchanged by the back-off.
 - `bench/flight` (embedded-monitor evidence): the bare-metal ARM Cortex-M3
   QEMU build now passes at `-O2`, struktura's own suggested compile line,
   instead of falling back to `-O1`. At plain `-O2` a stack slot in the test
