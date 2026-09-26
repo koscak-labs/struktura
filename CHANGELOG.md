@@ -4,6 +4,25 @@ All notable changes to Struktura are documented here.
 
 ## Unreleased
 
+- `struktura generate --cfs|--fprime|--ros` (the cFS app, F Prime component,
+  and ROS 2 node directory generators) generated C/C++ whose alpha did not
+  match Rust `dfa()` on the same data: `dfa_core.h` used a fixed box list
+  good only for window 512 (so a `--window` other than 512 measured the
+  wrong scales), its DFA scratch array was capped at 512 samples (so a
+  `--window` above 512 silently mixed a full-window mean with a truncated
+  profile), and none of the three generators reordered the ring buffer into
+  time order before scoring it (so the alpha was computed on a
+  discontinuity between the newest and oldest samples in the ring). All
+  three now include the shared, tested `dfa_core.h`
+  (`struktura::codegen::generate_dfa_core_h`, box list from
+  `struktura::dfa_box_sizes(window)`, same `dfa_compute` body as
+  `generate_c_monitor`) and reorder the ring into time order first, the way
+  `generate_c_monitor` already did. The generator functions moved from
+  `src/bin/struktura.rs` into `src/codegen.rs` (now `pub`) so they can be
+  exercised directly by a differential test; the CLI's behavior and flags
+  are unchanged. Test: tests/cli_generators_match_rust.rs (fails on the old
+  behavior, e.g. window 96: Rust alpha 3.44 vs the old fixed box list's
+  placeholder 0.5).
 - `guard`, `guard --watch` and `copilot-compare` merged repeat alarms by
   leg alone, so a second sensor alarming on the same leg within 50 rows
   of another was dropped (two sensors stuck 20 rows apart: 1 fault
