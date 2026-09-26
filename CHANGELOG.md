@@ -4,6 +4,15 @@ All notable changes to Struktura are documented here.
 
 ## Unreleased
 
+- `guard` no longer monitors a column that always increases and is named
+  like a time (time, timestamp, epoch, date, clock, t, ts, utc, ...), for
+  example epoch nanoseconds with jitter. Only exactly even steps were left
+  out before, so a jittered timestamp was monitored and raised most of the
+  alarms: on BASEPROD's FOG log 20 of 21 were on `Timestamp`; now none are
+  (10 faults, all on orientation channels). A note names the column. An
+  always-increasing column with any other name (a counter) is still
+  monitored. Ledger row control-jittered-timestamp-ignored. Found by the
+  oura-26 session.
 - `guard` CSV parsing: a blank or unparseable cell dropped out of its row,
   so every later column shifted left and the last column read 0. A gap in
   one sensor was reported on another (a 10-row gap in column b of an a,b,c

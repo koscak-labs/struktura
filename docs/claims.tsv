@@ -16,6 +16,7 @@ genome-chr1-alpha	slow	0	gunzip -c data/genome/chr1_human.fa.gz > "${TMPDIR:-/tm
 ims-first-alarm	fast	0	struktura ims	recording 970 && 984
 guard-sylv	fast	1	struktura guard data/sylv_spike.csv	row    500 && 2 faults detected
 guard-blank-cell-right-column	fast	1	awk 'function r(){x=(x*16807)%2147483647; return x/2147483647} BEGIN{x=12345; print "a,b,c"; for(t=0;t<600;t++){a=r(); bv=r(); c=r(); b=(t>=400&&t<410)?"":sprintf("%.4f",bv); printf "%.4f,%s,%.4f\n",a,b,c}}' | struktura guard - --baseline 300	row    403  ⚠ b (1.0x threshold): data stopped arriving on this channel && b declared dead && 1 faults detected
+control-jittered-timestamp-ignored	fast	0	awk 'function r(){x=(x*16807)%2147483647; return x/2147483647} BEGIN{x=777; print "Timestamp,value"; ts=1690000000000000000; for(t=0;t<1200;t++){ts+=10000000+int(r()*700000); printf "%.0f,%.4f\n",ts,r()}}' | struktura guard -	not monitoring Timestamp (always increasing and named like a time column) && HEALTHY, 800 samples, no anomalies
 guard-rover	fast	1	struktura guard examples/rover.csv --baseline 1000	fault confirmed && row   2201  ⚠ motor_current_A && row   2592  ✓ motor_current_A readings healthy again && row   2595  ⚠ battery_soc && 7 faults detected
 control-sylv-healthy	fast	0	head -499 data/sylv_spike.csv | struktura guard - --baseline 333	HEALTHY, 166 samples, no anomalies
 control-rover-healthy	fast	0	head -1601 examples/rover.csv | struktura guard - --baseline 1000	HEALTHY, 600 samples, no anomalies

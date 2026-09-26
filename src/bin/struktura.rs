@@ -176,9 +176,12 @@ impl ParsedCsv {
 
     /// Indices of columns to monitor. A column that rises in exactly even steps
     /// is a row index or a regular timestamp, not a sensor: monitored, it
-    /// "drifts" by construction and got a CSV's `t` column declared dead. Such
-    /// columns are left out, unless it is the only column.
-    fn sensor_columns(&self) -> (Vec<usize>, Vec<String>) {
+    /// "drifts" by construction and got a CSV's `t` column declared dead. A
+    /// column that always increases and is named like a time (a timestamp
+    /// with jitter, e.g. epoch nanoseconds) is left out too; one that always
+    /// increases under any other name (a counter) is still monitored.
+    /// Nothing is left out when it is the only column.
+    fn sensor_columns(&self) -> (Vec<usize>, Vec<DroppedColumn>) {
         let n = self.rows.len();
         let mut keep = Vec::new();
         let mut dropped = Vec::new();
@@ -193,8 +196,12 @@ impl ParsedCsv {
             let evenly_rising = n >= 3
                 && step > 0.0
                 && col.windows(2).all(|w| ((w[1] - w[0]) - step).abs() <= tol);
-            if evenly_rising && self.ncols > 1 {
-                dropped.push(self.ch_name(ch));
+            let always_rising = n >= 3 && col.windows(2).all(|w| w[1] > w[0]);
+            let name = self.ch_name(ch);
+            if self.ncols > 1 && evenly_rising {
+                dropped.push(DroppedColumn { name, even: true });
+            } else if self.ncols > 1 && always_rising && is_time_name(&name) {
+                dropped.push(DroppedColumn { name, even: false });
             } else {
                 keep.push(ch);
             }
@@ -203,9 +210,32 @@ impl ParsedCsv {
     }
 }
 
-fn index_columns_note(dropped: &[String]) {
-    if !dropped.is_empty() {
-        eprintln!("  note: not monitoring {} (rises in even steps, looks like an index or timestamp)", dropped.join(", "));
+/// A column `guard` does not monitor, and why.
+struct DroppedColumn {
+    name: String,
+    /// Rises in exactly even steps; otherwise: always increasing and named
+    /// like a time.
+    even: bool,
+}
+
+/// Header names that denote a time axis rather than a sensor.
+fn is_time_name(name: &str) -> bool {
+    let n = name.trim().to_ascii_lowercase();
+    ["t", "ts", "utc", "tai", "gps_week"].contains(&n.as_str())
+        || ["time", "epoch", "date", "clock"].iter().any(|k| n.contains(k))
+}
+
+fn index_columns_note(dropped: &[DroppedColumn]) {
+    let names = |even: bool| -> Vec<&str> {
+        dropped.iter().filter(|d| d.even == even).map(|d| d.name.as_str()).collect()
+    };
+    let even = names(true);
+    if !even.is_empty() {
+        eprintln!("  note: not monitoring {} (rises in even steps, looks like an index or timestamp)", even.join(", "));
+    }
+    let timed = names(false);
+    if !timed.is_empty() {
+        eprintln!("  note: not monitoring {} (always increasing and named like a time column)", timed.join(", "));
     }
 }
 
