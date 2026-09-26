@@ -399,6 +399,24 @@ pub fn generate_hybrid_c(export: &crate::monitor::MonitorExport) -> String {
     s.push_str(" * Compile: gcc -std=c99 -Wall -Werror -O2 -o hybrid hybrid_monitor.c -lm\n");
     s.push_str(" * On 32-bit x86 add -msse2 -mfpmath=sse: x87 extended precision can\n");
     s.push_str(" * move an alarm against the Rust monitor (one of 198 alarms, seen).\n");
+    let trended: Vec<(usize, f64)> = export
+        .channels
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.tr_slope != 0.0)
+        .map(|(i, c)| (i, c.tr_slope))
+        .collect();
+    if !trended.is_empty() {
+        s.push_str(" *\n * Certified calibration trends (extra drift beyond the calibrated\n");
+        s.push_str(" * band, sustained, still alarms):\n");
+        for (i, slope) in &trended {
+            s.push_str(&format!(" *   channel {}: {:.6e} per sample\n", i, slope));
+        }
+    }
+    s.push_str(" *\n * Clock assumption: hyb_init() must run on the sample immediately\n");
+    s.push_str(" * after the calibration rows end. A trended channel's reference line\n");
+    s.push_str(" * (tr_mu/tr_t0) is anchored to that boundary; starting hyb_init later\n");
+    s.push_str(" * offsets it by (slope * gap).\n");
     s.push_str(" */\n#include <math.h>\n#include <string.h>\n\n");
     s.push_str(&format!("#define HYB_CHANNELS   {}\n", nch));
     // Taken from the Rust monitor so the C stays in step with its calibration.
@@ -406,6 +424,10 @@ pub fn generate_hybrid_c(export: &crate::monitor::MonitorExport) -> String {
     s.push_str(&format!("#define HYB_ROLL       {}\n", crate::monitor::ROLL));
     s.push_str(&format!("#define HYB_DFA_STRIDE {}\n", crate::monitor::DFA_STRIDE));
     s.push_str("#define HYB_PHASE      (HYB_WINDOW * HYB_ROLL * HYB_DFA_STRIDE)\n");
+    // Rolling window centre offset, exactly as Rust's level leg uses it
+    // (`dl = (t - tr_t0) - 47.5` for ROLL=96): a C expression, not a baked
+    // decimal literal, so it stays exact for any ROLL.
+    s.push_str("#define HYB_ROLL_HALF  ((double)(HYB_ROLL - 1) / 2.0)\n");
     s.push_str(&format!("#define HYB_RES_THR    {:.17e}\n", export.res_thr));
     s.push_str(&format!("#define HYB_DFA_THR    {:.17e}\n", export.dfa_thr));
     s.push_str(&format!("#define HYB_CUSUM_THR  {:.17e}\n", export.cusum_thr));
@@ -413,13 +435,17 @@ pub fn generate_hybrid_c(export: &crate::monitor::MonitorExport) -> String {
     s.push_str("#define HYB_DFA_PERSIST   5\n#define HYB_ROLL_PERSIST  10\n\n");
     s.push_str("typedef struct {\n    double ar_a, ar_b, ar_sd;\n");
     s.push_str("    double alpha_mean, alpha_sd;\n    double mean, roll_thr;\n");
-    s.push_str("    int max_run;\n    int repeat_enabled;\n} hyb_calib_t;\n\n");
+    s.push_str("    int max_run;\n    int repeat_enabled;\n");
+    s.push_str("    /* Certified calibration trend (0.0/trendless unless noted above). */\n");
+    s.push_str("    double tr_mu, tr_slope, tr_t0, tr_q1, tr_q2, ar_slope;\n} hyb_calib_t;\n\n");
     s.push_str("static const hyb_calib_t HYB_CALIB[HYB_CHANNELS] = {\n");
     for c in &export.channels {
         s.push_str(&format!(
-            "    {{ {:.17e}, {:.17e}, {:.17e}, {:.17e}, {:.17e}, {:.17e}, {:.17e}, {}, {} }},\n",
+            "    {{ {:.17e}, {:.17e}, {:.17e}, {:.17e}, {:.17e}, {:.17e}, {:.17e}, {}, {}, \
+             {:.17e}, {:.17e}, {:.17e}, {:.17e}, {:.17e}, {:.17e} }},\n",
             c.ar_a, c.ar_b, c.ar_sd, c.alpha_mean, c.alpha_sd, c.mean, c.roll_thr,
-            c.max_run, if c.repeat_enabled { 1 } else { 0 }
+            c.max_run, if c.repeat_enabled { 1 } else { 0 },
+            c.tr_mu, c.tr_slope, c.tr_t0, c.tr_q1, c.tr_q2, c.ar_slope
         ));
     }
     s.push_str("};\n\n");
@@ -507,12 +533,21 @@ pub fn generate_hybrid_c(export: &crate::monitor::MonitorExport) -> String {
     s.push_str("static hyb_verdict_t hyb_push(hyb_monitor_t *m, int c, double v) {\n");
     s.push_str("    hyb_channel_t *st;\n    const hyb_calib_t *cc;\n");
     s.push_str("    unsigned long long t;\n    unsigned long ph;\n    double zs;\n");
+    s.push_str("    double d1, d0, p1, p0, q, bq, base, pred;\n");
     s.push_str("    if (m->alarmed || c < 0 || c >= HYB_CHANNELS) return HYB_OK;\n");
     s.push_str("    st = &m->ch[c];\n    cc = &HYB_CALIB[c];\n    t = st->t++;\n");
     s.push_str("    ph = st->ph;\n    st->ph = ph + 1 == HYB_PHASE ? 0 : ph + 1;\n");
     s.push_str("    if (t == 0) {\n        st->prev = v;\n        st->ring[0] = v;\n");
     s.push_str("        st->roll_ring[0] = v;\n        return HYB_OK;\n    }\n");
-    s.push_str("    zs = (v - (cc->ar_a + cc->ar_b * st->prev)) / cc->ar_sd;\n");
+    s.push_str("    /* One-step AR(1) prediction against the (possibly trending)\n");
+    s.push_str("     * baseline; matches Rust's ar_pred statement for statement so a\n");
+    s.push_str("     * trendless channel (ar_slope == 0.0, tr_t0 == 0.0) reduces to\n");
+    s.push_str("     * ar_a + ar_b*prev bit for bit. */\n");
+    s.push_str("    d1 = (double)t - cc->tr_t0;\n    d0 = d1 - 1.0;\n");
+    s.push_str("    p1 = cc->ar_slope * d1;\n    p0 = cc->ar_slope * d0;\n");
+    s.push_str("    q = st->prev - p0;\n    bq = cc->ar_b * q;\n");
+    s.push_str("    base = cc->ar_a + p1;\n    pred = base + bq;\n");
+    s.push_str("    zs = (v - pred) / cc->ar_sd;\n");
     s.push_str("    st->cusum_pos += zs - HYB_CUSUM_K;\n");
     s.push_str("    if (!(st->cusum_pos > 0.0)) st->cusum_pos = 0.0; /* NaN -> 0, as Rust max(0.0) */\n");
     s.push_str("    st->cusum_neg += -zs - HYB_CUSUM_K;\n");
@@ -542,8 +577,15 @@ pub fn generate_hybrid_c(export: &crate::monitor::MonitorExport) -> String {
     s.push_str("                m->alarmed = 1; return HYB_ALARM_DFA;\n            }\n");
     s.push_str("        } else {\n            st->dfa_streak = 0;\n        }\n    }\n");
     s.push_str("    if (t >= HYB_ROLL) {\n        double sum = 0.0;\n        int i;\n");
+    s.push_str("        double dl, p, e, h, w1, hh, w2, thr, dev;\n");
     s.push_str("        for (i = 0; i < HYB_ROLL; i++) sum += st->roll_ring[i];\n");
-    s.push_str("        if (fabs(sum / (double)HYB_ROLL - cc->mean) > cc->roll_thr) {\n");
+    s.push_str("        dl = ((double)t - cc->tr_t0) - HYB_ROLL_HALF;\n");
+    s.push_str("        p = cc->tr_slope * dl;\n        e = cc->tr_mu + p;\n");
+    s.push_str("        h = fabs(dl);\n        w1 = cc->tr_q1 * h;\n");
+    s.push_str("        hh = h * h;\n        w2 = cc->tr_q2 * hh;\n");
+    s.push_str("        thr = cc->roll_thr + sqrt(w1 + w2);\n");
+    s.push_str("        dev = sum / (double)HYB_ROLL - e;\n");
+    s.push_str("        if (fabs(dev) > thr) {\n");
     s.push_str("            st->roll_streak++;\n");
     s.push_str("            if (st->roll_streak >= HYB_ROLL_PERSIST) {\n");
     s.push_str("                m->alarmed = 1; return HYB_ALARM_LEVEL;\n            }\n");
@@ -595,7 +637,10 @@ pub fn generate_hybrid_c(export: &crate::monitor::MonitorExport) -> String {
     s.push_str("     * fault on a repeat-enabled channel from t=400 (value frozen). */\n");
     s.push_str("    for (t = 0; t < 700 && v == HYB_OK; t++) {\n");
     s.push_str("        for (c = 0; c < HYB_CHANNELS; c++) {\n");
-    s.push_str("            x[c] = HYB_CALIB[c].mean\n");
+    s.push_str("            /* tr_mu + tr_slope*((double)t - tr_t0) plus wobble: reduces to\n");
+    s.push_str("             * mean + wobble for a trendless channel (tr_slope == 0.0). */\n");
+    s.push_str("            x[c] = HYB_CALIB[c].tr_mu\n");
+    s.push_str("                + HYB_CALIB[c].tr_slope * ((double)t - HYB_CALIB[c].tr_t0)\n");
     s.push_str("                + 0.5 * HYB_CALIB[c].ar_sd * sin(0.7 * (double)t + (double)c);\n");
     s.push_str("            if (c == HYB_TEST_CH && t >= 400) x[c] = HYB_CALIB[HYB_TEST_CH].mean;\n");
     s.push_str("        }\n");

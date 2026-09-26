@@ -462,6 +462,12 @@ fn monitor_export_diffs(saved: &MonitorExport, fresh: &MonitorExport) -> Vec<Str
             ("alpha_sd", s.alpha_sd, f.alpha_sd),
             ("mean", s.mean, f.mean),
             ("roll_thr", s.roll_thr, f.roll_thr),
+            ("tr_mu", s.tr_mu, f.tr_mu),
+            ("tr_slope", s.tr_slope, f.tr_slope),
+            ("tr_t0", s.tr_t0, f.tr_t0),
+            ("tr_q1", s.tr_q1, f.tr_q1),
+            ("tr_q2", s.tr_q2, f.tr_q2),
+            ("ar_slope", s.ar_slope, f.ar_slope),
         ] {
             if value_differs(sv, fv) {
                 diffs.push(format!("channel {} {}: saved={:.6} fresh={:.6}", ci, field, sv, fv));
@@ -1097,6 +1103,55 @@ mod tests {
             diff2.threshold_diffs
         );
         assert!(diff2.to_json().contains("\"threshold_diffs\":[\""));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// T11: `monitor_export_diffs` (via `replay()`) reports a changed
+    /// drift-calibration field (`tr_slope`) the same way it already reports
+    /// a changed `alpha_mean` — the new trend fields are compared, not just
+    /// the pre-existing calibration fields.
+    #[test]
+    fn replay_reports_changed_trend_fields_in_threshold_diffs() {
+        use crate::case::CaseConfig;
+        use crate::context::ColumnSchema;
+        use crate::monitor::HybridMonitor;
+
+        let baseline = 200;
+        let total = baseline + 100;
+        let ch0 = sine_channel(total);
+        let recording: Vec<Vec<f64>> = (0..total).map(|t| vec![ch0[t]]).collect();
+        let timeline = ContextTimeline::new();
+        let calib = vec![ch0[..baseline].to_vec()];
+        let monitor = HybridMonitor::calibrate(&calib).expect("calibrates");
+        let config = CaseConfig {
+            input_hash: crate::case::fingerprint_content(b"trend diff fixture"),
+            monitor_export: monitor.export(),
+            column_schema: ColumnSchema::from_header(&["ch0"]),
+            imputation: vec![],
+        };
+        let dir = std::env::temp_dir().join("struktura_replay_test_trend_diff");
+        let _ = std::fs::remove_dir_all(&dir);
+        let case = Case::save(&dir, &recording, &[], baseline, "trend_diff", &config, &timeline, &["ch0".to_string()])
+            .expect("saves");
+
+        let config_path = case.dir().join("config.json");
+        let text = std::fs::read_to_string(&config_path).expect("reads config.json");
+        let saved_tr_slope = crate::case::parse_config_monitor_export(&text).unwrap().channels[0].tr_slope;
+        let edited = text.replacen(
+            &format!("\"tr_slope\":{}", saved_tr_slope),
+            &format!("\"tr_slope\":{}", saved_tr_slope + 0.25),
+            1,
+        );
+        assert_ne!(text, edited, "test setup must actually change tr_slope in the saved JSON");
+        std::fs::write(&config_path, &edited).expect("writes edited config.json");
+
+        let (_incidents, diff) = replay(&case, None).expect("replays after config edit");
+        assert!(
+            diff.threshold_diffs.iter().any(|d| d.contains("tr_slope")),
+            "threshold_diffs must report the changed tr_slope: {:?}",
+            diff.threshold_diffs
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

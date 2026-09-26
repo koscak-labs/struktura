@@ -47,33 +47,57 @@ const LEGS: [&str; 6] = ["-", "residual", "repeated", "dfa", "level", "cusum"];
 
 #[derive(Clone, Copy)]
 struct Proc {
-    kind: usize, // 0 white, 1 AR(1), 2 random walk, 3 quantized AR(1)
+    kind: usize, // 0 white, 1 AR(1), 2 random walk, 3 quantized AR(1), 4 TS ramp, 5 random walk with drift
     phi: f64,
     level: f64,
     scale: f64,
     quantum: f64,
+    /// Kind 4 only: per-sample ramp rate (applied to `offset + i`, so the
+    /// calibration and its continuation streams see one unbroken line).
+    slope: f64,
+    /// Kind 5 only: per-step random-walk drift.
+    drift: f64,
 }
 
 fn draw_proc(rng: &mut Rng) -> Proc {
+    let phi = 0.3 + 0.67 * rng.uniform();
+    let scale = 0.2 + 3.0 * rng.uniform();
+    // AR(phi) noise's own stationary standard deviation (unit innovation
+    // variance): 1/sqrt(1-phi^2).
+    let sigma_x = 1.0 / (1.0 - phi * phi).sqrt();
     Proc {
-        kind: (rng.next_u64() % 4) as usize,
-        phi: 0.3 + 0.67 * rng.uniform(),
+        kind: (rng.next_u64() % 6) as usize,
+        phi,
         level: 10.0 * rng.normal(),
-        scale: 0.2 + 3.0 * rng.uniform(),
+        scale,
         quantum: 0.25 + 0.75 * rng.uniform(),
+        // Tuned so the certification gate's R2 lands around 0.6-0.9 over a
+        // 768-sample calibration (8*WINDOW): the ramp's total excursion
+        // (slope*768) is a few multiples of the AR(phi) noise's own
+        // stationary spread (scale*sigma_x), the same ratio T1's fixture
+        // (monitor.rs's drift_tests) uses.
+        slope: (5.0 + 5.0 * rng.uniform()) * scale * sigma_x / 768.0,
+        drift: 0.05 + 0.05 * rng.uniform(),
     }
 }
 
-fn series(rng: &mut Rng, p: Proc, n: usize) -> Vec<f64> {
+/// `offset` is the absolute sample index of `x`'s first element — 0 for a
+/// calibration, the calibration's own length for a stream that continues it
+/// (kind 4's ramp is evaluated at `offset + i`, so a calibration and its
+/// continuation streams see one unbroken line, not a discontinuity at the
+/// boundary).
+fn series(rng: &mut Rng, p: Proc, n: usize, offset: usize) -> Vec<f64> {
     let mut x = 0.0;
     (0..n)
-        .map(|_| {
+        .map(|i| {
             x = match p.kind {
                 0 => rng.normal(),
                 2 => x + 0.1 * rng.normal(),
+                5 => x + p.drift + 0.1 * rng.normal(),
                 _ => p.phi * x + rng.normal(),
             };
-            let v = p.level + p.scale * x;
+            let v = p.level + p.scale * x
+                + if p.kind == 4 { p.slope * (offset + i) as f64 } else { 0.0 };
             if p.kind == 3 {
                 (v / (p.quantum * p.scale)).round() * p.quantum * p.scale
             } else {
@@ -86,7 +110,7 @@ fn series(rng: &mut Rng, p: Proc, n: usize) -> Vec<f64> {
 /// Inject one fault into channel `ch` from tick `at`. Returns a label.
 fn inject(rng: &mut Rng, s: &mut [Vec<f64>], ch: usize, at: usize, scale: f64) -> &'static str {
     let n = s[ch].len();
-    match rng.next_u64() % 7 {
+    match rng.next_u64() % 8 {
         0 => {
             let k = (1.0 + 4.0 * rng.uniform()) * scale * if rng.uniform() < 0.5 { -1.0 } else { 1.0 };
             (at..n).for_each(|t| s[ch][t] += k);
@@ -123,6 +147,14 @@ fn inject(rng: &mut Rng, s: &mut [Vec<f64>], ch: usize, at: usize, scale: f64) -
             let k = (2.0 + 3.0 * rng.uniform()) * scale;
             (at + 200..n).for_each(|t| s[ch][t] += k);
             "nan+step"
+        }
+        6 => {
+            // Rate change: extra slope from `at` onward, on top of
+            // whatever the channel already does in calibration (including
+            // a certified drift, on a kind-4/5 channel).
+            let r = (0.002 + 0.02 * rng.uniform()) * scale;
+            (at..n).for_each(|t| s[ch][t] += r * (t - at) as f64);
+            "rate_change"
         }
         _ => "none",
     }
@@ -258,6 +290,9 @@ fn hybrid_c_alarms_match_rust() {
     let dir = common::scratch("hybrid-alarms");
 
     let (mut n_first, mut n_seq, mut bad_first, mut bad_seq, mut neg_bad) = (0, 0, 0, 0, 0);
+    let mut trend_neg_bad = 0usize;
+    let mut certified_total = 0usize;
+    let mut long_case_certified = false;
     let mut examples: Vec<String> = Vec::new();
     let mut kinds = std::collections::BTreeMap::<String, usize>::new();
     let mut first_kinds = std::collections::BTreeMap::<&str, usize>::new();
@@ -266,21 +301,36 @@ fn hybrid_c_alarms_match_rust() {
     for k in 0..calibrations {
         let nch = 1 + (rng.next_u64() % 3) as usize;
         let procs: Vec<Proc> = (0..nch).map(|_| draw_proc(&mut rng)).collect();
-        let clean: Vec<Vec<f64>> = procs.iter().map(|&p| series(&mut rng, p, 8 * WINDOW)).collect();
+        let calib_len = 8 * WINDOW;
+        let clean: Vec<Vec<f64>> = procs.iter().map(|&p| series(&mut rng, p, calib_len, 0)).collect();
         let Some(mut mon) = HybridMonitor::calibrate(&clean) else {
             continue;
         };
         mon.set_leg_enabled(Leg::Parity, false);
         mon.set_leg_enabled(Leg::Missingness, false);
+        let this_run_certified = (0..nch).filter(|&ch| mon.trend(ch).is_some()).count();
+        certified_total += this_run_certified;
         let c_src = generate_hybrid_c(&mon.export());
 
         let mut cases = Vec::new();
-        for _ in 0..per_calib {
-            // One long stream per run takes the C ring phase counter past its
-            // wrap (HYB_PHASE = WINDOW * ROLL * DFA_STRIDE = 18432 samples).
-            let n = if long_done { 1500 } else { 40_000 };
-            long_done = true;
-            let mut stream: Vec<Vec<f64>> = procs.iter().map(|&p| series(&mut rng, p, n)).collect();
+        for case_idx in 0..per_calib {
+            // One long stream over the whole run takes the C ring phase
+            // counter past its wrap (HYB_PHASE = WINDOW * ROLL * DFA_STRIDE
+            // = 18432 samples). Deferred to the first calibration that
+            // actually certified a channel (rather than unconditionally the
+            // very first calibration), so the long stream is guaranteed —
+            // not left to chance — to exercise a certified channel.
+            let use_long = !long_done && this_run_certified > 0;
+            let n = if use_long { 40_000 } else { 1500 };
+            if use_long {
+                long_done = true;
+                long_case_certified = true;
+            }
+            let _ = case_idx;
+            // Continuations: a kind-4 (TS ramp) channel's stream picks up
+            // its ramp exactly where the calibration left off.
+            let mut stream: Vec<Vec<f64>> =
+                procs.iter().map(|&p| series(&mut rng, p, n, calib_len)).collect();
             let ch = (rng.next_u64() % nch as u64) as usize;
             let at = n - 1200 + (rng.next_u64() % 900) as usize;
             let fault = inject(&mut rng, &mut stream, ch, at, procs[ch].scale);
@@ -300,6 +350,18 @@ fn hybrid_c_alarms_match_rust() {
         let neg_src = c_src.replacen("#define HYB_RES_THR    ", "#define HYB_RES_THR    0.9 * ", 1);
         assert_ne!(neg_src, c_src, "negative control did not change the C");
         let c_neg = run_c(&cc, &dir, &neg_src, &cases, 1);
+        // Second negative control, on the NEW trend path: weaken the level
+        // leg's expectation line so a certified channel's level leg must
+        // mismatch. Only bites on a run with a certified channel (a run
+        // with none leaves c_src unchanged from a trendless run, so the
+        // replacen is a no-op there — accounted for below).
+        let trend_neg_src = c_src.replacen("e = cc->tr_mu + p;", "e = cc->tr_mu + 0.9 * p;", 1);
+        let trend_neg_changed = trend_neg_src != c_src;
+        let c_trend_neg = if trend_neg_changed {
+            Some(run_c(&cc, &dir, &trend_neg_src, &cases, 1))
+        } else {
+            None
+        };
         assert_eq!(c_first.len(), cases.len());
 
         for (i, case) in cases.iter().enumerate() {
@@ -331,6 +393,11 @@ fn hybrid_c_alarms_match_rust() {
             if r_seq != c_neg[i] {
                 neg_bad += 1;
             }
+            if let Some(c_trend_neg) = &c_trend_neg {
+                if r_seq != c_trend_neg[i] {
+                    trend_neg_bad += 1;
+                }
+            }
         }
     }
     let _ = fs::remove_dir_all(&dir);
@@ -341,9 +408,23 @@ fn hybrid_c_alarms_match_rust() {
     println!("first-alarm mismatch kinds: {first_kinds:?}");
     println!(
         "hybrid_c_alarms_match_rust: compared {n_first} streams; first-alarm mismatches {bad_first}; \
-         full-sequence mismatches {bad_seq}/{n_seq}; negative control (C residual threshold x0.9) mismatches {neg_bad}/{n_seq}"
+         full-sequence mismatches {bad_seq}/{n_seq}; negative control (C residual threshold x0.9) mismatches {neg_bad}/{n_seq}; \
+         trend-path negative control (C level 0.9x) mismatches {trend_neg_bad}; certified channels {certified_total} \
+         (>=1 in the 40,000-sample run: {long_case_certified})"
     );
     assert!(neg_bad > 0, "negative control produced no mismatches: the comparison is not sensitive");
+    assert!(
+        trend_neg_bad > 0,
+        "trend-path negative control produced no mismatches: the certified-trend C path is not exercised/sensitive"
+    );
+    assert!(
+        certified_total >= 20,
+        "certified-channel count {certified_total} < 20: the oracle would pass vacuously on the trend path"
+    );
+    assert!(
+        long_case_certified,
+        "the 40,000-sample stream's calibration must carry at least one certified channel"
+    );
     assert_eq!(bad_first, 0, "first alarm differs on {bad_first} streams");
     assert_eq!(bad_seq, 0, "alarm sequence differs on {bad_seq} streams");
 }

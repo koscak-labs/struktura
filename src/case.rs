@@ -138,8 +138,10 @@ fn monitor_export_json(m: &MonitorExport) -> String {
 fn channel_export_json(c: &ChannelExport) -> String {
     format!(
         "{{\"ar_a\":{},\"ar_b\":{},\"ar_sd\":{},\"alpha_mean\":{},\"alpha_sd\":{},\
-         \"mean\":{},\"roll_thr\":{},\"max_run\":{},\"repeat_enabled\":{}}}",
-        c.ar_a, c.ar_b, c.ar_sd, c.alpha_mean, c.alpha_sd, c.mean, c.roll_thr, c.max_run, c.repeat_enabled
+         \"mean\":{},\"roll_thr\":{},\"max_run\":{},\"repeat_enabled\":{},\
+         \"tr_mu\":{},\"tr_slope\":{},\"tr_t0\":{},\"tr_q1\":{},\"tr_q2\":{},\"ar_slope\":{}}}",
+        c.ar_a, c.ar_b, c.ar_sd, c.alpha_mean, c.alpha_sd, c.mean, c.roll_thr, c.max_run, c.repeat_enabled,
+        c.tr_mu, c.tr_slope, c.tr_t0, c.tr_q1, c.tr_q2, c.ar_slope
     )
 }
 
@@ -399,16 +401,26 @@ pub fn parse_config_monitor_export(json: &str) -> Option<MonitorExport> {
 }
 
 fn parse_channel_export(s: &str) -> Option<ChannelExport> {
+    let mean = extract_f64(s, "mean")?;
     Some(ChannelExport {
         ar_a: extract_f64(s, "ar_a")?,
         ar_b: extract_f64(s, "ar_b")?,
         ar_sd: extract_f64(s, "ar_sd")?,
         alpha_mean: extract_f64(s, "alpha_mean")?,
         alpha_sd: extract_f64(s, "alpha_sd")?,
-        mean: extract_f64(s, "mean")?,
+        mean,
         roll_thr: extract_f64(s, "roll_thr")?,
         max_run: extract_u64(s, "max_run")? as usize,
         repeat_enabled: s.contains("\"repeat_enabled\":true"),
+        // Pre-drift-calibration manifests have none of these keys: default
+        // to trendless (tr_mu = mean, everything else 0.0), so an old
+        // config.json still loads.
+        tr_mu: extract_f64(s, "tr_mu").unwrap_or(mean),
+        tr_slope: extract_f64(s, "tr_slope").unwrap_or(0.0),
+        tr_t0: extract_f64(s, "tr_t0").unwrap_or(0.0),
+        tr_q1: extract_f64(s, "tr_q1").unwrap_or(0.0),
+        tr_q2: extract_f64(s, "tr_q2").unwrap_or(0.0),
+        ar_slope: extract_f64(s, "ar_slope").unwrap_or(0.0),
     })
 }
 
@@ -613,6 +625,7 @@ mod tests {
                 channels: vec![ChannelExport {
                     ar_a: 0.5, ar_b: 0.0, ar_sd: 1.0, alpha_mean: 0.5, alpha_sd: 0.05,
                     mean: 0.0, roll_thr: 2.0, max_run: 10, repeat_enabled: true,
+                    tr_mu: 0.0, tr_slope: 0.0, tr_t0: 0.0, tr_q1: 0.0, tr_q2: 0.0, ar_slope: 0.0,
                 }],
             },
             column_schema: ColumnSchema::from_header(&["ch0", "ch1"]),
@@ -674,6 +687,43 @@ mod tests {
         assert_eq!(config_json.matches('[').count(), config_json.matches(']').count());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// T11: an old `config.json` from before the drift-calibration trend
+    /// fields existed (no `tr_*`/`ar_slope` keys) must still parse, with
+    /// `tr_mu` defaulting to the channel's `mean` and everything else 0.0
+    /// (trendless) — not a parse failure.
+    #[test]
+    fn parse_channel_export_defaults_trend_fields_for_legacy_json() {
+        let legacy = "{\"ar_a\":0.5,\"ar_b\":0.1,\"ar_sd\":1.0,\"alpha_mean\":0.5,\"alpha_sd\":0.05,\
+                       \"mean\":3.5,\"roll_thr\":2.0,\"max_run\":10,\"repeat_enabled\":true}";
+        let c = parse_channel_export(legacy).expect("legacy channel export must still parse");
+        assert_eq!(c.mean, 3.5);
+        assert_eq!(c.tr_mu, 3.5, "tr_mu must default to mean");
+        assert_eq!(c.tr_slope, 0.0);
+        assert_eq!(c.tr_t0, 0.0);
+        assert_eq!(c.tr_q1, 0.0);
+        assert_eq!(c.tr_q2, 0.0);
+        assert_eq!(c.ar_slope, 0.0);
+    }
+
+    /// T11: a channel export WITH the new trend fields round-trips through
+    /// `channel_export_json`/`parse_channel_export` bit-exactly.
+    #[test]
+    fn channel_export_json_round_trips_trend_fields() {
+        let c = ChannelExport {
+            ar_a: 0.5, ar_b: 0.1, ar_sd: 1.0, alpha_mean: 0.5, alpha_sd: 0.05,
+            mean: 3.5, roll_thr: 2.0, max_run: 10, repeat_enabled: true,
+            tr_mu: 3.4, tr_slope: -4e-4, tr_t0: -1000.5, tr_q1: 0.0, tr_q2: 1.44e-6, ar_slope: -4e-4,
+        };
+        let json = channel_export_json(&c);
+        let back = parse_channel_export(&json).expect("round trips");
+        assert_eq!(back.tr_mu, c.tr_mu);
+        assert_eq!(back.tr_slope, c.tr_slope);
+        assert_eq!(back.tr_t0, c.tr_t0);
+        assert_eq!(back.tr_q1, c.tr_q1);
+        assert_eq!(back.tr_q2, c.tr_q2);
+        assert_eq!(back.ar_slope, c.ar_slope);
     }
 
     /// Finding 5: `Case::config_json` + `parse_config_input_hash` +
