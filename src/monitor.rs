@@ -425,6 +425,10 @@ pub struct HybridMonitor {
     /// calibrated against a reconstructor that has since been replaced);
     /// the blame rule refuses to run at all while any is false.
     pair_ok: Vec<bool>,
+    /// Per-channel: whether the parity leg judges this channel. False when
+    /// its calibration reconstruction residual carries a time trend
+    /// (`PARITY_TREND_R2`): it has no static relation to the others.
+    parity_target: Vec<bool>,
     /// Same-sample residual `x_k - sample_pred[k]` for the blame rule
     /// (NaN outside `push_with_validity`).
     sample_res: Vec<f64>,
@@ -563,6 +567,30 @@ fn solve_linear(a: &mut [f64], b: &mut [f64], n: usize) -> bool {
         }
     }
     true
+}
+
+/// A channel is no parity target when a straight line in time explains at
+/// least this share of its calibration reconstruction residual.
+const PARITY_TREND_R2: f64 = 0.5;
+
+/// R² of a straight line in time through channel `ch`'s calibration
+/// reconstruction residuals (`resid[t * channels + ch]`); 0 when they are
+/// constant.
+fn residual_trend_r2(resid: &[f64], channels: usize, ch: usize, length: usize) -> f64 {
+    let n = length as f64;
+    let (mut st, mut stt, mut sr, mut srr, mut str_) = (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    for t in 0..length {
+        let (x, r) = (t as f64, resid[t * channels + ch]);
+        st += x;
+        stt += x * x;
+        sr += r;
+        srr += r * r;
+        str_ += x * r;
+    }
+    let cov = str_ / n - (st / n) * (sr / n);
+    let var_t = stt / n - (st / n) * (st / n);
+    let var_r = srr / n - (sr / n) * (sr / n);
+    if var_t > 0.0 && var_r > 0.0 { cov * cov / (var_t * var_r) } else { 0.0 }
 }
 
 /// Fit `target = bias + Σ w_j · source_j` (j ≠ target) by least squares
@@ -832,28 +860,36 @@ impl HybridMonitor {
         // Temporary raw-residual buffer (dropped at the end of calibration):
         // resid_buf[t*channels+ch] = clean[ch][t] - pred, needed below to
         // build the pairwise scale S_kl for the full-mode blame rule.
-        let mut resid_buf: Vec<f64> = if channels >= 3 { vec![0.0; length * channels] } else { Vec::new() };
-        let parity_thr = if channels >= 2 {
-            let mut parity_scores = Vec::with_capacity(length);
+        let mut resid_buf: Vec<f64> = if channels >= 2 { vec![0.0; length * channels] } else { Vec::new() };
+        if channels >= 2 {
             for t in 0..length {
-                let mut mz = 0.0f64;
                 for ch in 0..channels {
                     let r = &recon[ch];
                     let mut pred = r.bias;
                     for (s, c) in clean.iter().enumerate() {
                         pred += r.weights[s] * c[t];
                     }
-                    let resid = clean[ch][t] - pred;
-                    if channels >= 3 {
-                        resid_buf[t * channels + ch] = resid;
-                    }
-                    let z = resid.abs() / r.sd;
-                    if z > mz {
-                        mz = z;
-                    }
+                    resid_buf[t * channels + ch] = clean[ch][t] - pred;
                 }
-                parity_scores.push(mz);
             }
+        }
+        // A channel whose reconstruction residual still carries a time trend
+        // (a battery's state of charge, integrated from the others) has no
+        // static relation to them: once it leaves its calibrated range the
+        // relation extrapolates, and parity blamed its normal discharge. Such
+        // a channel is no parity target, and stays out of the threshold.
+        let parity_target: Vec<bool> = (0..channels)
+            .map(|ch| channels >= 2 && residual_trend_r2(&resid_buf, channels, ch, length) < PARITY_TREND_R2)
+            .collect();
+        let parity_thr = if parity_target.iter().any(|&p| p) {
+            let parity_scores: Vec<f64> = (0..length)
+                .map(|t| {
+                    (0..channels)
+                        .filter(|&ch| parity_target[ch])
+                        .map(|ch| resid_buf[t * channels + ch].abs() / recon[ch].sd)
+                        .fold(0.0f64, f64::max)
+                })
+                .collect();
             gumbel_return_level(&parity_scores, config.design_horizon)
         } else {
             f64::INFINITY
@@ -932,6 +968,7 @@ impl HybridMonitor {
             config,
             pair_sd,
             pair_ok: vec![true; channels],
+            parity_target,
             sample_res: vec![f64::NAN; channels],
             sample_all_valid: true,
             last_culprit: None,
@@ -1029,7 +1066,7 @@ impl HybridMonitor {
             let others_live =
                 self.quarantined.iter().enumerate().all(|(s, &q)| s == ch || !q);
             let parity_z = match value {
-                Some(v) if self.leg_enabled[6] && others_live && !self.sample_pred[ch].is_nan() => {
+                Some(v) if self.leg_enabled[6] && self.parity_target[ch] && others_live && !self.sample_pred[ch].is_nan() => {
                     Some((v - self.sample_pred[ch]).abs() / self.recon[ch].sd)
                 }
                 _ => None,
@@ -1166,7 +1203,7 @@ impl HybridMonitor {
         // Leg 7: cross-channel parity (2-in-20 persistence). Skipped while
         // any channel is quarantined — a substituted reading would feed the
         // predictor its own reconstruction.
-        if self.leg_enabled[6] && !self.quarantined.iter().any(|&q| q) {
+        if self.leg_enabled[6] && self.parity_target[ch] && !self.quarantined.iter().any(|&q| q) {
             let (pred, sd) = parity_pred;
             let thr = self.parity_thr;
             let pz = (v - pred).abs() / sd;
@@ -1330,7 +1367,7 @@ impl HybridMonitor {
             let rf = self.sample_res[f];
             let zf = rf.abs() / self.recon[f].sd;
             // NaN-safe: an indeterminate z never qualifies as a candidate.
-            if zf.is_nan() || zf <= self.parity_thr {
+            if !self.parity_target[f] || zf.is_nan() || zf <= self.parity_thr {
                 continue;
             }
             let mut implicated = true;
