@@ -3404,12 +3404,14 @@ fn cmd_guard(args: &[String]) {
     let mut webhook_url = String::new();
     let mut quiet = false;
     let mut high = false;
+    let mut no_trend = false;
     let mut i = 2;
     while i < args.len() {
         match args[i].as_str() {
             "--baseline" if i + 1 < args.len() => { baseline_n = args[i + 1].parse().unwrap_or(0); i += 2; }
             "--json" => { json = true; i += 1; }
             "--quiet-drift" => { quiet = true; i += 1; }
+            "--no-trend" => { no_trend = true; i += 1; }
             "--sensitivity" if i + 1 < args.len() => {
                 high = match args[i + 1].as_str() {
                     "normal" => false,
@@ -3425,13 +3427,15 @@ fn cmd_guard(args: &[String]) {
             "--interval" if i + 1 < args.len() => { watch_ms = args[i + 1].parse().unwrap_or(1000); i += 2; }
             "--webhook" if i + 1 < args.len() => { webhook_url = args[i + 1].clone(); i += 2; }
             "--help" | "-h" => {
-                println!("struktura guard <file.csv> [--baseline N] [--sensitivity normal|high] [--json] [--watch] [--webhook URL] [--quiet-drift]");
+                println!("struktura guard <file.csv> [--baseline N] [--sensitivity normal|high] [--json] [--watch] [--webhook URL] [--quiet-drift] [--no-trend]");
                 println!("  Monitor any CSV for anomalies. Exit: 0=healthy 1=fault 2=error");
                 println!("  --sensitivity  normal (default): fewest false alarms. high: catches more, alarms more");
                 println!("                 (NAB: 45 -> 55 of 116 windows, 45 -> 53 false alarms; clean slow-wander");
                 println!("                 synthetic streams 0 -> 2-3 of 30)");
                 println!("  --quiet-drift  Clip what the drift leg sees; small effect (NAB: 46 -> 45 false alarms,");
                 println!("                 45 -> 44 windows); a spike only the drift leg catches is found later or not at all");
+                println!("  --no-trend     Do not certify a calibration trend on any channel (today's behavior).");
+                println!("                 Use this when a certified drift note (see below) is itself a fault.");
                 println!("  --watch        Follow the file (like tail -f), monitor new rows live");
                 println!("  --interval MS  Poll interval for --watch (default 1000ms)");
                 println!("  --webhook URL  POST anomaly alerts to a Slack/Discord/PagerDuty webhook");
@@ -3455,7 +3459,7 @@ fn cmd_guard(args: &[String]) {
     if !webhook_url.is_empty() {
         std::env::set_var("STRUKTURA_WEBHOOK", &webhook_url);
     }
-    let cfg = guard_config(quiet, high);
+    let cfg = guard_config(quiet, high, no_trend);
     if watch && !file_path.is_empty() && file_path != "-" {
         run_guard_watch(&file_path, baseline_n, json, watch_ms, cfg);
     }
@@ -3471,10 +3475,13 @@ fn cmd_guard(args: &[String]) {
 /// benchmark: examples/nab_eval.rs with HORIZON=...).
 const HIGH_SENSITIVITY_HORIZON: f64 = 1e5;
 
-fn guard_config(quiet: bool, high: bool) -> struktura::monitor::MonitorConfig {
+fn guard_config(quiet: bool, high: bool, no_trend: bool) -> struktura::monitor::MonitorConfig {
     let mut cfg = struktura::monitor::MonitorConfig { quiet_drift: quiet, ..Default::default() };
     if high {
         cfg.design_horizon = HIGH_SENSITIVITY_HORIZON;
+    }
+    if no_trend {
+        cfg.learn_trend = false;
     }
     cfg
 }
@@ -3774,6 +3781,10 @@ fn calibration_self_check(calib: &[Vec<f64>], config: struktura::monitor::Monito
     if half < MIN_RELIABLE_CALIB {
         return None;
     }
+    // Calibrate the self-check's own first-half monitor with learn_trend
+    // forced off: a drifting calibration must keep its "may contain a
+    // fault" warning rather than have the drift itself certified away.
+    let config = struktura::monitor::MonitorConfig { learn_trend: false, ..config };
     let first: Vec<Vec<f64>> = calib.iter().map(|c| c[..half].to_vec()).collect();
     let mut mon = HybridMonitor::calibrate_with(&first, config)?;
     let mut sample = vec![0.0f64; calib.len()];
@@ -3800,7 +3811,13 @@ fn emit_event(t: usize, ev: &struktura::autopilot::Event, json: bool) {
     use struktura::monitor::explain_alarm;
     match ev {
         Event::Alarm { report, class, .. } => {
-            let explanation = explain_alarm(report);
+            let explanation = if report.leg == struktura::monitor::Leg::LevelShift
+                && (*class == "drift" || *class == "drift_confirmed")
+            {
+                "drifting faster than the drift learned in calibration"
+            } else {
+                explain_alarm(report)
+            };
             if json {
                 println!("{{\"event\":\"alarm\",\"t\":{},\"channel\":{},\"class\":\"{}\",\"explanation\":\"{}\"}}",
                     t, report.channel, class, explanation);
@@ -3913,6 +3930,31 @@ fn run_guard(content: &str, baseline_n: usize, json: bool, cfg: struktura::monit
         for ch in (0..ncols).filter(|&ch| baseline_constant(&ap, ch)) {
             eprintln!("  note: {} is constant in the calibration rows: any change is reported, and how far it is over the threshold is not meaningful; a --baseline that covers its normal changes avoids this",
                 ch_name(ch));
+        }
+    }
+    for ch in 0..ncols {
+        if let Some(trend) = ap.monitor().trend(ch) {
+            let kind = match trend.class {
+                struktura::monitor::TrendClass::Ts => "steady trend",
+                struktura::monitor::TrendClass::Ds => "random walk with drift",
+            };
+            let slope_per_1000 = trend.slope * 1000.0;
+            let band_per_1000 = trend.band_rate * 1000.0;
+            if json {
+                let class_id = match trend.class {
+                    struktura::monitor::TrendClass::Ts => "ts",
+                    struktura::monitor::TrendClass::Ds => "ds",
+                };
+                println!(
+                    "{{\"event\":\"trend\",\"channel\":\"{}\",\"class\":\"{}\",\"slope_per_1000\":{:.4},\"band_per_1000\":{:.4}}}",
+                    ch_name(ch), class_id, slope_per_1000, band_per_1000
+                );
+            } else {
+                eprintln!(
+                    "  note: {} drifts {:.4} per 1000 rows in the calibration ({}); guard expects it to continue; extra drift beyond +-{:.4} per 1000 rows alarms; if this drift is itself a fault use --no-trend",
+                    ch_name(ch), slope_per_1000, kind, band_per_1000
+                );
+            }
         }
     }
     let mut alarm_count = 0usize;

@@ -1,5 +1,6 @@
 $ struktura guard examples/rover.csv --baseline 1000
 struktura guard: 3000 samples x 5 channels (motor_current_A, wheel_rpm, imu_accel_g, battery_soc, temp_motor_C), calibrated on 1000 rows
+  note: battery_soc drifts -0.0200 per 1000 rows in the calibration (steady trend); guard expects it to continue; extra drift beyond +-0.0000 per 1000 rows alarms; if this drift is itself a fault use --no-trend
   row   1644  ⚠ wheel_rpm (1.3x threshold): the signal's behavior changed and predictions are failing
   row   1715  ⚠ imu_accel_g (1.1x threshold): the signal keeps deviating from what its baseline predicts (a step, a drift, or a change in its pattern)
   row   1725  ⚠ imu_accel_g (1.1x threshold): the signal shifted to a new operating level
@@ -16,10 +17,11 @@ struktura guard: 3000 samples x 5 channels (motor_current_A, wheel_rpm, imu_acce
   row   2356  ⚠ imu_accel_g (1.1x threshold): the signal keeps deviating from what its baseline predicts (a step, a drift, or a change in its pattern)
   row   2441  ⚠ imu_accel_g (1.1x threshold): the signal keeps deviating from what its baseline predicts (a step, a drift, or a change in its pattern)
   row   2545  ⚠ imu_accel_g (1.0x threshold): the signal keeps deviating from what its baseline predicts (a step, a drift, or a change in its pattern)
+  row   2576  ⚠ battery_soc (1.1x threshold): the signal keeps deviating from what its baseline predicts (a step, a drift, or a change in its pattern)
   row   2592  ✓ motor_current_A readings healthy again, monitoring it again
   row   2595  ⚠ battery_soc (1.4x threshold): this channel disagrees with what the other channels' physics says it should be
   row   2595  ✗ battery_soc declared dead, using reconstructed values
   row   2730  ⚠ imu_accel_g (1.0x threshold): the signal keeps deviating from what its baseline predicts (a step, a drift, or a change in its pattern)
   row   2757  ⚠ imu_accel_g (1.8x threshold): the signal's behavior changed and predictions are failing
   row   2938  ⚠ imu_accel_g (1.2x threshold): the signal keeps deviating from what its baseline predicts (a step, a drift, or a change in its pattern)
-  17 faults detected across 2000 samples (0 adaptations, 2 quarantines)
+  18 faults detected across 2000 samples (0 adaptations, 2 quarantines)

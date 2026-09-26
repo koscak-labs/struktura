@@ -4,6 +4,79 @@ All notable changes to Struktura are documented here.
 
 ## Unreleased
 
+- **Calibration trend certification** (`fit_trend`, `MonitorConfig::learn_trend`,
+  on by default): a calibration whose drift itself passes an R²/half-series
+  gate (a steady linear drift — TS — or a random walk with drift — DS) is
+  certified and built into the residual/CUSUM one-step predictor and the
+  level-shift band, so continuing the SAME certified drift no longer
+  alarms; a channel drifting FASTER than certified, or breaking the
+  opposite way, still does. Trendless channels (the gate rejects them, or
+  `--no-trend` / `learn_trend: false`) run every leg bit-for-bit as before
+  this change — verified on NAB (all three modes: default, `--quiet-drift`,
+  `--sensitivity high`; 0/58 series certify) and on every bundled `data/`
+  and `examples/rover.csv` CSV through `guard`, except `examples/rover.csv`
+  `battery_soc` (an exact linear discharge, R²=1.00, now certified) and
+  `data/voyager1_2021_healthy.csv` channel 0 (a small real slow drift not
+  predicted in advance — reported here, not tuned away).
+  - `MonitorConfig` gains `pub learn_trend: bool` (default `true`) and
+    `ChannelExport` gains `pub tr_mu`, `tr_slope`, `tr_t0`, `tr_q1`, `tr_q2`,
+    `ar_slope: f64` — **breaking for any external `MonitorConfig { .. }` or
+    `ChannelExport { .. }` struct literal** that does not use
+    `..Default::default()` / round-trip through `export()`. `ChannelExport`
+    JSON (`case.rs`) round-trips the 6 new fields; an old `config.json`
+    without them parses with `tr_mu = mean` and the rest `0.0`.
+  - `HybridMonitor::trend(ch) -> Option<Trend>` (class TS/DS, slope,
+    `band_rate` = 3 standard errors of the slope) and
+    `HybridMonitor::level_break_along_trend(ch)` are new public API.
+    `AutoPilot`'s guarded self-recalibration (`HybridMonitor::calibrate_with_prior`)
+    never re-runs the trend gate on a recalibration buffer: a channel
+    already certified inherits its class and rate as-is, re-anchored to the
+    new buffer's clock; every other channel calibrates trendless.
+  - `struktura guard` prints a note per certified channel (`--baseline`'s
+    calibration) with its rate and tolerance band, and emits a
+    `{"event":"trend",...}` line in `--json` mode; `--no-trend` restores
+    today's behavior exactly (verified bit-for-bit: `examples/rover.csv`
+    with `--no-trend` reproduces the pre-this-change output character for
+    character). `calibration_self_check` always evaluates with
+    `learn_trend: false`, so a drifting calibration keeps its "may contain
+    a fault" warning even though the outer `guard` call certifies it.
+  - Quiet-time law: a channel with a real but uncertified drift (the gate
+    rejected it — most often too little R², or a periodic driver) still
+    alarms once its level wanders past the calibrated band; a periodic
+    driver needs a calibration covering at least one period to certify
+    correctly (`comm_signal`'s orbital period in the rover simulator is
+    ~3,142 samples, far past any calibration used here, so it is never
+    certified and is unaffected by this change).
+  - Generated C (`codegen::generate_hybrid_c`) carries the same 6 fields
+    and the identical residual/level statement sequences
+    (`tests/hybrid_c_alarms_match_rust.rs`, extended with a TS-ramp and a
+    random-walk-with-drift process kind, a rate-change fault, and a second
+    (level-path) negative control): 0 first-alarm and 0 sequence
+    mismatches across 240 streams in one run, ≥20 certified channels
+    exercised, both negative controls sensitive. Verified in WSL (kali-linux,
+    gcc 15.2.0): reverting only the C-side change reproduces 54 first-alarm
+    and 123/240 sequence mismatches, so the oracle is not vacuous.
+  - Measured (`cargo run --release --example parity_eval`, 60 seeds,
+    `BREAKDOWN=1`): clean-run false alarms 239 → 71 (146 battery_voltage
+    LevelShift/regime_shift + 32 LevelShift/spike + 1 battery_soc
+    LevelShift/regime_shift gone); battery fault detection stayed 9/9 but
+    its median detection delay moved from 85 to 122 samples (master's 85
+    was partly the clean discharge itself pushing the level leg early);
+    overall detection stayed 51/60; comm/battery_soc parity quarantines
+    (60 clean, 64 fault) are unchanged; clean runs with any false event
+    stayed 60/60 (comm's orbital period is not certified, so its parity
+    quarantine — this monitor's other known limitation — is untouched by
+    this change); a new `comm_signal` LevelShift/regime_shift appears in
+    the runs where comm, not soc, is quarantined (30 fault-run and 11
+    clean-run occurrences), and a new `thermal_cpu` ResidualCusum/drift
+    appears in 5 fault runs — both reported here, not tuned away.
+    `docs/claims.tsv` rows `guard-rover` and
+    `limitation-rover-sim-clean-false-alarms` updated with the measured
+    numbers; new rows `trend-disclosure-rover`, `guard-rover-no-trend` and
+    `selfcheck-keeps-warning` added.
+  - `src/rover_flight.rs` (the generated-code-facing rover monitor) is
+    untouched by this change and keeps its stationary-calibration
+    assumption; it does not certify or use a calibration trend.
 - `struktura rover` (the demo) printed at most one alarm per 200 steps
   across all channels, so recurring thermal alarms hid others: the battery
   cell degradation it scripts at step 2600 was detected (battery voltage at
