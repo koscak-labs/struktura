@@ -3633,7 +3633,7 @@ fn cmd_stamp(args: &[String]) {
     if args.len() < 3 {
         eprintln!("Usage: struktura stamp <file.csv>");
         eprintln!("  Write a structural fingerprint into the CSV header.");
-        eprintln!("  guard/check auto-read the stamp as the baseline.");
+        eprintln!("  check auto-reads the stamp as the baseline.");
         process::exit(1);
     }
     let path = &args[2];

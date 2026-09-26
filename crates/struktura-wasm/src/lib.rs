@@ -189,8 +189,9 @@ impl Monitor {
 }
 
 /// One decision or observation from a Guard. `kind` is "alarm", "quarantined",
-/// "adaptation_started", "recalibrated" or "rolled_back"; the alarm fields are
-/// set for "alarm" and "rolled_back", `channel` also for "quarantined".
+/// "unquarantined", "adaptation_started", "recalibrated" or "rolled_back"; the
+/// alarm fields are set for "alarm" and "rolled_back", `channel` also for
+/// "quarantined" and "unquarantined".
 #[wasm_bindgen]
 pub struct GuardEvent {
     kind: &'static str,

@@ -4,6 +4,19 @@ All notable changes to Struktura are documented here.
 
 ## Unreleased
 
+- Pre-release documentation fixes, from a verified audit of everything
+  changed since 1.8.7:
+  - NAB false-alarm counts in bench/compare/RESULTS.md (46/45 -> 45/44)
+    and in the README's `--quiet-drift` sentence (now 45 -> 44 false
+    alarms) had not been updated after the DFA flat-box fix;
+  - `struktura stamp` said guard reads the stamp (only `check` does);
+  - the Python and WASM `Guard` docs did not list the `unquarantined`
+    event;
+  - the monitor's module docs listed five legs instead of seven;
+  - the CSV playground page still installed 1.8.4.
+  - README (since ccd86c5) and this changelog agree on the rover demo's
+    battery alarm at row 2595: it comes before the drain starts, quarantines
+    the battery, and so the drain from 2600 is not reported on its own.
 - Documented limitation (README, Limitations; `examples/recovery_offset_eval.rs`,
   ledger row limitation-recovery-offset-without-parity): a quarantined
   sensor that comes back while parity is suspended, because another channel
