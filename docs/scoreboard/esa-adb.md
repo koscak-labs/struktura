@@ -94,12 +94,24 @@ is not compared.
     written.
 - **Quarantines come from forward-filled data.** Guard's stuck-value check quarantines a channel once
   per long constant run. On this data, where gaps are forward-filled, that happens often.
-  - Channel 45 is quarantined 48 times over the 7.36 million rows. The median quarantine lasts 192
-    samples. The longest lasted 9,585 samples, because the channel's own readings did not pass the
-    recovery checks for that long.
+  - Channel 45 is quarantined 48 times over the 7.36 million rows.
+  - Of the 47 quarantines that end, the median lasts 192 samples. The longest lasted 9,585 samples,
+    because the channel's own readings did not pass the recovery checks for that long.
+  - The 48th never ends (next bullet).
   - The recovery back-off works as designed. The channel stays healthy for about 44,000 rows
     between stuck runs (median), which is longer than its recovery span, so the back-off resets.
   - Details are in the protocol record, in the follow-up to Amendment 13.
+- **For two thirds of the test split, guard watches two of the six channels.**
+  - At row 2,521,594 (2009-05-25 13:17), a parity cross-channel inconsistency quarantines channel 41.
+    Channels 46, 42 and 45 follow within six rows.
+  - None of the four is released again, for the remaining 4.84 million rows (65.8% of the test
+    split). Release needs a run of readings consistent with the channel's current calibration, and
+    they never produce one.
+  - Over the whole test split, channels 41, 42, 45 and 46 are each quarantined 66.0% of the time;
+    channels 43 and 44 are quarantined less than 0.5%.
+  - 19 of the 29 Anomaly events start after that row. All but one are also labelled on channel 43 or 44.
+  - The scores above are what guard achieves in this state. It is a limitation of guard's current
+    recovery, not of the benchmark.
 - **Limited scope.** One mission, six channels, one split. The full 58-channel set was not run.
 
 ## Reproduce
