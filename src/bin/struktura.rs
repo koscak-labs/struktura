@@ -1770,10 +1770,26 @@ fn cmd_generate(args: &[String]) {
         }
     }
 
+    // The cfs/fprime/ros generators run the window through dfa_compute, which
+    // needs at least 3 box sizes to return a real alpha (below that it always
+    // returns the {0.5, 0.0} placeholder and r_squared never clears the 0.7
+    // baseline gate, so the generated monitor could never set a baseline or
+    // alarm). --window 0 additionally divides by zero in the generated ring
+    // arithmetic (`% window`). `rover` does not use --window at all.
+    if target != "rover" && struktura::dfa_box_sizes(window).1 < 3 {
+        let min_window = (1..=4096)
+            .find(|&w| struktura::dfa_box_sizes(w).1 >= 3)
+            .unwrap_or(72);
+        eprintln!(
+            "Error: --window {window} is too small for DFA (needs at least 3 box sizes from dfa_box_sizes; the smallest usable window is {min_window}). Use --window {min_window} or larger."
+        );
+        process::exit(1);
+    }
+
     let channels = if let Some(ref path) = db_path {
         parse_db_json(path)
     } else {
-        vec![Channel { name: "input_value".into(), c_type: "double".into(), topic: "SAMPLE_MID".into(), field: "payload".into(), msg_type: "sample_msg_t".into() }]
+        vec![Channel::new("input_value", "SAMPLE_MID", "payload", "sample_msg_t")]
     };
 
     let out = std::path::Path::new(&output_dir);
@@ -1821,7 +1837,6 @@ fn parse_db_json(path: &str) -> Vec<Channel> {
     let mut channels = Vec::new();
     let mut in_inputs = false;
     let mut cur_name = String::new();
-    let mut cur_type = String::new();
     let mut cur_topic = String::new();
     let mut cur_field = String::new();
 
@@ -1833,9 +1848,6 @@ fn parse_db_json(path: &str) -> Vec<Channel> {
         if t.contains("\"name\"") {
             if let Some(v) = extract_json_string(t) { cur_name = v; }
         }
-        if t.contains("\"type\"") && !t.contains("\"fromType\"") && !t.contains("\"toType\"") {
-            if let Some(v) = extract_json_string_after(t, "\"type\"") { cur_type = v; }
-        }
         if t.contains("\"topic\"") {
             if let Some(v) = extract_json_string(t) { cur_topic = v; }
         }
@@ -1845,15 +1857,13 @@ fn parse_db_json(path: &str) -> Vec<Channel> {
 
         if (t == "}" || t == "},") && !cur_name.is_empty() && !cur_topic.is_empty() {
             let clean_topic = cur_topic.trim_end_matches("_MID").to_string();
-            channels.push(Channel {
-                name: cur_name.clone(),
-                c_type: if cur_type.is_empty() { "double".into() } else { cur_type.clone() },
-                topic: clean_topic.clone(),
-                field: if cur_field.is_empty() { "payload".into() } else { cur_field.clone() },
-                msg_type: format!("{}_msg_t", clean_topic.to_lowercase()),
-            });
+            channels.push(Channel::new(
+                cur_name.clone(),
+                clean_topic.clone(),
+                if cur_field.is_empty() { "payload".to_string() } else { cur_field.clone() },
+                format!("{}_msg_t", clean_topic.to_lowercase()),
+            ));
             cur_name.clear();
-            cur_type.clear();
             cur_topic.clear();
             cur_field.clear();
         }
@@ -1866,15 +1876,6 @@ fn parse_db_json(path: &str) -> Vec<Channel> {
 fn extract_json_string(line: &str) -> Option<String> {
     let parts: Vec<&str> = line.split('"').collect();
     if parts.len() >= 4 { Some(parts[3].to_string()) } else { None }
-}
-
-fn extract_json_string_after(line: &str, key: &str) -> Option<String> {
-    if let Some(pos) = line.find(key) {
-        let rest = &line[pos + key.len()..];
-        let parts: Vec<&str> = rest.split('"').collect();
-        if parts.len() >= 2 { return Some(parts[1].to_string()); }
-    }
-    None
 }
 
 fn generate_cfs_app_dir(out: &std::path::Path, channels: &[Channel], window: usize, threshold: f64) {

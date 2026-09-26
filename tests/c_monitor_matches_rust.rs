@@ -44,7 +44,11 @@ fn check_c_monitor(cc: &str, window: usize) {
         "#include <stdio.h>\n#include \"dfa_monitor.c\"\n\
          int main(void) {\n    dfa_monitor_t m;\n    double v;\n    dfa_monitor_init(&m);\n\
          while (scanf(\"%lf\", &v) == 1) {\n        dfa_monitor_push(&m, v);\n\
-         if (m.filled) printf(\"%.17e\\n\", dfa_compute(m.ordered, DFA_WINDOW_SIZE).alpha);\n\
+         /* dfa_compute overwrites its input with the cumulative profile, so\n\
+            m.ordered is no longer the raw window after dfa_monitor_push --\n\
+            read the alpha it fed to the baseline/shift logic instead of\n\
+            recomputing on top of the profile. */\n\
+         if (m.filled) printf(\"%.17e\\n\", m.last.alpha);\n\
          }\n    return 0;\n}\n",
     )
     .unwrap();

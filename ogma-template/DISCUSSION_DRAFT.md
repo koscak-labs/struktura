@@ -18,7 +18,7 @@ ogma cfs \
   --target-dir output
 ```
 
-Generates a full cFS app — per-channel DFA monitors with circular buffers, baseline learning, shift detection, EVS events. The DFA algorithm is a self-contained `dfa_core.h` (98 lines, zero deps beyond `<math.h>`, fixed stack buffers — flight-computer safe).
+Generates a full cFS app — per-channel DFA monitors with circular buffers, baseline learning, shift detection, EVS events. The DFA algorithm is a self-contained `dfa_core.h` (115 lines, zero deps beyond `<math.h>`, fixed stack buffers — flight-computer safe; its box table is `struktura::dfa_box_sizes(256)`, matching Rust `dfa()` for the default window, see the header's own comment for regenerating it at another window).
 
 DFA parameters (window size, threshold, learning period, R² gate) come through `extra-vars.json` exactly like you described. No Haskell needed on the user's side.
 

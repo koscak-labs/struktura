@@ -33,11 +33,14 @@ namespace Ref {
 
   struct DfaChannel {
       double buffer[DFA_WINDOW_SIZE];
+      double ordered[DFA_WINDOW_SIZE]; // the window in time order, for dfa_compute
       U32 pos;
       U32 filled;
       double baseline_alpha;
       U8 baseline_set;
       U32 window_count;
+      double last_alpha;     // alpha pushSample last fed to baseline/shift
+      double last_r_squared;
   };
 
   class DfaMonitor :

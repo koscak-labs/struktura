@@ -1,9 +1,15 @@
 /// The box-size table + `dfa_compute`, built from `struktura::dfa_box_sizes`
 /// so the boxes (and therefore alpha) always match Rust's `dfa()` on the same
 /// `window`, not a list good for one fixed window. `dfa_compute` sizes its
-/// scratch arrays from `DFA_WINDOW_SIZE`/`DFA_NUM_BOXES`/`DFA_BOX_SLOTS`,
-/// which the caller must `#define` before splicing this in (both call sites
-/// below do). Shared by [`generate_c_monitor`] (embedded in the self-contained
+/// `log_s`/`log_f` scratch from `DFA_NUM_BOXES`/`DFA_BOX_SLOTS`, which the
+/// caller must `#define` before splicing this in (both call sites below do).
+/// It takes `values` as non-`const` and **overwrites it with the cumulative
+/// profile** rather than using a separate `double y[DFA_WINDOW_SIZE]` local
+/// (an 8-byte-per-sample stack frame that reached about 33 KB at `--window
+/// 4096`, measured with `gcc -fstack-usage`): every caller passes a
+/// caller-owned scratch array that it rebuilds from its ring on every call
+/// (`ordered`) and does not read again afterward, so overwriting it in place
+/// is safe. Shared by [`generate_c_monitor`] (embedded in the self-contained
 /// monitor) and [`generate_dfa_core_h`] (a standalone header for the cFS/F
 /// Prime/ROS directory generators), so there is exactly one DFA
 /// implementation in the generated C, not a second one that can drift from
@@ -29,7 +35,7 @@ typedef struct {{
     double r_squared;
 }} dfa_result_t;
 
-static dfa_result_t dfa_compute(const double *values, int n) {{
+static dfa_result_t dfa_compute(double *values, int n) {{
     dfa_result_t result = {{0.5, 0.0}};
     if (n < 64) return result;
 
@@ -38,12 +44,13 @@ static dfa_result_t dfa_compute(const double *values, int n) {{
     for (i = 0; i < n; i++) mean += values[i];
     mean /= (double)n;
 
-    /* Cumulative profile */
-    double y[DFA_WINDOW_SIZE];
+    /* Cumulative profile, computed in place: `values` is scratch the caller
+       rebuilds on every call and does not read again afterward, so this
+       overwrites it instead of using a second window-sized array. */
     double cum = 0.0;
     for (i = 0; i < n; i++) {{
         cum += values[i] - mean;
-        y[i] = cum;
+        values[i] = cum;
     }}
 
     /* DFA: measure fluctuation at each box size */
@@ -61,8 +68,8 @@ static dfa_result_t dfa_compute(const double *values, int n) {{
             for (i = 0; i < s; i++) {{
                 double xi = (double)i;
                 sx += xi;
-                sy += y[start + i];
-                sxy += xi * y[start + i];
+                sy += values[start + i];
+                sxy += xi * values[start + i];
                 sx2 += xi * xi;
             }}
             double k = (double)s;
@@ -72,7 +79,7 @@ static dfa_result_t dfa_compute(const double *values, int n) {{
             double a1 = (k * sxy - sx * sy) / det;
             double resid = 0.0;
             for (i = 0; i < s; i++) {{
-                double d = y[start + i] - (a0 + a1 * (double)i);
+                double d = values[start + i] - (a0 + a1 * (double)i);
                 resid += d * d;
             }}
             f2_sum += resid / k;
@@ -169,6 +176,7 @@ typedef struct {{
     double baseline_alpha;
     int baseline_set;
     int learning_count;
+    dfa_result_t last; /* the alpha/r_squared the most recent push actually used */
 }} dfa_monitor_t;
 
 /* Initialize monitor */
@@ -189,6 +197,7 @@ static int dfa_monitor_push(dfa_monitor_t *m, double value) {{
     for (i = 0; i < DFA_WINDOW_SIZE; i++)
         m->ordered[i] = m->buffer[(m->pos + i) % DFA_WINDOW_SIZE];
     dfa_result_t r = dfa_compute(m->ordered, DFA_WINDOW_SIZE);
+    m->last = r;
 
     /* Learning phase: first 10 windows establish baseline */
     if (!m->baseline_set && m->learning_count >= 10 && r.r_squared > 0.7) {{
@@ -578,13 +587,44 @@ pub fn generate_hybrid_c(export: &crate::monitor::MonitorExport) -> String {
 
 /// One telemetry channel for the cFS/F Prime/ROS directory generators
 /// (`struktura generate --cfs|--fprime|--ros --db channels.json`).
-#[allow(dead_code)]
+///
+/// `#[non_exhaustive]`: build one with [`Channel::new`], not a struct
+/// literal, so adding a field later is not a breaking change.
+#[non_exhaustive]
+#[derive(Debug, Clone)]
 pub struct Channel {
+    /// The channel's identifier: names its per-channel ring
+    /// (`dfa_ch_<name>`/`m_ch_<name>`/`ch_<name>`) and input port
+    /// (`<name>In` for F Prime, `/<name>` for ROS), and appears in
+    /// baseline/shift log messages.
     pub name: String,
-    pub c_type: String,
+    /// The cFS message topic this channel arrives on; the generator adds
+    /// its `_MID` suffix. F Prime and ROS use `name` for their own
+    /// port/topic naming and do not read this field.
     pub topic: String,
+    /// The field within that cFS message holding the channel's value
+    /// (cast to `double` when read). Unused by F Prime/ROS.
     pub field: String,
+    /// The C message type for `topic` (cFS only), e.g. `sample_msg_t`.
     pub msg_type: String,
+}
+
+impl Channel {
+    /// Build a channel. See the field docs above for what each generator
+    /// reads.
+    pub fn new(
+        name: impl Into<String>,
+        topic: impl Into<String>,
+        field: impl Into<String>,
+        msg_type: impl Into<String>,
+    ) -> Self {
+        Channel {
+            name: name.into(),
+            topic: topic.into(),
+            field: field.into(),
+            msg_type: msg_type.into(),
+        }
+    }
 }
 
 /// Generate `dfa_monitor_cfs.c` for `struktura generate --cfs`: a full NASA
@@ -614,6 +654,7 @@ pub fn generate_cfs_main(channels: &[Channel], window: usize, threshold: f64) ->
     ));
     s.push_str("    uint32 pos;\n    uint32 filled;\n");
     s.push_str("    double baseline_alpha;\n    uint8 baseline_set;\n    uint32 window_count;\n");
+    s.push_str("    dfa_result_t last; /* the alpha/r_squared the most recent push actually used */\n");
     s.push_str("} dfa_channel_t;\n\n");
 
     for ch in channels {
@@ -670,6 +711,7 @@ pub fn generate_cfs_main(channels: &[Channel], window: usize, threshold: f64) ->
         window
     ));
     s.push_str(&format!("    dfa_result_t r = dfa_compute(ch->ordered, {});\n", window));
+    s.push_str("    ch->last = r;\n");
     s.push_str("    if (!ch->baseline_set && ch->window_count >= DFA_LEARN_WINDOWS && r.r_squared > DFA_R2_MIN) {\n");
     s.push_str("        ch->baseline_alpha = r.alpha;\n        ch->baseline_set = 1;\n");
     s.push_str("        CFE_EVS_SendEvent(DFA_MON_BASELINE_EID, CFE_EVS_EventType_INFORMATION,\n");
@@ -799,6 +841,7 @@ pub fn generate_fprime_cpp(channels: &[Channel], window: usize, threshold: f64) 
         window
     ));
     s.push_str(&format!("    dfa_result_t r = dfa_compute(ch.ordered, {});\n", window));
+    s.push_str("    ch.last = r;\n");
     s.push_str("    if (!ch.baselineSet && ch.windowCount >= 10 && r.r_squared > 0.7) {\n");
     s.push_str("        ch.baselineAlpha = r.alpha; ch.baselineSet = true;\n");
     s.push_str("        this->log_ACTIVITY_HI_BaselineEstablished(name, r.alpha, r.r_squared);\n");
@@ -815,7 +858,8 @@ pub fn generate_fprime_cpp(channels: &[Channel], window: usize, threshold: f64) 
 pub fn generate_fprime_hpp(channels: &[Channel], window: usize) -> String {
     let mut s = String::with_capacity(1024);
     s.push_str("#ifndef DFA_MONITOR_HPP\n#define DFA_MONITOR_HPP\n\n");
-    s.push_str("#include \"DfaMonitorComponentAc.hpp\"\n\n");
+    s.push_str("#include \"DfaMonitorComponentAc.hpp\"\n");
+    s.push_str("#include \"dfa_core.h\" // dfa_result_t, for DfaChannel::last\n\n");
     s.push_str("namespace Svc {\n\n");
     s.push_str("struct DfaChannel {\n");
     s.push_str(&format!("    double buffer[{}];\n", window));
@@ -824,7 +868,8 @@ pub fn generate_fprime_hpp(channels: &[Channel], window: usize) -> String {
         window
     ));
     s.push_str("    U32 pos; bool filled; double baselineAlpha;\n");
-    s.push_str("    bool baselineSet; U32 windowCount;\n};\n\n");
+    s.push_str("    bool baselineSet; U32 windowCount;\n");
+    s.push_str("    dfa_result_t last; // the alpha/r_squared the most recent push actually used\n};\n\n");
     s.push_str("class DfaMonitor : public DfaMonitorComponentBase {\n");
     s.push_str("  public:\n    DfaMonitor(const char* name);\n");
     s.push_str("  private:\n");
@@ -868,7 +913,8 @@ pub fn generate_ros_monitor(channels: &[Channel], window: usize, threshold: f64)
     ));
     s.push_str("    uint32_t pos = 0;\n    bool filled = false;\n");
     s.push_str("    double baseline_alpha = 0.0;\n    bool baseline_set = false;\n");
-    s.push_str("    uint32_t window_count = 0;\n};\n\n");
+    s.push_str("    uint32_t window_count = 0;\n");
+    s.push_str("    dfa_result_t last{}; // the alpha/r_squared the most recent push actually used\n};\n\n");
 
     s.push_str("class DfaMonitorNode : public rclcpp::Node {\n");
     s.push_str("public:\n");
@@ -914,6 +960,7 @@ pub fn generate_ros_monitor(channels: &[Channel], window: usize, threshold: f64)
         "        dfa_result_t r = dfa_compute(ch.ordered, {});\n",
         window
     ));
+    s.push_str("        ch.last = r;\n");
     s.push_str("        if (!ch.baseline_set && ch.window_count >= DFA_LEARN_WINDOWS && r.r_squared > DFA_R2_MIN) {\n");
     s.push_str("            ch.baseline_alpha = r.alpha; ch.baseline_set = true;\n");
     s.push_str("            RCLCPP_INFO(this->get_logger(), \"DFA baseline %s: alpha=%.3f R2=%.4f\", name, r.alpha, r.r_squared);\n");

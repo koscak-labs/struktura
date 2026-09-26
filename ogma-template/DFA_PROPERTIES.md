@@ -102,17 +102,18 @@ sizes requires O(n * B) multiply-accumulate operations.
 Total work per box size: O(n). Total across B box sizes: O(n * B).
 The final log-log regression is O(B), negligible.
 
-**Concrete cost.** With B = 6 box sizes {16, 24, 36, 54, 81, 121} and
-n = 256:
+**Concrete cost.** With B = 12 box sizes (`dfa_core.h`'s
+`{16, 18, 20, 23, 26, 30, 34, 38, 43, 49, 56, 64}`, `struktura::dfa_box_sizes(256)`)
+and n = 256:
 
 - Cumulative profile: 256 additions
-- Per-box detrending: sum of floor(256/s_b) * s_b ~ 256 * 6 ~ 1536 MACs
-- Log-log regression: 6 * 4 = 24 MACs
-- **Total: ~1,500 MACs per channel per evaluation**
+- Per-box detrending: sum of floor(256/s_b) * s_b ~ 256 * 12 ~ 3072 MACs
+- Log-log regression: 12 * 4 = 48 MACs
+- **Total: ~3,100 MACs per channel per evaluation**
 
 On a 400 MHz RAD750 (typical flight processor) at 1 MAC/cycle, this is
-3.75 microseconds. At a 1 Hz rate group, CPU utilization per channel is
-0.000375%, or **0.004% for 10 monitored channels**.
+7.75 microseconds. At a 1 Hz rate group, CPU utilization per channel is
+0.000775%, or **0.008% for 10 monitored channels** -- still negligible.
 
 ---
 
@@ -124,17 +125,22 @@ for bookkeeping state. There is no dynamic memory allocation.
 
 **Concrete cost.** For n = 256:
 
-| Component              | Bytes  |
-|------------------------|--------|
-| Circular buffer (f64)  | 2,048  |
-| Position index (u32)   | 4      |
-| Filled flag (u32)      | 4      |
-| Baseline alpha (f64)   | 8      |
-| Baseline set flag (u8) | 1      |
-| Window count (u32)     | 4      |
-| **Total per channel**  | **~2.1 KB** |
+| Component                    | Bytes  |
+|------------------------------|--------|
+| Circular buffer (f64)        | 2,048  |
+| Time-ordered scratch (f64)   | 2,048  |
+| Position index (u32)         | 4      |
+| Filled flag (u32)            | 4      |
+| Baseline alpha (f64)         | 8      |
+| Baseline set flag (u8)       | 1      |
+| Window count (u32)           | 4      |
+| Last alpha / R² (2x f64)     | 16     |
+| **Total per channel**        | **~4.1 KB** |
 
-For 10 monitored channels: ~21 KB total.
+For 10 monitored channels: ~41 KB total. (Before the ring-reorder fix,
+`dfa_channel_t` had no time-ordered scratch and computed alpha on the
+circular buffer as stored -- half this size, but its alpha diverged from
+Rust `dfa()` once the ring wrapped; see the CHANGELOG.)
 
 **Guarantee.** The implementation uses a fixed-size circular buffer.
 No heap allocation occurs during monitoring. No `malloc`, `calloc`,

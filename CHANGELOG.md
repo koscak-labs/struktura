@@ -7,22 +7,56 @@ All notable changes to Struktura are documented here.
 - `struktura generate --cfs|--fprime|--ros` (the cFS app, F Prime component,
   and ROS 2 node directory generators) generated C/C++ whose alpha did not
   match Rust `dfa()` on the same data: `dfa_core.h` used a fixed box list
-  good only for window 512 (so a `--window` other than 512 measured the
-  wrong scales), its DFA scratch array was capped at 512 samples (so a
-  `--window` above 512 silently mixed a full-window mean with a truncated
-  profile), and none of the three generators reordered the ring buffer into
-  time order before scoring it (so the alpha was computed on a
-  discontinuity between the newest and oldest samples in the ring). All
-  three now include the shared, tested `dfa_core.h`
-  (`struktura::codegen::generate_dfa_core_h`, box list from
+  `{16, 24, 36, 54, 81, 121}` that never matched Rust's `dfa_box_sizes` at
+  any window, including 512 (up to about 0.39 alpha off there on one
+  measured series; up to about 0.73 on another) and, below window 144,
+  always the `{0.5, 0.0}` placeholder with `r_squared` 0, so those monitors
+  could never set a baseline or alarm at all. On top of that its DFA scratch
+  array was capped at 512 samples (so a `--window` above 512 silently mixed
+  a full-window mean with a truncated profile), and none of the three
+  generators reordered the ring buffer into time order before scoring it (so
+  the alpha was computed on a discontinuity between the newest and oldest
+  samples in the ring). All three now include the shared, tested
+  `dfa_core.h` (`struktura::codegen::generate_dfa_core_h`, box list from
   `struktura::dfa_box_sizes(window)`, same `dfa_compute` body as
   `generate_c_monitor`) and reorder the ring into time order first, the way
   `generate_c_monitor` already did. The generator functions moved from
   `src/bin/struktura.rs` into `src/codegen.rs` (now `pub`) so they can be
   exercised directly by a differential test; the CLI's behavior and flags
-  are unchanged. Test: tests/cli_generators_match_rust.rs (fails on the old
-  behavior, e.g. window 96: Rust alpha 3.44 vs the old fixed box list's
-  placeholder 0.5).
+  are unchanged except that `generate --cfs|--fprime|--ros` now rejects a
+  `--window` below 72 (where `dfa_box_sizes` gives fewer than 3 box sizes,
+  so the old and new code alike could never set a baseline), naming the
+  minimum in the error. `dfa_compute` also no longer keeps a
+  window-sized profile array on the stack (it overwrites its input in
+  place instead), which matters for `--window` above 512: the old fixed
+  header capped that frame near 4.5 KB regardless of window, but a correct,
+  window-sized version would have reached about 33 KB at `--window 4096`
+  inside a cFS app task; it is now a small constant instead (measured with
+  `gcc -fstack-usage`: about 4.4-4.6 KB at window 512 and 33 KB at window
+  4096 for a from-scratch window-sized array, against a few hundred bytes
+  at either window once it overwrites its input; `generate_c_monitor`
+  already had this array and is fixed the same way). Tests:
+  tests/cli_generators_match_rust.rs (fails on the old behavior, e.g.
+  window 96: Rust alpha 3.44 vs the old fixed box list's placeholder 0.5;
+  includes an in-repo negative control that reverts the ring-reorder fix
+  and asserts the comparison notices) and its
+  `generate_rejects_too_small_window` window-validation test.
+  Correction to the v1.8.5 entry below: that entry names `generate --cfs`
+  as fixed; the directory generator (`generate --cfs`, `src/bin/struktura.rs`)
+  was not touched by that fix, only the single-file `codegen --cfs`
+  variant (`struktura::codegen::generate_cfs_app`) was. `generate --cfs`
+  carried the storage-order bug (and the wrong box list) until this entry.
+  `ogma-template/` (excluded from the published crate, GitHub-only) is a
+  hand-maintained set of cFS/F Prime templates for the nasa/ogma
+  discussion-#315 workflow, not `struktura::codegen` output, and it carried
+  the exact same bug by hand: a fixed box list, a stack-sized profile
+  array, and no ring reorder. Fixed by hand the same way (box table from
+  `struktura::dfa_box_sizes(256)`, its `DFA_WINDOW_SIZE` default; in-place
+  profile; ring unrolled into time order) and proved against Rust the same
+  way (tests/ogma_template_dfa_matches_rust.rs, which reads the actual
+  ring-push code out of `ogma-template/cfs/dfa_monitor/fsw/src/dfa_monitor_cfs.c`
+  by exact text markers so it cannot silently drift from what is shipped
+  there).
 - `guard`, `guard --watch` and `copilot-compare` merged repeat alarms by
   leg alone, so a second sensor alarming on the same leg within 50 rows
   of another was dropped (two sensors stuck 20 rows apart: 1 fault

@@ -1,19 +1,32 @@
 //! `struktura generate --cfs|--fprime|--ros` (the directory generators in
 //! `src/bin/struktura.rs`, backed by `struktura::codegen::{generate_cfs_main,
 //! generate_fprime_cpp, generate_ros_monitor, generate_dfa_core_h}`) used to
-//! carry a *second*, untested DFA implementation baked into `dfa_core.h`:
-//! a fixed box list good only for window 512, a `y[512]` cap that silently
-//! truncated any `--window` above 512, and no reordering of the ring buffer
-//! into time order before scoring it. This compares their generated C/C++
+//! carry a *second*, untested DFA implementation baked into `dfa_core.h`: a
+//! fixed box list `{16,24,36,54,81,121}` that never matched Rust's
+//! `dfa_box_sizes` at any window -- including 512 (up to about 0.39 alpha
+//! off there) and, below window 144, always the `{0.5, 0.0}` placeholder, so
+//! those monitors could never set a baseline or alarm -- a `y[512]`-capped
+//! scratch array on top of that, and no reordering of the ring buffer into
+//! time order before scoring it. This compares their generated C/C++
 //! output's alpha against Rust `struktura::dfa` on the same window, in time
-//! order, for every `--window` the CLI accepts (not just 512).
+//! order, at windows 64/72/96/97/128/250/512/1024 (64 compares the
+//! `{0.5, 0.0}` placeholder on both sides; real alpha coverage starts at 72)
+//! plus explicit white-noise/AR(1)/random-walk regimes at window 96, and a
+//! negative control that reverts the time-order fix and asserts the
+//! comparison actually notices.
 //!
 //! Each generator now includes the shared, tested `dfa_core.h`
 //! (`generate_dfa_core_h`, built from `struktura::dfa_box_sizes(window)`,
 //! same body as `generate_c_monitor`'s `dfa_compute`) and reorders its ring
 //! into time order (`ordered`) before calling it -- the same fix already
 //! proven for `generate_c_monitor`/`generate_cfs_app` in
-//! `c_monitor_matches_rust.rs`.
+//! `c_monitor_matches_rust.rs`. Each push function also stores the
+//! `dfa_result_t` it computed into a `last` field on the channel, and this
+//! test reads alpha from there -- the value the generated monitor's own
+//! baseline/shift logic acted on -- rather than recomputing it, since
+//! `dfa_compute` now overwrites its input with the cumulative profile (see
+//! `src/codegen.rs`'s `dfa_compute_block` doc) and a second call on the same
+//! buffer would not be the raw window any more.
 //!
 //! The cFS target is exercised by calling the generated `dfa_push` directly
 //! (it becomes visible when the harness `#include`s the generated `.c`, as
@@ -22,10 +35,14 @@
 //! component base, or a real ROS 2 install) to build as shipped, neither of
 //! which struktura provides or this machine has; those are exercised the
 //! same way against minimal stand-in headers, reaching the generated
-//! `pushSample`/`push_sample` (both private) via `#define private public`,
-//! a standard, narrowly-scoped test technique -- every standard header the
-//! generated file needs is included (and so already guarded) before that
-//! macro is defined.
+//! `pushSample`/`push_sample` (both private) via `#define private public`.
+//! Every standard header either stub or `dfa_core.h` needs (`<cstdio>`,
+//! `<cstdint>`, `<cstring>`, `<cmath>`, `<math.h>`, `<functional>`,
+//! `<memory>`, `<string>`) is included, and so already guarded, in both
+//! harnesses before that macro is defined -- reusing a keyword as a macro
+//! name while a standard header is still being parsed is undefined
+//! behavior ([macro.names]); pre-including everything first means the
+//! guards skip those headers entirely once the macro is live.
 
 mod common;
 
@@ -38,16 +55,14 @@ use struktura::codegen::{
     generate_fprime_cpp, generate_fprime_hpp, generate_ros_monitor, Channel,
 };
 
-const WINDOWS: [usize; 5] = [64, 96, 128, 512, 1024];
+/// 64 only exercises the `{0.5, 0.0}` placeholder (both sides agree
+/// trivially); 72 is the smallest window with a real alpha; 97 and 250 are
+/// odd/non-power windows; 512 and 1024 cover the large end (1024 wraps the
+/// ring three and a half times over, per `blended_series` below).
+const WINDOWS: [usize; 8] = [64, 72, 96, 97, 128, 250, 512, 1024];
 
 fn default_channel() -> Channel {
-    Channel {
-        name: "input_value".into(),
-        c_type: "double".into(),
-        topic: "SAMPLE_MID".into(),
-        field: "payload".into(),
-        msg_type: "sample_msg_t".into(),
-    }
+    Channel::new("input_value", "SAMPLE_MID", "payload", "sample_msg_t")
 }
 
 // ---- series generators: white noise, AR(1), random walk -------------------
@@ -128,6 +143,13 @@ fn worst_diff(rust: &[f64], other: &[f64], label: &str, window: usize) -> f64 {
     worst
 }
 
+/// Count of `|rust - other| > 1e-9`, for the negative control (which expects
+/// mismatches rather than asserting their absence).
+fn count_mismatches(rust: &[f64], other: &[f64]) -> usize {
+    assert_eq!(rust.len(), other.len());
+    rust.iter().zip(other).filter(|(r, c)| (**r - **c).abs() > 1e-9).count()
+}
+
 // ---- C++ compiler helper (mirrors common::c_compiler, for a C compiler) ---
 
 fn cxx_compiler() -> Option<String> {
@@ -187,6 +209,19 @@ fn compile_and_run_cxx(cxx: &str, dir: &Path, source: &str, stdin_text: &str) ->
 fn feed(cc_out: &str) -> Vec<f64> {
     cc_out.lines().map(|l| l.trim().parse().unwrap()).collect()
 }
+
+/// Standard headers every stub or `dfa_core.h` needs, pre-included (and so
+/// already guarded) before either C++ harness defines `private` as `public`.
+const CXX_HARNESS_PRELUDE: &str = "\
+#include <cstdio>
+#include <cstdint>
+#include <cstring>
+#include <cmath>
+#include <math.h>
+#include <functional>
+#include <memory>
+#include <string>
+";
 
 const CFE_H_STUB: &str = "\
 /* Minimal stand-in for NASA cFS's cfe.h: just enough for the generated
@@ -250,10 +285,15 @@ const DFA_EVENTS_H_STUB: &str = "\
 
 /// Feed `x` through the generated cFS app's `dfa_push` (visible once the
 /// harness `#include`s the generated `.c`, as the other differential tests
-/// in this crate do) and return one alpha per push once the ring is full.
-fn alphas_from_cfs(cc: &str, window: usize, x: &[f64]) -> Vec<f64> {
+/// in this crate do) and return one alpha per push once the ring is full,
+/// read from `ch.last.alpha` -- the value `dfa_push` itself fed to the
+/// baseline/shift logic -- not recomputed by the harness. `mutate` is
+/// applied to the generated `dfa_monitor_cfs.c` text before it is compiled,
+/// so a caller can plant a regression (the negative control below reverts
+/// the time-order fix this way).
+fn alphas_from_cfs(cc: &str, window: usize, x: &[f64], mutate: impl Fn(String) -> String) -> Vec<f64> {
     let channels = [default_channel()];
-    let dir = scratch(&format!("cli-cfs-{window}"));
+    let dir = scratch(&format!("cli-cfs-{window}-{}", x.len()));
     write_all(
         &dir,
         &[
@@ -262,14 +302,14 @@ fn alphas_from_cfs(cc: &str, window: usize, x: &[f64]) -> Vec<f64> {
             ("dfa_monitor_cfs.h", generate_cfs_header(&channels)),
             ("dfa_monitor_cfs_events.h", DFA_EVENTS_H_STUB.to_string()),
             ("dfa_monitor_cfs_msgids.h", generate_cfs_msgids(&channels)),
-            ("dfa_monitor_cfs.c", generate_cfs_main(&channels, window, 0.08)),
+            ("dfa_monitor_cfs.c", mutate(generate_cfs_main(&channels, window, 0.08))),
             (
                 "harness.c",
                 "#include <stdio.h>\n#include <string.h>\n#include \"dfa_monitor_cfs.c\"\n\
                  int main(void) {\n    dfa_channel_t ch;\n    double v;\n\
                  memset(&ch, 0, sizeof(ch));\n\
                  while (scanf(\"%lf\", &v) == 1) {\n        dfa_push(&ch, v, \"harness\");\n\
-                 if (ch.filled) printf(\"%.17e\\n\", dfa_compute(ch.ordered, DFA_WINDOW_SIZE).alpha);\n\
+                 if (ch.filled) printf(\"%.17e\\n\", ch.last.alpha);\n\
                  }\n    return 0;\n}\n"
                     .to_string(),
             ),
@@ -318,31 +358,33 @@ public:
 ";
 
 /// Feed `x` through the generated F Prime component's `pushSample`, reached
-/// via `#define private public` (a standard, narrowly-scoped test
-/// technique; every standard header the generated file needs is included,
-/// and so already guarded, before that macro is defined). Returns one alpha
-/// per push once the ring is full.
-fn alphas_from_fprime(cxx: &str, window: usize, x: &[f64]) -> Vec<f64> {
+/// via `#define private public` after every standard header the stub and
+/// `dfa_core.h` need is already pre-included (see `CXX_HARNESS_PRELUDE`).
+/// Returns one alpha per push once the ring is full, read from
+/// `ch.last.alpha`. `mutate` is applied to the generated `DfaMonitor.cpp`
+/// text before it is compiled.
+fn alphas_from_fprime(cxx: &str, window: usize, x: &[f64], mutate: impl Fn(String) -> String) -> Vec<f64> {
     let channels = [default_channel()];
-    let dir = scratch(&format!("cli-fprime-{window}"));
+    let dir = scratch(&format!("cli-fprime-{window}-{}", x.len()));
     write_all(
         &dir,
         &[
             ("DfaMonitorComponentAc.hpp", FPRIME_AC_STUB.to_string()),
             ("dfa_core.h", generate_dfa_core_h(window)),
             ("DfaMonitor.hpp", generate_fprime_hpp(&channels, window)),
-            ("DfaMonitor.cpp", generate_fprime_cpp(&channels, window, 0.08)),
+            ("DfaMonitor.cpp", mutate(generate_fprime_cpp(&channels, window, 0.08))),
             (
                 "harness.cpp",
-                "#include <cstdio>\n#include <cstring>\n#include <cstdint>\n\
-                 #define private public\n#include \"DfaMonitor.cpp\"\n\
-                 int main(void) {\n    Svc::DfaMonitor mon(\"harness\");\n    double v;\n\
-                 while (scanf(\"%lf\", &v) == 1) {\n\
-                 mon.pushSample(mon.m_ch_input_value, v, \"harness\");\n\
-                 if (mon.m_ch_input_value.filled)\n\
-                 printf(\"%.17e\\n\", dfa_compute(mon.m_ch_input_value.ordered, DFA_WINDOW_SIZE).alpha);\n\
-                 }\n    return 0;\n}\n"
-                    .to_string(),
+                format!(
+                    "{CXX_HARNESS_PRELUDE}\
+                     #define private public\n#include \"DfaMonitor.cpp\"\n\
+                     int main(void) {{\n    Svc::DfaMonitor mon(\"harness\");\n    double v;\n\
+                     while (scanf(\"%lf\", &v) == 1) {{\n\
+                     mon.pushSample(mon.m_ch_input_value, v, \"harness\");\n\
+                     if (mon.m_ch_input_value.filled)\n\
+                     printf(\"%.17e\\n\", mon.m_ch_input_value.last.alpha);\n\
+                     }}\n    return 0;\n}}\n"
+                ),
             ),
         ],
     );
@@ -444,10 +486,14 @@ struct String {
 /// Feed `x` through the generated ROS 2 node's `push_sample`, reached via
 /// `#define private public` plus renaming its generated `main` out of the
 /// way (`#define main dfa_generated_main`) so the harness can supply its
-/// own. Returns one alpha per push once the ring is full.
-fn alphas_from_ros(cxx: &str, window: usize, x: &[f64]) -> Vec<f64> {
+/// own, after every standard header the stubs and `dfa_core.h` need is
+/// already pre-included (see `CXX_HARNESS_PRELUDE`). Returns one alpha per
+/// push once the ring is full, read from `ch.last.alpha`. `mutate` is
+/// applied to the generated `dfa_monitor_node.cpp` text before it is
+/// compiled.
+fn alphas_from_ros(cxx: &str, window: usize, x: &[f64], mutate: impl Fn(String) -> String) -> Vec<f64> {
     let channels = [default_channel()];
-    let dir = scratch(&format!("cli-ros-{window}"));
+    let dir = scratch(&format!("cli-ros-{window}-{}", x.len()));
     write_all(
         &dir,
         &[
@@ -455,20 +501,23 @@ fn alphas_from_ros(cxx: &str, window: usize, x: &[f64]) -> Vec<f64> {
             ("std_msgs/msg/float64.hpp", STD_MSGS_FLOAT64_STUB.to_string()),
             ("std_msgs/msg/string.hpp", STD_MSGS_STRING_STUB.to_string()),
             ("dfa_core.h", generate_dfa_core_h(window)),
-            ("dfa_monitor_node.cpp", generate_ros_monitor(&channels, window, 0.08)),
+            (
+                "dfa_monitor_node.cpp",
+                mutate(generate_ros_monitor(&channels, window, 0.08)),
+            ),
             (
                 "harness.cpp",
-                "#include <cstdio>\n#include <cstring>\n#include <cstdint>\n\
-                 #include <functional>\n#include <memory>\n#include <cmath>\n\
-                 #define private public\n#define main dfa_generated_main\n\
-                 #include \"dfa_monitor_node.cpp\"\n#undef main\n\
-                 int main(void) {\n    DfaMonitorNode node;\n    double v;\n\
-                 while (scanf(\"%lf\", &v) == 1) {\n\
-                 node.push_sample(node.ch_input_value, v, \"harness\");\n\
-                 if (node.ch_input_value.filled)\n\
-                 printf(\"%.17e\\n\", dfa_compute(node.ch_input_value.ordered, DFA_WINDOW_SIZE).alpha);\n\
-                 }\n    return 0;\n}\n"
-                    .to_string(),
+                format!(
+                    "{CXX_HARNESS_PRELUDE}\
+                     #define private public\n#define main dfa_generated_main\n\
+                     #include \"dfa_monitor_node.cpp\"\n#undef main\n\
+                     int main(void) {{\n    DfaMonitorNode node;\n    double v;\n\
+                     while (scanf(\"%lf\", &v) == 1) {{\n\
+                     node.push_sample(node.ch_input_value, v, \"harness\");\n\
+                     if (node.ch_input_value.filled)\n\
+                     printf(\"%.17e\\n\", node.ch_input_value.last.alpha);\n\
+                     }}\n    return 0;\n}}\n"
+                ),
             ),
         ],
     );
@@ -477,6 +526,11 @@ fn alphas_from_ros(cxx: &str, window: usize, x: &[f64]) -> Vec<f64> {
     let alphas = feed(&out);
     let _ = fs::remove_dir_all(&dir);
     alphas
+}
+
+/// Identity source transform: no planted regression.
+fn no_mutation(s: String) -> String {
+    s
 }
 
 #[test]
@@ -496,15 +550,15 @@ fn cli_generators_match_rust_dfa() {
         let x = blended_series(seed + window as u64, 3 * window + window / 2);
         let rust = rust_alphas(&x, window);
 
-        let cfs = alphas_from_cfs(&cc, window, &x);
+        let cfs = alphas_from_cfs(&cc, window, &x, no_mutation);
         max_dalpha = max_dalpha.max(worst_diff(&rust, &cfs, "cfs/blended", window));
         compared += rust.len();
 
-        let fprime = alphas_from_fprime(&cxx, window, &x);
+        let fprime = alphas_from_fprime(&cxx, window, &x, no_mutation);
         max_dalpha = max_dalpha.max(worst_diff(&rust, &fprime, "fprime/blended", window));
         compared += rust.len();
 
-        let ros = alphas_from_ros(&cxx, window, &x);
+        let ros = alphas_from_ros(&cxx, window, &x, no_mutation);
         max_dalpha = max_dalpha.max(worst_diff(&rust, &ros, "ros/blended", window));
         compared += rust.len();
     }
@@ -521,19 +575,132 @@ fn cli_generators_match_rust_dfa() {
     for (name, x) in &series {
         let rust = rust_alphas(x, window);
 
-        let cfs = alphas_from_cfs(&cc, window, x);
+        let cfs = alphas_from_cfs(&cc, window, x, no_mutation);
         max_dalpha = max_dalpha.max(worst_diff(&rust, &cfs, &format!("cfs/{name}"), window));
         compared += rust.len();
 
-        let fprime = alphas_from_fprime(&cxx, window, x);
+        let fprime = alphas_from_fprime(&cxx, window, x, no_mutation);
         max_dalpha = max_dalpha.max(worst_diff(&rust, &fprime, &format!("fprime/{name}"), window));
         compared += rust.len();
 
-        let ros = alphas_from_ros(&cxx, window, x);
+        let ros = alphas_from_ros(&cxx, window, x, no_mutation);
         max_dalpha = max_dalpha.max(worst_diff(&rust, &ros, &format!("ros/{name}"), window));
         compared += rust.len();
     }
 
     // Printed only on this path, after the C/C++ was compiled and compared.
     println!("cli_generators_match_rust: compared {compared} windows, max |dalpha| {max_dalpha:e}");
+}
+
+/// Proves the comparison above can actually fail: reverts the time-order fix
+/// (the exact pre-fix bug -- `dfa_compute` scoring the ring in storage order
+/// instead of `ordered`) in the generated source text for all three targets,
+/// the way `hybrid_c_alarms_match_rust.rs`'s negative control scales its C
+/// threshold, and asserts the comparison notices in every one.
+#[test]
+fn cli_generators_negative_control_detects_storage_order_regression() {
+    let Some(cc) = common::c_compiler() else {
+        return;
+    };
+    let Some(cxx) = cxx_compiler() else {
+        return;
+    };
+
+    let window = 128usize;
+    let seed = diff_seed("cli_generators_negative_control", 0xBAD_C0DE);
+    let x = blended_series(seed, 3 * window + window / 2);
+    let rust = rust_alphas(&x, window);
+
+    let revert_cfs = move |s: String| -> String {
+        let needle = format!("dfa_compute(ch->ordered, {window})");
+        let replacement = format!("dfa_compute(ch->buffer, {window})");
+        let out = s.replacen(&needle, &replacement, 1);
+        assert_ne!(out, s, "negative control did not change the generated cFS C");
+        out
+    };
+    let revert_fprime = move |s: String| -> String {
+        let needle = format!("dfa_compute(ch.ordered, {window})");
+        let replacement = format!("dfa_compute(ch.buffer, {window})");
+        let out = s.replacen(&needle, &replacement, 1);
+        assert_ne!(out, s, "negative control did not change the generated F Prime C++");
+        out
+    };
+    let revert_ros = revert_fprime; // Copy: only captures `window` (usize)
+
+    let cfs_bad = alphas_from_cfs(&cc, window, &x, revert_cfs);
+    let fprime_bad = alphas_from_fprime(&cxx, window, &x, revert_fprime);
+    let ros_bad = alphas_from_ros(&cxx, window, &x, revert_ros);
+
+    let cfs_mismatches = count_mismatches(&rust, &cfs_bad);
+    let fprime_mismatches = count_mismatches(&rust, &fprime_bad);
+    let ros_mismatches = count_mismatches(&rust, &ros_bad);
+
+    println!(
+        "cli_generators_match_rust: negative control (storage-order regression, window {window}) \
+         mismatches cfs {cfs_mismatches}/{n} fprime {fprime_mismatches}/{n} ros {ros_mismatches}/{n}",
+        n = rust.len()
+    );
+    assert!(
+        cfs_mismatches > 0,
+        "negative control produced no cFS mismatches: the comparison is not sensitive"
+    );
+    assert!(
+        fprime_mismatches > 0,
+        "negative control produced no F Prime mismatches: the comparison is not sensitive"
+    );
+    assert!(
+        ros_mismatches > 0,
+        "negative control produced no ROS mismatches: the comparison is not sensitive"
+    );
+}
+
+/// `struktura generate` rejects a `--window` too small for `dfa_compute` to
+/// ever return a real alpha (below 72, `dfa_box_sizes` gives fewer than 3
+/// box sizes, so the monitor could never set a baseline or alarm), instead
+/// of silently generating one. Needs no C/C++ compiler: this only checks the
+/// CLI's own argument validation.
+#[test]
+fn generate_rejects_too_small_window() {
+    let exe = env!("CARGO_BIN_EXE_struktura");
+    let dir = scratch("window-validation");
+
+    let rejected = Command::new(exe)
+        .args(["generate", "--cfs", "--window", "64", "-o"])
+        .arg(dir.join("too_small"))
+        .output()
+        .expect("run struktura generate");
+    assert!(
+        !rejected.status.success(),
+        "expected --window 64 to be rejected, got exit {:?}",
+        rejected.status.code()
+    );
+    let stderr = String::from_utf8_lossy(&rejected.stderr);
+    assert!(
+        stderr.contains("too small") && stderr.contains("72"),
+        "unexpected stderr for --window 64: {stderr}"
+    );
+    assert!(
+        !dir.join("too_small").exists(),
+        "rejected --window 64 should not have created an output directory"
+    );
+
+    let zero = Command::new(exe)
+        .args(["generate", "--cfs", "--window", "0", "-o"])
+        .arg(dir.join("zero"))
+        .output()
+        .expect("run struktura generate");
+    assert!(!zero.status.success(), "expected --window 0 to be rejected");
+
+    let accepted = Command::new(exe)
+        .args(["generate", "--cfs", "--window", "72", "-o"])
+        .arg(dir.join("minimum_ok"))
+        .output()
+        .expect("run struktura generate");
+    assert!(
+        accepted.status.success(),
+        "expected --window 72 (the minimum) to be accepted: {}",
+        String::from_utf8_lossy(&accepted.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
 }

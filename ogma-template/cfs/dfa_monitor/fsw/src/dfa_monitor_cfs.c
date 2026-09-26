@@ -44,11 +44,14 @@
 
 typedef struct {
     double buffer[DFA_WINDOW_SIZE];
+    double ordered[DFA_WINDOW_SIZE]; /* the window in time order, for dfa_compute */
     uint32 pos;
     uint32 filled;
     double baseline_alpha;
     uint8  baseline_set;
     uint32 window_count;
+    double last_alpha;     /* alpha dfa_channel_push last fed to baseline/shift */
+    double last_r_squared;
 } dfa_channel_t;
 
 {{#variables}}
@@ -90,7 +93,15 @@ static int dfa_channel_push(dfa_channel_t *ch, double value,
     if (!ch->filled) return 0;
 
     ch->window_count++;
-    dfa_result_t r = dfa_compute(ch->buffer, DFA_WINDOW_SIZE);
+    /* The ring holds the oldest sample at pos; DFA needs the window in time order. */
+    {
+        uint32 i;
+        for (i = 0; i < DFA_WINDOW_SIZE; i++)
+            ch->ordered[i] = ch->buffer[(ch->pos + i) % DFA_WINDOW_SIZE];
+    }
+    dfa_result_t r = dfa_compute(ch->ordered, DFA_WINDOW_SIZE);
+    ch->last_alpha = r.alpha;
+    ch->last_r_squared = r.r_squared;
 
     if (!ch->baseline_set &&
         ch->window_count >= DFA_LEARN_WINDOWS &&

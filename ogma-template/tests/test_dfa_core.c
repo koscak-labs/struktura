@@ -1,11 +1,16 @@
 /* test_dfa_core.c -- Verify dfa_core.h compiles and produces correct results.
- * Compile: gcc -Wall -Werror -O2 -lm -o test_dfa_core test_dfa_core.c
+ * Compile: gcc -Wall -Werror -O2 -o test_dfa_core test_dfa_core.c -lm
+ * (-lm must come after the source: GNU ld only pulls in a library's
+ * symbols for objects it has already seen, so `-lm` before the .c file
+ * silently drops libm and fails to link with "undefined reference to
+ * `log'"/`sqrt'`.)
  * Run: ./test_dfa_core
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include <string.h>
 
 #include "../cfs/dfa_monitor/fsw/src/dfa_core.h"
 
@@ -67,15 +72,19 @@ static void test_constant_signal(void) {
 }
 
 static void test_deterministic(void) {
-    double data[256];
+    /* dfa_compute overwrites its input with the cumulative profile, so the
+     * second call needs its own copy of the raw samples -- calling it twice
+     * on the same array would compute a profile of a profile. */
+    double data[256], data2[256];
     int i;
     unsigned int seed = 99;
     for (i = 0; i < 256; i++) {
         seed = seed * 1103515245 + 12345;
         data[i] = (double)((seed >> 16) & 0x7FFF) / 32768.0;
     }
+    memcpy(data2, data, sizeof(data));
     dfa_result_t r1 = dfa_compute(data, 256);
-    dfa_result_t r2 = dfa_compute(data, 256);
+    dfa_result_t r2 = dfa_compute(data2, 256);
     check("deterministic: same alpha", r1.alpha == r2.alpha);
     check("deterministic: same R2", r1.r_squared == r2.r_squared);
 }

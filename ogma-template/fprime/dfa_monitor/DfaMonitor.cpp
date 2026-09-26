@@ -77,7 +77,13 @@ namespace Ref {
     }
 
     ch.window_count++;
-    dfa_result_t r = dfa_compute(ch.buffer, DFA_WINDOW_SIZE);
+    /* The ring holds the oldest sample at pos; DFA needs the window in time order. */
+    for (U32 i = 0; i < DFA_WINDOW_SIZE; i++) {
+      ch.ordered[i] = ch.buffer[(ch.pos + i) % DFA_WINDOW_SIZE];
+    }
+    dfa_result_t r = dfa_compute(ch.ordered, DFA_WINDOW_SIZE);
+    ch.last_alpha = r.alpha;
+    ch.last_r_squared = r.r_squared;
 
     /* Report latest alpha/R2 as telemetry */
     this->tlmWrite_DfaAlpha(r.alpha);
