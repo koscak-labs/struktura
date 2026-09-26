@@ -38,50 +38,58 @@ Written before each run: see [the protocol record](esa-adb-protocol.md).
     fall relative to the labels changes.
   - p = (1 + number of shifts scoring at least as high) / 21. The smallest possible value is 0.048.
 
-## Results (struktura master d439fb8, 2026-09-26)
+## Results (struktura master 38cb83e, 2026-09-26)
 
-These come from a clean run of the reproduce steps below. Starting from the raw files, it gave:
-- preprocessed arrays byte-identical to the original run;
-- the identical guard prediction matrix;
-- the identical 20 shifts.
+The scripts below were first checked against the original evaluation on master d439fb8. Starting
+from the raw files, they gave:
+- byte-identical preprocessed arrays;
+- identical guard predictions and 20 shifts;
+- 125 of 126 metric values equal and none different.
+
+The numbers here are from the same scripts on 38cb83e.
 
 Guard over the 7.36 million test rows:
-- 391 alarms and 8 rolled-back adaptations;
-- 370 quarantines and 366 releases;
-- alarm ticks per channel 41..46: 36, 124, 33, 19, 53, 134.
+- 136 alarms and no rolled-back adaptations;
+- 138 quarantines and 134 releases;
+- alarm ticks per channel 41..46: 42, 5, 23, 12, 41, 13.
 
 | labels | metric | guard | 20 shifts: mean | 20 shifts: max | p |
 |---|---|---|---|---|---|
-| Anomaly (29) | event-wise recall | **0.103** (3 events) | 0.019 | 0.069 | 0.048 |
-| | event-wise F0.5 | 0.010 | 0.002 | 0.006 | 0.048 |
-| | channel F0.5 | 0.082 | 0.012 | 0.046 | 0.048 |
-| | affiliation F0.5 | 0.410 | 0.325 | 0.423 | 0.095 |
-| | alarming precision | 0.167 | 0.286 | 1.000 | 0.52 |
-| Rare Event or Anomaly (65) | event-wise recall | **0.154** (10 events) | 0.025 | 0.077 | 0.048 |
-| | event-wise F0.5 | 0.032 | 0.005 | 0.015 | 0.048 |
-| | affiliation F0.5 | 0.437 | 0.299 | 0.358 | 0.048 |
-| | channel F0.5 | 0.107 | 0.016 | 0.045 | 0.048 |
-| | alarming precision | 0.323 | 0.416 | 1.000 | 0.62 |
+| Anomaly (29) | event-wise recall | **0.103** (3 events) | 0.010 | 0.034 | 0.048 |
+| | event-wise F0.5 | 0.035 | 0.003 | 0.009 | 0.048 |
+| | channel F0.5 | 0.085 | 0.006 | 0.031 | 0.048 |
+| | affiliation F0.5 | 0.429 | 0.333 | 0.421 | 0.048 |
+| | alarming precision | 0.167 | 0.212 | 1.000 | 0.33 |
+| Rare Event or Anomaly (65) | event-wise recall | **0.169** (11 events) | 0.015 | 0.031 | 0.048 |
+| | event-wise F0.5 | 0.111 | 0.008 | 0.017 | 0.048 |
+| | affiliation F0.5 | 0.479 | 0.298 | 0.354 | 0.048 |
+| | channel F0.5 | 0.124 | 0.010 | 0.019 | 0.048 |
+| | alarming precision | 0.289 | 0.529 | 1.000 | 0.71 |
 
-ADTQC (detection timing) is 0.992 and 0.910. It is undefined for shifts that detect nothing, so it
+ADTQC (detection timing) is 0.992 and 0.826. It is undefined for shifts that detect nothing, so it
 is not compared.
 
 ## What this does and does not show
 
 - **Guard's alarms hit more anomaly events than chance would place them.** 3 of 29 Anomaly events,
-  and 10 of 65 Rare Event or Anomaly events. That is more than any of 20 time-shifted copies of the
+  and 11 of 65 Rare Event or Anomaly events. That is more than any of 20 time-shifted copies of the
   same alarms (p = 0.048, the smallest this control can give).
 - **Recall is low.** Guard misses 26 of the 29 Anomaly events.
 - **Precision is not above chance.** Its alarming precision is below the shifts' mean.
 - **Multiple comparisons.** Several metrics are tested, and there is no correction for that.
-- **It is not a blind test.** Guard has been run on this test split at three versions:
-  - 1.8.5: 7 alarms, all six channels quarantined for good. It matched 1 of 65 events, no better
-    than random.
-  - f1f00f2 (recovery added): 2,466 alarms, with channels flapping in and out of quarantine.
-  - a49534a (recovery back-off): the run reported here.
+- **It is not a blind test.** Guard has been run on this test split at four versions:
 
-  Both changes were written after the previous run on this data showed how guard's quarantine
-  behaved. The f1f00f2 official scores existed before the back-off was written.
+  | version | change | alarms | result |
+  |---|---|---|---|
+  | 1.8.5 | | 7 | all six channels quarantined for good; matched 1 of 65 events, no better than random |
+  | f1f00f2 | recovery added | 2,466 | channels flapping in and out of quarantine |
+  | a49534a | recovery back-off | 391 | 3 of 29 Anomaly events, above every shift |
+  | 38cb83e | recalibration fixes | 136 | the run reported here |
+
+  - The recovery and back-off changes were written after the previous run on this data showed how
+    guard's quarantine behaved.
+  - 38cb83e's fixes came from a code audit. The a49534a scores on this data existed before it was
+    written.
 - **Limited scope.** One mission, six channels, one split. The full 58-channel set was not run.
 
 ## Reproduce

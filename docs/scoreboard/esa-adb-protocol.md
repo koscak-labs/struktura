@@ -5,18 +5,24 @@ verbatim from the evaluation directory. The paths inside them are the author's m
 
 **What the record shows:**
 - The protocol was written before the first run.
-- It was amended ten times, and each amendment says what had been seen when it was written.
-- It covers guard at struktura 1.8.5 (Amendment 3), f1f00f2 (Amendment 9) and a49534a (Amendment 10).
+- It was amended eleven times, and each amendment says what had been seen when it was written.
+- It covers guard at struktura 1.8.5 (Amendment 3), f1f00f2 (Amendment 9), a49534a (Amendment 10) and
+  38cb83e (Amendment 11).
 - It also covers the benchmark's `struktura_dfa` algorithm (Amendments 4-8), which is not on the
   scoreboard page.
 
 **File times (local, CEST).** The protocol file is appended to, so its time is that of the last
 amendment. These are local file times, not an independent timestamp.
-- `PROTOCOL.md`: 2026-09-26 07:42:48 (Amendment 10 appended)
-- first a49534a prediction `preds/guard_n20160_a49534a.npz`: 2026-09-26 07:43:22
+- `PROTOCOL.md`: 2026-09-26 08:38:05 (Amendment 11 appended)
+- 38cb83e prediction `run-38cb83e/preds/guard.npz`: 2026-09-26 08:39:27
 
-The scoreboard numbers were produced again from scratch with `esa-adb/eval/`: preprocessing from
-the raw files, then guard, the 20 shifts and the scoring. They match this record.
+The scripts in `esa-adb/eval/` were checked against this pipeline on master d439fb8, starting from
+the raw files:
+- identical preprocessed arrays;
+- identical guard predictions and 20 shifts;
+- 125 of 126 metric values equal and none different.
+
+The scoreboard numbers come from those scripts on 38cb83e (Amendment 11 in the report).
 
 ## Protocol and amendments
 
@@ -195,6 +201,17 @@ against f1f00f2 and against the controls. Other commits between f1f00f2 and a495
 9d297d1 blank CSV cell, 55ffb3d time-named column dropped) touch the CLI's CSV path, not the Guard
 object this protocol drives, so any change in counts is attributed to the back-off only if the event
 stream differs in quarantine/unquarantine first.
+
+## Amendment 11 (2026-09-26, written BEFORE the run below; requested by the struktura maintainers)
+Re-run of the Amendment 10 Guard protocol on struktura master 38cb83e, which changes Guard during
+recalibration (a channel quarantined during baseline collection keeps its previous calibration; a sensor
+failing during collection ends it and is quarantined; the current monitor is fed during the trial).
+Same data (the esa-adb/eval/prep.py output, byte-identical to the original prep), same calibration block
+(N=20160, rows 0..20159 of train), cooldown 50, prediction = alarm and rolled_back events per channel.
+Run with the ported scripts (struktura repo esa-adb/eval/, validated in PR #35 against the original pipeline:
+125/126 metric values equal, 0 different). Controls: 20 circular shifts of the new predictions (same seeds and
+offset rule). Reported whatever it scores, with every event kind against a49534a, and the scoreboard page
+updated to these numbers.
 ```
 
 ## Analysis report
@@ -335,4 +352,17 @@ Anomaly labels: EW recall 0.103 both, EW F0.5 0.0015 -> 0.0099, alarming precisi
 all 20 (p 0.048); channel F0.5 p 0.050 (19 shifts, seed 10 not computed: memory guard). f1f00f2 has only 9 shifts
 scored (the scorer was reaped under memory pressure; not retried). Parity drops to 0 because the monitor skips
 parity for all channels while any channel is quarantined (owner's reading of monitor.rs, not verified here).
+
+## Amendment 11 (2026-09-26): guard on 38cb83e (recalibration fixes), ported scripts
+
+Run with the struktura repo's esa-adb/eval scripts (validated against this pipeline on d439fb8: identical prep,
+predictions and shifts, 125/126 metric values equal, 0 different). Wheel built from 38cb83e, installed binary
+hash-checked against the build. `run-38cb83e/run.log`, `run-38cb83e/summary.md`.
+Events a49534a -> 38cb83e: alarm 391 -> 136, rolled_back 8 -> 0, quarantined 370 -> 138, unquarantined
+366 -> 134, adaptation_started 29 -> 10, recalibrated 21 -> 7; legs repeated_value 341 -> 104, level_shift
+40 -> 9, residual_cusum 14 -> 18, dfa 3 -> 0, parity 0 -> 4.
+vs 20 circular shifts: Anomaly EW recall 0.103 (3/29, max shift 0.034), EW F0.5 0.035, AFF F0.5 0.429
+(max 0.421), channel F0.5 0.085: all p 0.048; alarming precision 0.167 p 0.333. RareEvent+Anomaly EW recall
+0.169 (11/65, max 0.031), EW F0.5 0.111, AFF F0.5 0.479, channel F0.5 0.124: all p 0.048; alarming precision
+0.289 p 0.714. ADTQC 0.992 / 0.826 (undefined for most shifts, not compared).
 ```
