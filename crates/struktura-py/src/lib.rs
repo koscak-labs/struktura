@@ -168,8 +168,9 @@ impl Monitor {
         self.inner.channels()
     }
 
-    /// Feed one sample (one value per channel). Returns None, or the name of
-    /// the detector leg that raised an alarm.
+    /// Feed one sample (one value per channel; NaN or +/-inf counts as a
+    /// missing reading). Returns None, or the name of the detector leg that
+    /// raised an alarm.
     fn push(&mut self, sample: Vec<f64>) -> PyResult<Option<&'static str>> {
         if sample.len() != self.inner.channels() {
             return Err(PyValueError::new_err(format!(
@@ -178,7 +179,9 @@ impl Monitor {
                 self.inner.channels()
             )));
         }
-        Ok(self.inner.push(&sample).map(leg_name))
+        let valid: Vec<bool> = sample.iter().map(|v| v.is_finite()).collect();
+        let clean: Vec<f64> = sample.iter().map(|v| if v.is_finite() { *v } else { 0.0 }).collect();
+        Ok(self.inner.push_with_validity(&clean, &valid).map(leg_name))
     }
 
     /// The most recent alarm as a dict, or None.

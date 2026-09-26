@@ -28,6 +28,17 @@ const a = m.lastAlarm();
 assert.equal(a.leg, leg);
 assert.throws(() => m.push(Float64Array.of(1, 2)), /channels/);
 assert.throws(() => new s.Monitor(white(10), 3), /multiple of channels/);
+// Empty calibration data must raise a JsError, not panic (audit finding: Monitor/Guard::new
+// used to call clean.chunks(0), an unconditional Rust panic surfaced in Node as
+// "RuntimeError: unreachable").
+assert.throws(() => new s.Monitor(new Float64Array(0), 2), /multiple of channels/, 'empty clean should raise, not panic');
+assert.throws(() => new s.Guard(new Float64Array(0), 2), /multiple of channels/, 'Guard inherits the same fix');
+// NaN in Monitor.push must be reported as missing, the same as Guard (audit finding: Monitor.push
+// used to feed NaN straight into the detectors instead of treating it as a missing reading).
+const m3 = new s.Monitor(white(2000), 1);
+let missLeg;
+for (let i = 0; i < 40 && missLeg === undefined; i++) missLeg = m3.push(Float64Array.of(NaN));
+assert.equal(missLeg, 'missingness', `NaN in Monitor.push should be missingness, got ${missLeg}`);
 // Guard (the CLI's AutoPilot) keeps watching after the first fault; Monitor latches.
 const run = (det, segs) => segs.map(([n, add]) => {
   let got = 0;

@@ -139,7 +139,7 @@ impl Monitor {
     /// back to back (channel 0's samples, then channel 1's, ...).
     #[wasm_bindgen(constructor)]
     pub fn new(clean: &[f64], channels: usize) -> Result<Monitor, JsError> {
-        if channels == 0 || clean.len() % channels != 0 {
+        if channels == 0 || clean.is_empty() || clean.len() % channels != 0 {
             return Err(JsError::new("clean.length must be a positive multiple of channels"));
         }
         let n = clean.len() / channels;
@@ -154,8 +154,9 @@ impl Monitor {
         self.inner.channels()
     }
 
-    /// Feed one sample (one value per channel). Returns undefined, or the name
-    /// of the detector leg that raised an alarm.
+    /// Feed one sample (one value per channel; NaN or +/-infinity counts as a
+    /// missing reading). Returns undefined, or the name of the detector leg
+    /// that raised an alarm.
     pub fn push(&mut self, sample: &[f64]) -> Result<Option<String>, JsError> {
         if sample.len() != self.inner.channels() {
             return Err(JsError::new(&format!(
@@ -164,7 +165,9 @@ impl Monitor {
                 self.inner.channels()
             )));
         }
-        Ok(self.inner.push(sample).map(|l| leg_name(l).to_string()))
+        let valid: Vec<bool> = sample.iter().map(|v| v.is_finite()).collect();
+        let clean: Vec<f64> = sample.iter().map(|v| if v.is_finite() { *v } else { 0.0 }).collect();
+        Ok(self.inner.push_with_validity(&clean, &valid).map(|l| leg_name(l).to_string()))
     }
 
     /// The most recent alarm, or undefined.

@@ -85,7 +85,24 @@ jobs:
           gg = struktura.Guard([clean])
           gap = [e for _ in range(400) for e in gg.push([float("nan")])]
           assert any(e.get("leg") == "missingness" for e in gap), gap  # NaN = missing reading
-          print("ok without numpy", struktura.__version__, round(r.alpha, 3), "guard", g, "monitor", mon, "raw", raw)
+          # Empty calibration data must raise ValueError, not panic (audit finding).
+          for bad in ([], [[]]):
+              try:
+                  struktura.Monitor(bad)
+                  raise AssertionError(f"empty calibration {bad!r} should raise")
+              except ValueError:
+                  pass
+          # NaN in Monitor.push must be reported as missing, the same as Guard, not as a
+          # residual/cusum alarm or silence (audit finding).
+          mm = struktura.Monitor([clean])
+          miss = None
+          for _ in range(40):
+              leg = mm.push([float("nan")])
+              if leg is not None:
+                  miss = leg
+                  break
+          assert miss == "missingness", miss
+          print("ok without numpy", struktura.__version__, round(r.alpha, 3), "guard", g, "monitor", mon, "raw", raw, "miss", miss)
           EOF
           python -m pip install numpy
           python - <<'EOF'

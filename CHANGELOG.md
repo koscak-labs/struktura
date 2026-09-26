@@ -29,6 +29,16 @@ All notable changes to Struktura are documented here.
     isolation forest (the run log has 10), not 11. README: `--help` does not
     list every command. CITATION.cff said 1.8.0; llms.txt said 1.7.2 and
     linked a `main` branch that does not exist.
+- Python and WebAssembly bindings (audit findings):
+  - wasm `Monitor::new` and `Guard::new` panicked on empty calibration data
+    (`RuntimeError: unreachable` in JS) instead of returning their documented
+    error; they now return it. Python already raised `ValueError` there.
+  - `Monitor.push` in both bindings fed NaN into the detectors instead of
+    treating it as a missing reading, as `Guard.push` does. NaN and +/-inf
+    now go through `push_with_validity`, so the missingness leg reports them.
+  Tests in `crates/struktura-wasm/tests/smoke.mjs` and the Python smoke test
+  in `python-wheels.yml`, each failing without its fix (wasm:
+  `RuntimeError: unreachable`; NaN: silence in wasm, `None` in Python).
 - AutoPilot during a recalibration (found by the six-dimension audit, each
   finding reproduced by an independent verifier):
   - A channel quarantined while a new baseline was collected got its new
