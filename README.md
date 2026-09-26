@@ -250,8 +250,7 @@ let mut rwa = SpacecraftMonitor::new(Subsystem::ReactionWheel, "RWA_current");
 | **spacecraft** | Voyager 1 magnetometer, 2021 vs 2022 slices (not the AACS anomaly window) | 0.989 | 0.801 | -0.187 | z = 1.5, inconclusive (`struktura voyager`) |
 | **ESA satellites** | ESA-ADB Mission 1 | | | | adapter built ([esa-adb/](esa-adb/struktura-dfa/)); scores pending an official benchmark run |
 | **text** | shuffled Austen sentence lengths | | 0.573 | | α only; the unshuffled original is not shipped |
-| **genome** | human chr1 GC% | 0.909 | | | α only, R² = 0.991 |
-| **cardiac** | HRV RR intervals, synthetic by default (`examples/cardiac_hrv.rs`) | 0.695 | | | α only, R² = 0.985 |
+| **genome** | human chr1 GC% in 1 kb windows (`struktura genome`) | 0.967 | | | α only, R² = 0.980 |
 
 Only the bearing row is a normal-vs-fault separation on real data. The CRITICAL label from `check` and `compare` is a fixed α threshold, not a significance test. More domains, with citations, in [USE_CASES.md](USE_CASES.md).
 

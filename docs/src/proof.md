@@ -6,8 +6,7 @@ The same DFA runs on very different signals. These are α values measured on bun
 |--------|--------|-------|----|
 | Bearings | CWRU 12 kHz vibration, normal | 0.689 | |
 | Bearings | CWRU 12 kHz vibration, inner-race fault | 0.183 | |
-| Genome | Human chr1 GC% | 0.909 | 0.991 |
-| Cardiac | HRV RR intervals, synthetic by default (`examples/cardiac_hrv.rs`) | 0.695 | 0.985 |
+| Genome | Human chr1 GC% in 1 kb windows (`struktura genome`) | 0.967 | 0.980 |
 
 ## Shuffle control
 

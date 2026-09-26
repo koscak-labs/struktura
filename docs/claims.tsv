@@ -12,6 +12,7 @@ id	speed	exit	command	expect
 bearing-alpha	fast	0	struktura demo	alpha=0.689 && alpha=0.183
 voyager-alpha	fast	0	struktura voyager	alpha=0.989 && alpha=0.801 && inconclusive
 heliopause-alpha	fast	0	struktura heliopause	1.137 && 1.056 && inconclusive
+genome-chr1-alpha	slow	0	gunzip -c data/genome/chr1_human.fa.gz > "${TMPDIR:-/tmp}/chr1_human.fa" && struktura genome "${TMPDIR:-/tmp}/chr1_human.fa"	Bases:      248956422 && overall α=0.967  R²=0.9803
 ims-first-alarm	fast	0	struktura ims	recording 970 && 984
 guard-sylv	fast	1	struktura guard data/sylv_spike.csv	row    500 && 2 faults detected
 guard-rover	fast	1	struktura guard examples/rover.csv --baseline 1000	fault confirmed && row   2201  ⚠ motor_current_A && row   2592  ✓ motor_current_A readings healthy again && row   2595  ⚠ battery_soc && 7 faults detected

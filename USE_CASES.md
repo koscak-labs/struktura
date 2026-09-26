@@ -29,7 +29,7 @@ struktura check vibration.csv     # your own sensor
 
 ## ❤️ cardiac health (HRV)
 
-heart rate variability α is a clinical metric. healthy hearts: α ≈ 1.0 (complex fractal dynamics). congestive heart failure: α drops toward 0.5 (loss of adaptability). approved by ESC/AHA guidelines.
+the DFA exponent of beat-to-beat (RR) intervals is a heart-rate research measure. in heart failure the short-term exponent (alpha1, about 4-16 beats) is lower than in healthy hearts, while the long-term exponent changes much less (Peng et al. 1995, Chaos 5:82). it does not drop to 0.5. the example below is a DFA demo, not a medical device.
 
 ```
 cargo run --example cardiac_hrv                    # synthetic demo
