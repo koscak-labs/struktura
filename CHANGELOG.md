@@ -4,6 +4,57 @@ All notable changes to Struktura are documented here.
 
 ## Unreleased
 
+- Quarantine recovery let a sensor that came back with a constant bias
+  become the new baseline when parity could not check it. With another
+  channel quarantined, parity is suspended. The recovery residual compares a
+  reading with the sensor's own previous one, so a constant offset passes
+  it. The sensor was released, the level leg fired on the offset, and
+  adaptation recalibrated onto it. Found by the oura-26/oura-0c session's
+  scenario s8 (ch2 stuck for good, ch1 stuck and then back +5): 10 of 10
+  seeds adapted to the offset. Now, only while parity is suspended:
+  - a channel must also have its level back in the calibrated band before
+    release: the mean of its last 96 real readings within the level leg's
+    own threshold of its calibration mean;
+  - after such a release it is on probation (`autopilot::PROBATION`) until
+    parity has checked it for 192 samples in a row, or for 4000 samples at
+    most. A level alarm on it meanwhile quarantines it again, with class
+    `offset_after_recovery` and a doubled recovery span, instead of
+    starting an adaptation.
+  On the s8 files: 0 of 10 adapt. ch1 is never released in 3 seeds; in
+  the other 7 it is released 1-2 times, and each release ends in
+  `offset_after_recovery`. The same sensor coming back healthy is released
+  in all seeds. The release check alone was not enough (8 of 10 still
+  adapted on a Rust port of s8).
+  With parity live nothing changes: a sensor quarantined through a regime
+  change that moved its own level is vouched for by parity and released as
+  before.
+  One-channel monitors have no parity, so nothing changes for them either.
+  A first version applied both rules there too. NAB, where every series is
+  one channel, showed the cost: a real spike 2465 samples after a release
+  on Twitter_volume_KO became `offset_after_recovery`, and the only channel
+  sat quarantined through later anomalies (default 45 windows / 45 false
+  alarms -> 44 / 43, `HORIZON=1e5` 53 -> 56 false alarms). With nothing to
+  cross-check, holding the channel back can also leave the whole monitor
+  blind for good.
+  Four tests, each failing without the part it covers:
+  - `sensor_back_with_a_clear_bias_stays_quarantined_without_parity`
+    (release check);
+  - `offset_after_an_unchecked_release_is_never_adapted_to` (probation, s8
+    ported to Rust);
+  - `checked_recovery_through_a_level_changing_regime_still_releases` (fails
+    if the release check also applies with parity live);
+  - `single_channel_recovery_is_not_held_back_by_the_unchecked_rules`.
+  No other output changes against faf1434:
+  - NAB byte-identical in all three modes;
+  - every bundled CSV's `guard`, `guard --json` and `copilot-compare`
+    byte-identical;
+  - the oura-26 session's other 89 recovery files byte-identical;
+  - `examples/parity_eval.rs` totals identical. In its SEEDS=60 BREAKDOWN=1
+    list, 7 false battery-voltage level alarms in fault runs fire 22-224
+    samples later, same count; not traced.
+  oura-0c reproduced the outputs independently on its frozen 119-file
+  harness: 228 of 238 identical, only the s8 files differ, and 0 of 20
+  failures on two new one-channel scenarios.
 - `struktura rover` (the demo) printed at most one alarm per 200 steps
   across all channels, so recurring thermal alarms hid others: the battery
   cell degradation it scripts at step 2600 was detected (battery voltage at

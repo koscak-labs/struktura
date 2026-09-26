@@ -359,6 +359,9 @@ struct ChannelState {
     q_run: usize,
     /// Consecutive real readings that pass the recovery checks.
     q_good: usize,
+    /// Some of those readings could not be checked against the other
+    /// channels (parity suspended).
+    q_blind: bool,
 }
 
 /// Consecutive healthy real readings a quarantined channel must show before
@@ -832,6 +835,7 @@ impl HybridMonitor {
                 q_prev: c[length - 1],
                 q_run: 1,
                 q_good: 0,
+                q_blind: false,
             })
             .collect();
 
@@ -942,6 +946,8 @@ impl HybridMonitor {
                 _ => None,
             };
             let (res_thr, parity_thr) = (self.res_thr, self.parity_thr);
+            // The monitor has a cross-check, but it cannot judge this reading.
+            let unchecked = self.leg_enabled[6] && parity_z.is_none();
             let cc = &self.calib[ch];
             let st = &mut self.state[ch];
             let t = st.t;
@@ -953,14 +959,35 @@ impl HybridMonitor {
                 Some(v) => {
                     st.q_run = if v == st.q_prev { st.q_run + 1 } else { 1 };
                     let zs = (v - (cc.ar_a + cc.ar_b * st.q_prev)) / cc.ar_sd;
+                    st.q_ring[(t % WINDOW as u64) as usize] = v;
+                    // The one-step residual compares a reading with the
+                    // sensor's own previous one, so a sensor that comes back
+                    // with a constant bias passes it. Parity catches the bias;
+                    // with parity suspended (another channel quarantined) it
+                    // was released and the bias became the baseline. Then its
+                    // level must also be back in the calibrated band, as the
+                    // level leg demands, once the good streak fills the ring
+                    // with real readings. With parity, a level the other
+                    // channels explain (a regime change that came while it was
+                    // quarantined) is left to adaptation; a single channel has
+                    // nothing to tell a bias from a new level, and holding it
+                    // back could leave the whole monitor blind for good.
+                    let level_ok = !unchecked || st.q_good + 1 < WINDOW || {
+                        let m = st.q_ring.iter().sum::<f64>() / WINDOW as f64;
+                        (m - cc.mean).abs() <= cc.roll_thr
+                    };
                     let good = (!cc.repeat_enabled || st.q_run < cc.max_run + REPEAT_MARGIN)
                         && zs.abs() <= res_thr
-                        && parity_z.map_or(true, |z| z <= parity_thr);
+                        && parity_z.map_or(true, |z| z <= parity_thr)
+                        && level_ok;
+                    st.q_blind = good && (st.q_blind || unchecked);
                     st.q_good = if good { st.q_good + 1 } else { 0 };
                     st.q_prev = v;
-                    st.q_ring[(t % WINDOW as u64) as usize] = v;
                 }
-                None => st.q_good = 0,
+                None => {
+                    st.q_good = 0;
+                    st.q_blind = false;
+                }
             }
             return None;
         }
@@ -1188,6 +1215,7 @@ impl HybridMonitor {
             st.q_prev = st.prev;
             st.q_run = st.run;
             st.q_good = 0;
+            st.q_blind = false;
         }
     }
 
@@ -1206,6 +1234,22 @@ impl HybridMonitor {
     #[must_use]
     pub fn healthy_run(&self, ch: usize) -> usize {
         if self.is_quarantined(ch) { self.state[ch].q_good } else { 0 }
+    }
+
+    /// True when part of a quarantined channel's current healthy run could not
+    /// be checked against the other channels (parity suspended: another
+    /// channel quarantined too), so a constant bias could pass it. Always
+    /// false with one channel, which has no cross-check to suspend.
+    #[must_use]
+    pub fn healthy_run_unchecked(&self, ch: usize) -> bool {
+        self.is_quarantined(ch) && self.state[ch].q_blind
+    }
+
+    /// Whether channel `ch`'s readings are checked against the other
+    /// channels now: the parity leg is on and no other channel is quarantined.
+    #[must_use]
+    pub fn cross_checked(&self, ch: usize) -> bool {
+        self.leg_enabled[6] && self.quarantined.iter().enumerate().all(|(s, &q)| s == ch || !q)
     }
 
     /// Whether a channel is currently quarantined.
@@ -1245,6 +1289,7 @@ impl HybridMonitor {
                 st.run = st.q_run;
             }
             st.q_good = 0;
+            st.q_blind = false;
             st.cusum_pos = 0.0;
             st.cusum_neg = 0.0;
             st.dfa_streak = 0;

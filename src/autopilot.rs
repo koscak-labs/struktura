@@ -10,7 +10,9 @@
 //!    monitoring continues degraded. Its real readings are still checked
 //!    against its calibration; after [`crate::monitor::RECOVER_SPAN`]
 //!    healthy samples in a row it is monitored again (a data gap filled
-//!    with repeats, or a sensor that came back, is not dead forever).
+//!    with repeats, or a sensor that came back, is not dead forever). One
+//!    released without a cross-check is on [`PROBATION`]: a level alarm on
+//!    it quarantines it again instead of adapting to its offset.
 //! 2. **Guarded self-recalibration.** A level-shift alarm may mean the
 //!    environment changed rather than broke (new operating mode, new
 //!    thermal regime). The autopilot collects a candidate window of the
@@ -96,7 +98,23 @@ pub struct AutoPilot {
     /// current recovery span. Each such flap doubles the span.
     released_at: Vec<Option<u64>>,
     flaps: Vec<u32>,
+    /// Per channel released without a cross-check: (release tick, samples
+    /// in a row parity has checked it since). See [`PROBATION`].
+    probation: Vec<Option<(u64, usize)>>,
 }
+
+/// A channel released from quarantine without a cross-check (parity
+/// suspended because another channel is quarantined) is on probation until
+/// parity has checked it for [`RECOVER_SPAN`] samples in a row, or for this
+/// many samples at most. Its recovery checks cannot see a constant offset,
+/// so a level alarm on it meanwhile is most likely the offset it came back
+/// with: it is quarantined again instead of starting an adaptation, which
+/// would make the offset the baseline. The bound is the recalibration
+/// cooldown, the span within which a second level alarm is not taken for a
+/// new regime. A monitor with one channel has no cross-check to wait for,
+/// so it has no probation: on NAB, where every series is one channel, it
+/// turned real level events into quarantines.
+pub const PROBATION: u64 = RECAL_COOLDOWN;
 
 /// A drift latch decays after this many quiet samples on the channel.
 pub const DRIFT_LATCH_DECAY: u64 = 2000;
@@ -156,6 +174,7 @@ impl AutoPilot {
                 r
             },
             flaps: vec![0; channels],
+            probation: vec![None; channels],
         }
     }
 
@@ -181,10 +200,19 @@ impl AutoPilot {
                     if self.quarantined[ch]
                         && self.monitor.healthy_run(ch) >= recovery_span(self.flaps[ch])
                     {
+                        if self.monitor.healthy_run_unchecked(ch) {
+                            self.probation[ch] = Some((tick, 0));
+                        }
                         self.monitor.unquarantine(ch);
                         self.quarantined[ch] = false;
                         self.released_at[ch] = Some(tick);
                         events.push(Event::Unquarantined { tick, channel: ch });
+                    } else if let Some((since, checked)) = self.probation[ch] {
+                        let checked =
+                            if self.monitor.cross_checked(ch) { checked + 1 } else { 0 };
+                        self.probation[ch] = (checked < RECOVER_SPAN
+                            && tick - since < PROBATION)
+                            .then_some((since, checked));
                     }
                 }
                 if let Some(_leg) = alarm {
@@ -193,6 +221,11 @@ impl AutoPilot {
                         match report.leg {
                             // Sensor-failure signatures → quarantine the channel
                             _ if is_sensor_failure(&report, class) => failure = Some((report, class)),
+                            // On probation: the offset it came back with (see
+                            // PROBATION), not a new regime to adapt to.
+                            Leg::LevelShift if self.probation[report.channel].is_some() => {
+                                failure = Some((report, "offset_after_recovery"));
+                            }
                             // Environment may have changed → guarded adaptation,
                             // unless the same channel already forced a recent
                             // recalibration: that pattern is a sustained trend
@@ -334,7 +367,13 @@ impl AutoPilot {
             self.monitor.reset();
             self.monitor.quarantine(ch);
             self.quarantined[ch] = true;
-            self.flaps[ch] = next_flaps(self.flaps[ch], self.released_at[ch], tick);
+            // Failing on probation is failing soon after the release, however
+            // long the probation has run.
+            self.flaps[ch] = if self.probation[ch].take().is_some() {
+                (self.flaps[ch] + 1).min(MAX_FLAPS)
+            } else {
+                next_flaps(self.flaps[ch], self.released_at[ch], tick)
+            };
             events.push(Event::Alarm { tick, report, class });
             events.push(Event::Quarantined { tick, channel: ch });
         }
@@ -482,6 +521,181 @@ mod tests {
             }
         }
         assert!(rolled_back, "runaway disguised as regime change must be refused");
+    }
+
+    /// A sensor that sticks and then comes back with a bias past the level
+    /// leg's threshold must stay quarantined while parity cannot judge it
+    /// (another channel is quarantined for good). Its one-step residual
+    /// passes a constant bias, so it was released, the level leg then fired
+    /// and adaptation learned the bias. The control, the same sensor coming
+    /// back healthy, must still be released.
+    #[test]
+    fn sensor_back_with_a_clear_bias_stays_quarantined_without_parity() {
+        let n = 9_000usize;
+        let calib = synth_spacecraft(2048, 4242 + 100);
+        let stream = synth_spacecraft(n, 4242 + 200);
+        // In units of the level leg's own threshold on the channel.
+        let level_thr =
+            HybridMonitor::calibrate(&calib).expect("calibration").export().channels[1].roll_thr;
+        let run = |bias: f64| {
+            let mut ap = AutoPilot::new(HybridMonitor::calibrate(&calib).expect("calibration"));
+            let valid = [true; 6];
+            let mut sample = [0.0f64; 6];
+            let (mut released, mut adapted) = (None, false);
+            for t in 0..n {
+                for ch in 0..6 {
+                    let mut v = stream[ch][t];
+                    // ch2 sticks for good from 2000: parity is off from then on.
+                    if ch == 2 && t >= 2000 {
+                        v = stream[2][2000];
+                    }
+                    // ch1 sticks for [3000, 6000), then returns, with `bias`.
+                    if ch == 1 && (3000..6000).contains(&t) {
+                        v = stream[1][3000];
+                    } else if ch == 1 && t >= 6000 {
+                        v += bias;
+                    }
+                    sample[ch] = v;
+                }
+                for ev in ap.push(&sample, &valid) {
+                    match ev {
+                        Event::Unquarantined { tick, channel: 1 } => {
+                            released.get_or_insert(tick);
+                        }
+                        Event::AdaptationStarted { tick } if tick >= 6000 => adapted = true,
+                        _ => {}
+                    }
+                }
+            }
+            (released, adapted)
+        };
+        assert!(matches!(run(0.0), (Some(_), false)), "a healthy returning sensor must be released");
+        assert_eq!(run(2.0 * level_thr), (None, false), "a clear bias must stay quarantined");
+    }
+
+    /// Three channels on a shared AR(0.9) component, each with its own AR(0.5)
+    /// noise: the oura-26 session's generator for its recovery scenarios.
+    fn shared_ar(n: usize, seed: u64) -> Vec<Vec<f64>> {
+        let mut rng = crate::telemetry_bench::GaussRng::new(seed);
+        let (mut s, mut e) = (0.0f64, [0.0f64; 3]);
+        let mut out: Vec<Vec<f64>> = (0..3).map(|_| Vec::with_capacity(n)).collect();
+        for _ in 0..n {
+            s = 0.9 * s + rng.normal(0.0, 1.0);
+            for (c, ec) in e.iter_mut().enumerate() {
+                *ec = 0.5 * *ec + rng.normal(0.0, 0.3);
+                out[c].push(10.0 + c as f64 + s + *ec);
+            }
+        }
+        out
+    }
+
+    /// That session's scenario s8: ch2 sticks for good, ch1 sticks for
+    /// [3000, 6000) and comes back +5 off, near its level threshold. The
+    /// level check at release lets it through whenever its rolling mean dips
+    /// into the band; the level alarm that follows then started an adaptation
+    /// that made the offset the baseline (10 of 10 seeds before, 8 of 10
+    /// with the release check alone). On probation it is quarantined again
+    /// instead. The control, ch1 coming back without the offset, is released
+    /// and stays released.
+    #[test]
+    fn offset_after_an_unchecked_release_is_never_adapted_to() {
+        for seed in 1..=10u64 {
+            let calib = shared_ar(3000, seed * 100);
+            let stream = shared_ar(9000, seed * 100 + 1);
+            let run = |offset: f64| {
+                let mut ap = AutoPilot::new(HybridMonitor::calibrate(&calib).expect("calibration"));
+                let (mut released, mut adapted, mut requarantined) = (false, false, false);
+                for t in 0..9000 {
+                    let mut sample = [stream[0][t], stream[1][t], stream[2][t]];
+                    if t >= 3000 {
+                        sample[2] = stream[2][2999];
+                    }
+                    if (3000..6000).contains(&t) {
+                        sample[1] = stream[1][2999];
+                    } else if t >= 6000 {
+                        sample[1] += offset;
+                    }
+                    for ev in ap.push(&sample, &[true; 3]) {
+                        match ev {
+                            Event::Unquarantined { channel: 1, .. } => released = true,
+                            Event::Quarantined { tick, channel: 1 } if tick >= 6000 => {
+                                requarantined = true;
+                            }
+                            Event::AdaptationStarted { tick } if tick >= 6000 => adapted = true,
+                            _ => {}
+                        }
+                    }
+                }
+                (released, adapted, requarantined)
+            };
+            let (_, adapted, _) = run(5.0);
+            assert!(!adapted, "seed {seed}: the offset became the baseline");
+            assert_eq!(run(0.0), (true, false, false), "seed {seed}: healthy control");
+        }
+    }
+
+    /// A channel quarantined while a regime change moves its own level, with
+    /// the other channels live, must still come back: parity vouches for its
+    /// new level (the other channels moved with it), so the level check at
+    /// release, meant for unchecked recoveries, must not hold it back against
+    /// its old calibration mean.
+    #[test]
+    fn checked_recovery_through_a_level_changing_regime_still_releases() {
+        let n = 6000usize;
+        let calib = coupled(2048, 31);
+        let stream = coupled(n, 32);
+        let mon = HybridMonitor::calibrate(&calib).expect("calibration");
+        // a = s + noise and b = 3 s both move: s rose by twice a's level threshold.
+        let shift = 2.0 * mon.export().channels[0].roll_thr;
+        let mut ap = AutoPilot::new(mon);
+        let mut released = None;
+        for t in 0..n {
+            let mut sample = [stream[0][t], stream[1][t], stream[2][t]];
+            if t >= 400 {
+                sample[0] += shift;
+                sample[1] += 3.0 * shift;
+            }
+            if (300..700).contains(&t) {
+                sample[0] = stream[0][300]; // a frozen: quarantined
+            }
+            for ev in ap.push(&sample, &[true; 3]) {
+                if let Event::Unquarantined { tick, channel: 0 } = ev {
+                    released.get_or_insert(tick);
+                }
+            }
+        }
+        assert!(released.is_some(), "a sensor that came back in the new regime was never released");
+    }
+
+    /// A one-channel monitor has no cross-check to wait for: a sensor that
+    /// comes back at a new level is released and adapted to, as before. Held
+    /// back or put on probation, the only channel of the monitor would stay
+    /// unwatched (on NAB that turned real level events into quarantines).
+    #[test]
+    fn single_channel_recovery_is_not_held_back_by_the_unchecked_rules() {
+        let n = 9_000usize;
+        let calib = vec![synth_spacecraft(2048, 4242 + 100)[1].clone()];
+        let stream = synth_spacecraft(n, 4242 + 200)[1].clone();
+        let mon = HybridMonitor::calibrate(&calib).expect("calibration");
+        let shift = 2.0 * mon.export().channels[0].roll_thr;
+        let mut ap = AutoPilot::new(mon);
+        let (mut released, mut requarantined) = (false, false);
+        for t in 0..n {
+            let v = match t {
+                3000..=5999 => stream[3000],
+                6000.. => stream[t] + shift,
+                _ => stream[t],
+            };
+            for ev in ap.push(&[v], &[true]) {
+                match ev {
+                    Event::Unquarantined { .. } => released = true,
+                    Event::Quarantined { tick, .. } if tick >= 6000 => requarantined = true,
+                    _ => {}
+                }
+            }
+        }
+        assert!(released, "a single sensor back at a new level must be released");
+        assert!(!requarantined, "and not quarantined again for the level change");
     }
 
     /// A sensor that freezes briefly (a data gap filled with repeats, a
