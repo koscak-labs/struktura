@@ -28,6 +28,7 @@ structure-vs-amp-matched	fast	0	cargo run -q --release --example structure_vs_am
 control-structure-vs-amp-clean	fast	0	cargo run -q --release --example structure_vs_amplitude	| white | 0/30 | 0/30 | 0/30 | && | AR(0.7) | 0/30 | 0/30 | 4/30 | && | AR(0.95) | 0/30 | 0/30 | 15/30 |
 limitation-short-calibration	fast	0	CALIB=512 cargo run -q --release --example structure_vs_amplitude	clean AR(0.95): LevelShift 6
 limitation-rover-sim-clean-false-alarms	slow	0	cargo run -q --release --example parity_eval	detected 51/60 && clean runs: false alarms 239 (incidents 239), false quarantines 60 && clean runs with any false event: 60/60
+limitation-recovery-offset-without-parity	slow	0	cargo run -q --release --example recovery_offset_eval	ch1 back +5: released 10/10, adaptation accepted afterwards 10/10 && ch1 back healthy (control): released 10/10, adaptation accepted afterwards 0/10
 evolve-coverage	slow	0	struktura evolve	69.0% && 97.0% && 69.0% (gen 1) -> 90.0% (gen 10)
 control-sylv-healthy-quiet	fast	0	head -499 data/sylv_spike.csv | struktura guard - --baseline 333 --quiet-drift	HEALTHY, 166 samples, no anomalies
 limitation-quiet-spike	fast	1	struktura guard data/sylv_spike.csv --quiet-drift	  1 faults detected
@@ -54,3 +55,7 @@ control-epoch-subsecond-column-ignored	fast	1	awk 'BEGIN{print "t,value"} {print
 #   and Python 3.8, about 14 minutes): docs/scoreboard/esa-adb.md, struktura 38cb83e, 3/29 Anomaly
 #   events at p = 0.048 against 20 time shifts. Re-run with that page's commands before quoting it
 #   for a later version.
+# esa-adb-recovery-offset-rule (README Limitations, not run by this script): Mission 1 channels
+#   41-46, branch fix/recovery-level (dac7c4c) against master faf1434, both built from source:
+#   alarms 136 -> 2,254, quarantines 138 -> 527, adaptations started 10 -> 1,116.
+#   docs/scoreboard/esa-adb-protocol.md, Amendment 14.
