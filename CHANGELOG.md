@@ -4,6 +4,17 @@ All notable changes to Struktura are documented here.
 
 ## Unreleased
 
+- `guard` CSV parsing: a blank or unparseable cell dropped out of its row,
+  so every later column shifted left and the last column read 0. A gap in
+  one sensor was reported on another (a 10-row gap in column b of an a,b,c
+  file: "c: sensor appears stuck, c declared dead"). Now the cell stays in
+  its column as a missing reading: calibration fills it from the previous
+  reading, and while streaming it goes to the monitor as invalid, so the
+  missingness leg reports the right sensor ("b: data stopped arriving").
+  A blank cell in the first data row no longer drops that column, and
+  `--watch` parses appended lines with the same delimiter and columns as
+  the initial file (it used to split on commas and index raw fields).
+  Ledger row guard-blank-cell-right-column. Found by the oura-26 session.
 - A quarantined sensor can come back. Until now `guard`, `Guard` in
   Python/JS and AutoPilot quarantined a channel on a stuck run, sustained
   missing data or cross-channel inconsistency, and nothing ever lifted it:

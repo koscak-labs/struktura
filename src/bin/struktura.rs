@@ -94,6 +94,25 @@ struct ParsedCsv {
     rows: Vec<Vec<f64>>,
     col_names: Vec<String>,
     ncols: usize,
+    /// Which raw fields are data columns, and the delimiter: lines appended
+    /// later (`guard --watch`) are parsed the same way.
+    mask: Vec<bool>,
+    delim: char,
+}
+
+fn split_fields(line: &str, delim: char) -> Vec<&str> {
+    line.split(delim).map(|s| s.trim().trim_matches('"')).collect()
+}
+
+/// The data columns of one row. A blank or unparseable cell stays in its own
+/// column as NaN (a missing reading); dropping it shifted every later column
+/// left and put the gap on the wrong sensor.
+fn masked_values(fields: &[&str], mask: &[bool]) -> Vec<f64> {
+    mask.iter()
+        .enumerate()
+        .filter(|(_, &m)| m)
+        .map(|(i, _)| fields.get(i).and_then(|s| s.parse().ok()).unwrap_or(f64::NAN))
+        .collect()
 }
 
 /// Smart CSV parser: auto-detect delimiter, skip headers, skip non-numeric
@@ -109,10 +128,13 @@ fn parse_multi_csv(content: &str) -> ParsedCsv {
     for line in content.lines() {
         let line = line.trim().trim_start_matches('\u{feff}');
         if line.is_empty() || line.starts_with('#') { continue; }
-        let fields: Vec<&str> = line.split(delim).map(|s| s.trim().trim_matches('"')).collect();
+        let fields = split_fields(line, delim);
         if col_mask.is_none() {
-            let mask: Vec<bool> = fields.iter().map(|s| s.parse::<f64>().is_ok()).collect();
-            if mask.iter().all(|&m| !m) {
+            // A blank cell in the first data row is a missing reading, not a
+            // text column.
+            let mask: Vec<bool> =
+                fields.iter().map(|s| s.is_empty() || s.parse::<f64>().is_ok()).collect();
+            if mask.iter().zip(&fields).all(|(&m, s)| !m || s.is_empty()) {
                 col_names = fields.iter().map(|s| s.to_string()).collect();
                 header_seen = true;
                 continue;
@@ -123,15 +145,27 @@ fn parse_multi_csv(content: &str) -> ParsedCsv {
             }
             col_mask = Some(mask);
         }
-        let mask = col_mask.as_ref().unwrap();
-        let vals: Vec<f64> = fields.iter().zip(mask.iter())
-            .filter(|(_, &m)| m)
-            .filter_map(|(s, _)| s.parse().ok())
-            .collect();
-        if !vals.is_empty() { rows.push(vals); }
+        let vals = masked_values(&fields, col_mask.as_ref().unwrap());
+        if vals.iter().any(|v| !v.is_nan()) { rows.push(vals); }
     }
     let ncols = rows.first().map(|r| r.len()).unwrap_or(0);
-    ParsedCsv { rows, col_names, ncols }
+    ParsedCsv { rows, col_names, ncols, mask: col_mask.unwrap_or_default(), delim }
+}
+
+/// Calibration data with missing readings (NaN) filled from the previous
+/// reading (leading gaps from the first one); calibration assumes every
+/// sample is valid.
+fn fill_gaps(col: &[f64]) -> Vec<f64> {
+    let first = col.iter().copied().find(|v| !v.is_nan()).unwrap_or(0.0);
+    let mut last = first;
+    col.iter()
+        .map(|&v| {
+            if !v.is_nan() {
+                last = v;
+            }
+            last
+        })
+        .collect()
 }
 
 impl ParsedCsv {
@@ -3717,24 +3751,31 @@ fn run_guard_watch(path: &str, baseline_n: usize, json: bool, poll_ms: u64, cfg:
     let rows: Vec<Vec<f64>> = parsed
         .rows
         .iter()
-        .map(|r| keep.iter().map(|&c| r.get(c).copied().unwrap_or(0.0)).collect())
+        .map(|r| keep.iter().map(|&c| r.get(c).copied().unwrap_or(f64::NAN)).collect())
         .collect();
     if rows.is_empty() { eprintln!("no numeric rows"); process::exit(2); }
     let ncols = keep.len();
     let calib_n = if baseline_n > 0 { baseline_n.min(rows.len()) } else { rows.len() };
 
     let channels: Vec<Vec<f64>> = (0..ncols)
-        .map(|ch| rows.iter().map(|r| r.get(ch).copied().unwrap_or(0.0)).collect())
+        .map(|ch| rows.iter().map(|r| r.get(ch).copied().unwrap_or(f64::NAN)).collect())
         .collect();
-    let calib: Vec<Vec<f64>> = channels.iter().map(|c| c[..calib_n].to_vec()).collect();
+    let calib: Vec<Vec<f64>> = channels.iter().map(|c| fill_gaps(&c[..calib_n])).collect();
     let mon = match HybridMonitor::calibrate_with(&calib, cfg) {
         Some(m) => m,
         None => { eprintln!("calibration failed (need >= 192 samples)"); process::exit(2); }
     };
 
     let mut ap = AutoPilot::new(mon);
-    let valid: Vec<bool> = vec![true; ncols];
+    let mut valid: Vec<bool> = vec![true; ncols];
     let mut sample = vec![0.0f64; ncols];
+    // A missing reading (NaN) goes to the monitor as invalid, not as 0.
+    let load = |vals: &[f64], sample: &mut [f64], valid: &mut [bool]| {
+        for (ch, &v) in vals.iter().enumerate() {
+            valid[ch] = !v.is_nan();
+            sample[ch] = if valid[ch] { v } else { 0.0 };
+        }
+    };
 
     let mut last_alarm: Vec<(usize, u8)> = Vec::new();
     const ALARM_COOLDOWN: usize = 50;
@@ -3751,7 +3792,7 @@ fn run_guard_watch(path: &str, baseline_n: usize, json: bool, poll_ms: u64, cfg:
 
     // Feed existing rows past calibration through the monitor first
     for t in calib_n..rows.len() {
-        for ch in 0..ncols { sample[ch] = rows[t].get(ch).copied().unwrap_or(0.0); }
+        load(&rows[t], &mut sample, &mut valid);
         for ev in ap.push(&sample, &valid) {
             emit_dedup(t, &ev, json);
         }
@@ -3778,9 +3819,14 @@ fn run_guard_watch(path: &str, baseline_n: usize, json: bool, poll_ms: u64, cfg:
         if new_lines.is_empty() { continue; }
         lines_seen += new_lines.len();
         for line in new_lines {
-            let vals: Vec<f64> = line.split(',').filter_map(|s| s.trim().parse().ok()).collect();
-            if !vals.is_empty() {
-                for (ch, &col) in keep.iter().enumerate() { sample[ch] = vals.get(col).copied().unwrap_or(0.0); }
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') { continue; }
+            // Same columns as the initial load: parsed.mask, parsed.delim.
+            let row = masked_values(&split_fields(line, parsed.delim), &parsed.mask);
+            if row.iter().any(|v| !v.is_nan()) {
+                let vals: Vec<f64> =
+                    keep.iter().map(|&c| row.get(c).copied().unwrap_or(f64::NAN)).collect();
+                load(&vals, &mut sample, &mut valid);
                 for ev in ap.push(&sample, &valid) {
                     emit_dedup(t, &ev, json);
                 }
@@ -4063,10 +4109,10 @@ fn run_guard(content: &str, baseline_n: usize, json: bool, cfg: struktura::monit
     let calib_n = if baseline_n > 0 { baseline_n } else { (n / 3).clamp(192, 100_000) }.min(n);
 
     let channels: Vec<Vec<f64>> = (0..ncols)
-        .map(|ch| rows.iter().map(|r| r.get(ch).copied().unwrap_or(0.0)).collect())
+        .map(|ch| rows.iter().map(|r| r.get(ch).copied().unwrap_or(f64::NAN)).collect())
         .collect();
 
-    let calib: Vec<Vec<f64>> = channels.iter().map(|c| c[..calib_n].to_vec()).collect();
+    let calib: Vec<Vec<f64>> = channels.iter().map(|c| fill_gaps(&c[..calib_n])).collect();
     let mon = match HybridMonitor::calibrate_with(&calib, cfg) {
         Some(m) => m,
         None => {
@@ -4107,7 +4153,7 @@ fn run_guard(content: &str, baseline_n: usize, json: bool, cfg: struktura::monit
     let mut alarm_count = 0usize;
     let mut adapt_count = 0usize;
     let mut quarantine_count = 0usize;
-    let valid: Vec<bool> = vec![true; ncols];
+    let mut valid: Vec<bool> = vec![true; ncols];
     // Deduplicate sustained faults: suppress same-leg same-channel alarms
     // for 50 samples after the first. A real fault fires once, not 120x.
     let mut last_alarm: Vec<(usize, u8)> = Vec::new(); // (last_t, leg_id)
@@ -4115,7 +4161,10 @@ fn run_guard(content: &str, baseline_n: usize, json: bool, cfg: struktura::monit
 
     for t in calib_n..n {
         for ch in 0..ncols {
-            sample[ch] = channels[ch][t];
+            let v = channels[ch][t];
+            // A blank cell is a missing reading (missingness leg), not 0.
+            valid[ch] = !v.is_nan();
+            sample[ch] = if valid[ch] { v } else { 0.0 };
         }
         for ev in ap.push(&sample, &valid) {
             match &ev {
@@ -4742,8 +4791,12 @@ fn cmd_copilot_compare(args: &[String]) {
     let ncols = rows[0].len();
     let calib_n = (n / 3).clamp(192, 100_000).min(n);
 
+    // Missing readings (blank cells) hold the previous reading here.
     let channels: Vec<Vec<f64>> = (0..ncols)
-        .map(|ch| rows.iter().map(|r| r.get(ch).copied().unwrap_or(0.0)).collect())
+        .map(|ch| {
+            let col: Vec<f64> = rows.iter().map(|r| r.get(ch).copied().unwrap_or(f64::NAN)).collect();
+            fill_gaps(&col)
+        })
         .collect();
 
     // Boolean threshold: 95th percentile of calibration window amplitude per channel
