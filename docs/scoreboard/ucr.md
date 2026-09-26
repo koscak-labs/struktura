@@ -79,8 +79,10 @@ UCR_DIR=AnomalyDatasets_2021/UCR_TimeSeriesAnomalyDatasets2021/FilesAreInHere/UC
 The archive the numbers came from is 184,066,400 bytes. It holds 250 series in `UCR_Anomaly_FullData`.
 
 Source: [examples/ucr_eval.rs](../../examples/ucr_eval.rs). The run above prints every number on
-this page. Master 9d297d1 gave the same output.
+this page; the github-profile-space-robotics session reproduced it independently on the same
+archive.
 
-The protocol was first run in Python on the published wheel 1.8.7. Its log is in
-[preregistration-2026-09-26.md](preregistration-2026-09-26.md), and its accuracies, the 99 alarmed
-series and the 44/34 split are the same as above.
+The protocol was first run in Python on the published wheel 1.8.7 (log in
+[preregistration-2026-09-26.md](preregistration-2026-09-26.md)). That run, master 9d297d1, a49534a
+and 797d785 all gave 67/250, 99 alarmed series and the 44/34 split. ccd86c5 differs from them on
+169_UCR_Anomaly_gait3 only (see Results).
