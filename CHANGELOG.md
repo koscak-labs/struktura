@@ -4,6 +4,34 @@ All notable changes to Struktura are documented here.
 
 ## Unreleased
 
+- `analyze()` and `acr()` no longer depend on the units of the data. Both
+  treated a series as constant when its spread was below a fixed 1e-12
+  (1e-15 for `acr`'s sum of squares), so a real signal recorded in small
+  units (a strain gauge in SI, a displacement in metres) got
+  `LawQuality::Abstain`. The check is now relative: exactly constant, or a
+  standard deviation below 1e-12 of the mean's magnitude. Test
+  analyze_does_not_depend_on_units (the same Brownian series scaled by
+  1e-15, 1e-9 and 1e9 gives the same quality, α and ACR exponent) fails
+  without the fix at 1e-15. Bundled data, claims ledger and examples are
+  unchanged. Two unit-dependent thresholds remain: the pivot check in the
+  monitor's parity least squares and one CLI variance gate.
+- Generated hybrid C, two checks by the github-profile-space-robotics
+  session (harness and logs in its proofs/esa-adb-official/hybrid-diff):
+  - On ESA-ADB Mission 1 channels 41-46 (7,364,161 rows, one continuous
+    stream, reset after every alarm) the C and Rust alarm sequences are
+    identical before and after the phase-counter change: 778,977 alarms,
+    0 differences, while the ring phase wraps 399 times. A 10% change of
+    the C residual threshold gives 471,999 differences.
+  - With every channel started at 2^32 - 1000 samples, the C from before
+    the 64-bit counters, built for a 32-bit ABI (`-m32`), missed a residual
+    alarm pair at the sentinel tick and another at the wrap tick, and
+    raised level alarms up to 96 samples late after the wrap. The current C
+    at `-m32` and `-m64`, and the old C at `-m64`, match their no-wrap runs
+    on all five planted faults.
+  - Built for 32-bit x86 with default x87 math, the C raised 199 alarms
+    where Rust and SSE math raise 198. The generated header now says to add
+    `-msse2 -mfpmath=sse` there. Cortex-M builds use IEEE double and are not
+    affected.
 - Claims corrected to what the code and data show (audit findings, plus
   what checking them turned up):
   - `struktura demo` printed "The bearing's vibration structure changed

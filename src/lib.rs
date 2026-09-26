@@ -537,6 +537,13 @@ pub fn dfa_scratch(values: &[f64], scratch: &mut [f64]) -> DfaResult {
 
 /// Compute autocorrelation decay exponent.
 ///
+/// True when a series has no variation beyond floating-point noise: exactly
+/// constant, or a standard deviation below 1e-12 of its mean's magnitude.
+/// Relative, so the answer does not depend on the units of the data.
+fn is_flat(std_dev: f64, mean: f64) -> bool {
+    std_dev == 0.0 || std_dev <= 1e-12 * mean.abs()
+}
+
 /// Measures how fast temporal correlations decay with lag.
 /// Requires at least 20 data points.
 #[must_use]
@@ -548,7 +555,7 @@ pub fn acr(values: &[f64]) -> DfaResult {
 
     let mean = values.iter().sum::<f64>() / n as f64;
     let var: f64 = values.iter().map(|&x| (x - mean) * (x - mean)).sum();
-    if var < 1e-15 {
+    if is_flat(sqrt(var / n as f64), mean) {
         return DfaResult { alpha: 0.0, r_squared: 0.0 };
     }
 
@@ -614,7 +621,7 @@ pub fn analyze(values: &[f64]) -> StructuralLaw {
     let var: f64 = values.iter().map(|&x| (x - mean) * (x - mean)).sum::<f64>() / n as f64;
     let std_dev = sqrt(var);
 
-    if std_dev < 1e-12 {
+    if is_flat(std_dev, mean) {
         return StructuralLaw {
             hurst: 0.5, dfa: DfaResult { alpha: 0.5, r_squared: 0.0 },
             acr: DfaResult { alpha: 0.0, r_squared: 0.0 },
@@ -921,6 +928,25 @@ impl BaselineTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn analyze_does_not_depend_on_units() {
+        // A strain gauge in SI units reads ~1e-6, a displacement in metres
+        // ~1e-15: the same signal must give the same structure, not Abstain.
+        let x = brownian(512, 11);
+        let base = analyze(&x);
+        assert_ne!(base.quality, LawQuality::Abstain);
+        for k in [1e-15, 1e-9, 1e9] {
+            let y: Vec<f64> = x.iter().map(|v| v * k).collect();
+            let law = analyze(&y);
+            assert_eq!(law.quality, base.quality, "scale {k}");
+            assert!((law.dfa.alpha - base.dfa.alpha).abs() < 1e-9, "scale {k}: {} vs {}", law.dfa.alpha, base.dfa.alpha);
+            assert!((law.acr.alpha - base.acr.alpha).abs() < 1e-9, "scale {k}: acr {} vs {}", law.acr.alpha, base.acr.alpha);
+        }
+        // Constant series still abstain, including a large constant.
+        assert_eq!(analyze(&[3.0; 256]).quality, LawQuality::Abstain);
+        assert_eq!(analyze(&[1e9; 256]).quality, LawQuality::Abstain);
+    }
 
     #[test]
     fn dfa_is_a_placeholder_below_72_samples() {

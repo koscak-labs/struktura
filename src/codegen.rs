@@ -332,6 +332,8 @@ pub fn generate_hybrid_c(export: &crate::monitor::MonitorExport) -> String {
     s.push_str(" * All thresholds calibrated (Gumbel return levels).\n");
     s.push_str(" * Static memory only. Bounded loops only. C99 + libm.\n");
     s.push_str(" * Compile: gcc -std=c99 -Wall -Werror -O2 -o hybrid hybrid_monitor.c -lm\n");
+    s.push_str(" * On 32-bit x86 add -msse2 -mfpmath=sse: x87 extended precision can\n");
+    s.push_str(" * move an alarm against the Rust monitor (one of 198 alarms, seen).\n");
     s.push_str(" */\n#include <math.h>\n#include <string.h>\n\n");
     s.push_str(&format!("#define HYB_CHANNELS   {}\n", nch));
     // Taken from the Rust monitor so the C stays in step with its calibration.
