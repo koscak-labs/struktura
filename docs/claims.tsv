@@ -27,6 +27,7 @@ control-monitor-clean	fast	0	struktura monitor-perf	Alarms on clean stream:     
 structure-vs-amp-matched	fast	0	cargo run -q --release --example structure_vs_amplitude	| white -> AR(0.9), variance-matched | 23/30, 0 early, median 208 | 30/30, 0 early, median 100 | 7/30, 0 early, median 371 |
 control-structure-vs-amp-clean	fast	0	cargo run -q --release --example structure_vs_amplitude	| white | 0/30 | 0/30 | 0/30 | && | AR(0.7) | 0/30 | 0/30 | 4/30 | && | AR(0.95) | 0/30 | 0/30 | 15/30 |
 limitation-short-calibration	fast	0	CALIB=512 cargo run -q --release --example structure_vs_amplitude	clean AR(0.95): LevelShift 6
+limitation-rover-sim-clean-false-alarms	slow	0	cargo run -q --release --example parity_eval	detected 51/60 && clean runs: false alarms 239 (incidents 239), false quarantines 60 && clean runs with any false event: 60/60
 evolve-coverage	slow	0	struktura evolve	69.0% && 97.0% && 69.0% (gen 1) -> 90.0% (gen 10)
 control-sylv-healthy-quiet	fast	0	head -499 data/sylv_spike.csv | struktura guard - --baseline 333 --quiet-drift	HEALTHY, 166 samples, no anomalies
 limitation-quiet-spike	fast	1	struktura guard data/sylv_spike.csv --quiet-drift	  1 faults detected

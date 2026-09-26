@@ -4,6 +4,18 @@ All notable changes to Struktura are documented here.
 
 ## Unreleased
 
+- New `examples/parity_eval.rs`: fault isolation on the simulated rover (60
+  seeds, one scripted fault per run plus a clean run per seed; ground truth
+  from `src/rover.rs`). It documents a limitation of the current monitor on
+  slowly drifting data (README, Limitations; ledger row
+  limitation-rover-sim-clean-false-alarms): every clean run raised false
+  alarms (239, mostly level shifts on the battery voltage as it sags), and
+  every clean run had a healthy sensor quarantined by the parity leg about
+  120 steps after calibration, after which some channel stays quarantined
+  for the rest of the run. 51 of 60 scripted faults are detected. The
+  harness was reviewed adversarially by the oura-32 session (two flaws
+  found and fixed: thermal faults drawn on a channel the simulator does
+  not change, and a false-alarm rate compared over different windows).
 - DFA on windows with a constant run (forward-filled or quantized
   telemetry). A box size that tiles only the constant part has a
   fluctuation of exactly 0, but the one-pass least-squares identity
