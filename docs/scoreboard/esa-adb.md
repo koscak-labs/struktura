@@ -94,8 +94,9 @@ is not compared.
     written.
 - **Quarantines come from forward-filled data.** Guard's stuck-value check quarantines a channel once
   per long constant run. On this data, where gaps are forward-filled, that happens often.
-  - Channel 45 is quarantined 48 times over the 7.36 million rows and released after about 192
-    samples each time.
+  - Channel 45 is quarantined 48 times over the 7.36 million rows. The median quarantine lasts 192
+    samples. The longest lasted 9,585 samples, because the channel's own readings did not pass the
+    recovery checks for that long.
   - The recovery back-off works as designed. The channel stays healthy for about 44,000 rows
     between stuck runs (median), which is longer than its recovery span, so the back-off resets.
   - Details are in the protocol record, in the follow-up to Amendment 13.
