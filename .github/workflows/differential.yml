@@ -22,6 +22,9 @@ jobs:
           - generator: hybrid (generate_hybrid_c)
             test: hybrid_c_matches_rust
             filter: ''
+          - generator: hybrid alarms (generate_hybrid_c vs HybridMonitor)
+            test: hybrid_c_alarms_match_rust
+            filter: ''
           - generator: c-monitor (generate_c_monitor)
             test: c_monitor_matches_rust
             filter: c_monitor_alpha_matches_rust_dfa

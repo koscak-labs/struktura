@@ -412,7 +412,10 @@ pub fn generate_hybrid_c(export: &crate::monitor::MonitorExport) -> String {
     s.push_str("        }\n");
     s.push_str("        return (n_ * sxya - sxa * sya) / (n_ * sx2a - sxa * sxa);\n");
     s.push_str("    }\n}\n\n");
-    s.push_str("/* Feed one sample for one channel. Returns HYB_OK or the first alarm. */\n");
+    s.push_str("/* Feed one sample for one channel (channels may arrive at different\n");
+    s.push_str(" * rates). Returns HYB_OK or the alarm; the monitor then latches and\n");
+    s.push_str(" * ignores every channel until hyb_reset. For one sample of all channels\n");
+    s.push_str(" * use hyb_push_sample, which keeps feeding the channels after an alarm. */\n");
     s.push_str("static hyb_verdict_t hyb_push(hyb_monitor_t *m, int c, double v) {\n");
     s.push_str("    hyb_channel_t *st;\n    const hyb_calib_t *cc;\n");
     s.push_str("    unsigned long t;\n    double zs;\n");
@@ -457,6 +460,36 @@ pub fn generate_hybrid_c(export: &crate::monitor::MonitorExport) -> String {
     s.push_str("                m->alarmed = 1; return HYB_ALARM_LEVEL;\n            }\n");
     s.push_str("        } else {\n            st->roll_streak = 0;\n        }\n    }\n");
     s.push_str("    return HYB_OK;\n}\n\n");
+    // Whole-sample entry point and reset, matching HybridMonitor::push and
+    // HybridMonitor::reset. `static inline` so an integrator who does not
+    // use them gets no -Wunused-function error under -Wall -Werror.
+    s.push_str("/* Clear the alarm latch and the detector streaks, as the Rust\n");
+    s.push_str(" * HybridMonitor::reset does. Rings, previous values and sample\n");
+    s.push_str(" * counters are kept. */\n");
+    s.push_str("static inline void hyb_reset(hyb_monitor_t *m) {\n");
+    s.push_str("    int c;\n    m->alarmed = 0;\n");
+    s.push_str("    for (c = 0; c < HYB_CHANNELS; c++) {\n");
+    s.push_str("        m->ch[c].cusum_pos = 0.0;\n        m->ch[c].cusum_neg = 0.0;\n");
+    s.push_str("        m->ch[c].dfa_streak = 0;\n        m->ch[c].roll_streak = 0;\n");
+    s.push_str("        m->ch[c].res_hit_prev = (unsigned long)-1;\n    }\n}\n\n");
+    s.push_str("/* Feed one sample of every channel, x[0..HYB_CHANNELS-1]. Every channel\n");
+    s.push_str(" * takes its value even after an earlier channel alarms, so no channel\n");
+    s.push_str(" * falls behind. Returns the first alarm of the sample (its channel in\n");
+    s.push_str(" * *alarm_ch when not NULL) and latches until hyb_reset, as the Rust\n");
+    s.push_str(" * HybridMonitor::push does. */\n");
+    s.push_str("static inline hyb_verdict_t hyb_push_sample(hyb_monitor_t *m, const double *x,\n");
+    s.push_str("                                            int *alarm_ch) {\n");
+    s.push_str("    hyb_verdict_t first = HYB_OK;\n    int c;\n");
+    s.push_str("    if (m->alarmed) return HYB_OK;\n");
+    s.push_str("    for (c = 0; c < HYB_CHANNELS; c++) {\n");
+    s.push_str("        hyb_verdict_t v = hyb_push(m, c, x[c]);\n");
+    s.push_str("        if (v != HYB_OK) {\n");
+    s.push_str("            if (first == HYB_OK) {\n");
+    s.push_str("                first = v;\n");
+    s.push_str("                if (alarm_ch) *alarm_ch = c;\n            }\n");
+    s.push_str("            m->alarmed = 0;\n        }\n    }\n");
+    s.push_str("    if (first != HYB_OK) m->alarmed = 1;\n");
+    s.push_str("    return first;\n}\n\n");
     // The self-test freezes a channel whose repeat leg is enabled (channels
     // that legitimately saturate have it auto-disabled).
     let test_ch = export
@@ -466,21 +499,22 @@ pub fn generate_hybrid_c(export: &crate::monitor::MonitorExport) -> String {
         .unwrap_or(0);
     s.push_str("#ifdef HYBRID_STANDALONE_TEST\n#include <stdio.h>\n");
     s.push_str(&format!("#define HYB_TEST_CH {}\n", test_ch));
-    s.push_str("int main(void) {\n    hyb_monitor_t m;\n    int t, c;\n");
+    s.push_str("int main(void) {\n    hyb_monitor_t m;\n    int t, c, ch = -1;\n");
+    s.push_str("    double x[HYB_CHANNELS];\n");
     s.push_str("    hyb_verdict_t v = HYB_OK;\n    hyb_init(&m);\n");
     s.push_str("    /* Small deterministic wobble around each channel mean; stuck\n");
     s.push_str("     * fault on a repeat-enabled channel from t=400 (value frozen). */\n");
     s.push_str("    for (t = 0; t < 700 && v == HYB_OK; t++) {\n");
     s.push_str("        for (c = 0; c < HYB_CHANNELS; c++) {\n");
-    s.push_str("            double x = HYB_CALIB[c].mean\n");
+    s.push_str("            x[c] = HYB_CALIB[c].mean\n");
     s.push_str("                + 0.5 * HYB_CALIB[c].ar_sd * sin(0.7 * (double)t + (double)c);\n");
-    s.push_str("            if (c == HYB_TEST_CH && t >= 400) x = HYB_CALIB[HYB_TEST_CH].mean;\n");
-    s.push_str("            v = hyb_push(&m, c, x);\n");
-    s.push_str("            if (v != HYB_OK) break;\n        }\n    }\n");
-    s.push_str("    if (v == HYB_ALARM_REPEATED && t >= 400) {\n");
-    s.push_str("        printf(\"SELFTEST PASS: stuck detected at t=%d (leg=repeated)\\n\", t);\n");
-    s.push_str("        return 0;\n    }\n");
-    s.push_str("    printf(\"SELFTEST FAIL: verdict=%d t=%d\\n\", (int)v, t);\n");
+    s.push_str("            if (c == HYB_TEST_CH && t >= 400) x[c] = HYB_CALIB[HYB_TEST_CH].mean;\n");
+    s.push_str("        }\n");
+    s.push_str("        v = hyb_push_sample(&m, x, &ch);\n    }\n");
+    s.push_str("    if (v == HYB_ALARM_REPEATED && ch == HYB_TEST_CH && t > 400) {\n");
+    s.push_str("        printf(\"SELFTEST PASS: stuck detected at t=%d on channel %d (leg=repeated)\\n\", t - 1, ch);\n");
+    s.push_str("        hyb_reset(&m);\n        return 0;\n    }\n");
+    s.push_str("    printf(\"SELFTEST FAIL: verdict=%d t=%d channel=%d\\n\", (int)v, t - 1, ch);\n");
     s.push_str("    return 1;\n}\n#endif\n");
     s
 }

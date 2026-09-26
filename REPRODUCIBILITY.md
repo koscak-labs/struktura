@@ -19,7 +19,7 @@ All benchmarks use deterministic seeds — outputs reproduce exactly.
 | IMS bearing run-to-failure: first alarm at recording 970 of 984 (α rises from ~0.17). A plain RMS amplitude threshold trips earlier on the same bearing, so this is not an early-warning result | `struktura ims` (embedded) or `struktura monitor-real` (full data) | IMS section |
 | Prognosis: no-trend at 50% of life (correct), −66 recs at 75%, +91 at 90% (healing plateau) | `struktura monitor-real` | prognosis table |
 | Voyager heliopause: no alarm at streaming resolution (with trend-safe legs); whole-segment α shift 1.137 → 1.056 has z = 0.6, inconclusive | `struktura monitor-real` + `struktura heliopause` | Voyager sections |
-| Generated C99 flight monitor compiles `-Wall -Werror` clean; embedded self-test detects stuck at t=405 | `struktura generate-hybrid -o hybrid_monitor.c` then `gcc -std=c99 -Wall -Werror -O2 -DHYBRID_STANDALONE_TEST -o hybrid hybrid_monitor.c -lm && ./hybrid` | SELFTEST PASS |
+| Generated C99 flight monitor compiles `-Wall -Werror` clean; embedded self-test detects stuck at t=404 on the frozen channel | `struktura generate-hybrid -o hybrid_monitor.c` then `gcc -std=c99 -Wall -Werror -O2 -DHYBRID_STANDALONE_TEST -o hybrid hybrid_monitor.c -lm && ./hybrid` | SELFTEST PASS |
 | Prefix-sum DFA ≡ reference DFA to 1e-9 over 1000 windows | `cargo test --release dfa_fast_matches` | test passes |
 | Analytic α-scatter lower bound holds; measured inflation 1.3–4x | `cargo test --release analytic_alpha` | test passes |
 | Nothing panics on NaN/Inf/empty/adversarial input (proptest) | `cargo test --release --test property_tests` | 11 tests pass |

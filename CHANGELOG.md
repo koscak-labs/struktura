@@ -4,6 +4,22 @@ All notable changes to Struktura are documented here.
 
 ## Unreleased
 
+- Generated hybrid C (`generate-hybrid`): new `hyb_push_sample(m, x, &ch)`
+  feeds one sample of every channel and returns the first alarm and its
+  channel, and new `hyb_reset(m)` clears what `HybridMonitor::reset` clears.
+  Driving the C one channel at a time with `hyb_push` latches after an alarm,
+  so the channels after the alarming one skipped that sample, the same fault
+  the Rust monitor had until 1.8.7. A differential oracle
+  (tests/hybrid_c_alarms_match_rust.rs, by the oura-32 session) compares the
+  C with the Rust `HybridMonitor` on 240 seeded streams (1-3 channels; white,
+  AR, random walk, quantized; step, stuck, variance, drift and spike faults):
+  first alarm 0/240 mismatches (tick, channel and leg) through `hyb_push`;
+  full alarm sequence with a reset after each alarm 2/240 through per-channel
+  `hyb_push`, 0/240 through `hyb_push_sample`; a planted 10% change of the C
+  residual threshold gives 58/240. Both new functions are `static inline`, so
+  unused they cause no `-Wunused-function` error. The self-test now uses
+  them and prints the alarm tick itself (404) and the channel; it printed one
+  past the tick (405) before. `hyb_push` is unchanged.
 - `guard` no longer monitors a column that always increases and is named
   like a time (time, timestamp, epoch, date, clock, t, ts, utc, ...), for
   example epoch nanoseconds with jitter. Only exactly even steps were left
