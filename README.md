@@ -100,7 +100,7 @@ Two limits: this is segment classification (one score per labelled segment), not
 
 More scoreboards, each with its protocol, controls and limits, re-run weekly in CI on hash-pinned data:
 
-- [UCR Anomaly Archive](docs/scoreboard/ucr.md), 250 series with one anomaly each: `guard`'s first alarm is within tolerance on 67/250 (0.268). It stays silent on 151 series, and a plain largest-first-difference baseline scores 0.312; the difference between the two is not significant (McNemar p = 0.215).
+- [UCR Anomaly Archive](docs/scoreboard/ucr.md), 250 series with one anomaly each: `guard`'s first alarm is within tolerance on 66/250 (0.264). It stays silent on 152 series, and a plain largest-first-difference baseline scores 0.312; the difference between the two is not significant (McNemar p = 0.175).
 - [Heart-rate variability](docs/scoreboard/hrv.md), PhysioNet heart failure (29) vs healthy (54): the short-term DFA exponent is lower in heart failure (AUC 0.829), but SDNN alone separates the groups at least as well (0.897) and alpha1 adds nothing on top of it. Not a diagnostic.
 
 Not in the weekly job (it needs the ESA-ADB repository, the Mission 1 download and Python 3.8; about 14 minutes), run per version:

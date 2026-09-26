@@ -38,6 +38,13 @@ All notable changes to Struktura are documented here.
   output changed. NAB: the same windows are caught with one false alarm
   fewer in every mode (default 45 windows / 46 -> 45 false alarms,
   `--quiet-drift` 44 / 45 -> 44, `--sensitivity high` 55 / 54 -> 53).
+  UCR archive: guard 67 -> 66 of 250 (McNemar p vs the first-difference
+  baseline 0.215 -> 0.175). The one series lost, 169_UCR_Anomaly_gait3, is
+  a flat-stretch anomaly (91 of the 96 samples before the alarm repeat one
+  value) that the old DFA leg flagged only through the rounding noise this
+  fixes. HRV and OPS-SAT scoreboards and the ESA-ADB guard predictions are
+  unchanged (the ESA-ADB prediction matrix is byte-identical, checked by
+  the github-profile-space-robotics session).
   `struktura redblue` and `struktura evolve`, whose RED probes include
   stuck faults, now cover 59.2% -> 73.3% (was 60.0% -> 75.0%) and 69% ->
   90% with a 97% peak (was 71% -> 92%): part of the old coverage came from
