@@ -215,13 +215,22 @@ impl AutoPilot {
                                     Some((rt, rch)) if rch == ch
                                         && tick - rt < RECAL_COOLDOWN
                                 );
-                                if repeat_trend {
+                                // An along-trend excursion (the channel is
+                                // certified to drift and this break points
+                                // the same direction, not too far past the
+                                // certified band) is more of that same
+                                // drift, not a new regime: report it and
+                                // refuse adaptation, the same as a repeated
+                                // trend. Abrupt along-trend steps (observed
+                                // far past 2x threshold) and opposite-sign
+                                // breaks keep today's guarded adaptation.
+                                let along = self.monitor.level_break_along_trend(ch)
+                                    && report.observed <= 2.0 * report.threshold;
+                                if repeat_trend || along {
                                     self.drift_latch[ch] = Some(tick);
-                                    events.push(Event::Alarm {
-                                        tick,
-                                        report,
-                                        class: "drift_confirmed",
-                                    });
+                                    let drift_class =
+                                        if repeat_trend { "drift_confirmed" } else { "drift" };
+                                    events.push(Event::Alarm { tick, report, class: drift_class });
                                 } else {
                                     events.push(Event::Alarm { tick, report, class });
                                     events.push(Event::AdaptationStarted { tick });
@@ -271,7 +280,7 @@ impl AutoPilot {
                 }
                 self.monitor.reset();
                 if failure.is_none() && buffer[0].len() >= *target {
-                    match HybridMonitor::calibrate(buffer) {
+                    match HybridMonitor::calibrate_with_prior(buffer, &self.monitor) {
                         Some(mut candidate) => {
                             for ch in 0..self.channels {
                                 if self.quarantined[ch] {
@@ -694,5 +703,294 @@ mod tests {
             }
         }
         assert!(rollbacks >= 1, "the runaway during the trial must roll the adaptation back");
+    }
+
+    fn t1_like_stream(seed: u64, n: usize) -> (Vec<f64>, Vec<f64>) {
+        let mut rng = crate::telemetry_bench::GaussRng::new(seed);
+        let mut e0 = 0.0f64;
+        let mut ch0 = Vec::with_capacity(n);
+        for i in 0..n {
+            e0 = 0.3 * e0 + rng.normal(0.0, 0.076);
+            ch0.push(10.0 - 4e-4 * i as f64 + e0);
+        }
+        let mut e1 = 0.0f64;
+        let mut ch1 = Vec::with_capacity(n);
+        for _ in 0..n {
+            e1 = 0.3 * e1 + rng.normal(0.0, 0.076);
+            ch1.push(5.0 + e1);
+        }
+        (ch0, ch1)
+    }
+
+    fn ar03_const(seed: u64, n: usize, level: f64) -> Vec<f64> {
+        let mut rng = crate::telemetry_bench::GaussRng::new(seed);
+        let mut e = 0.0f64;
+        (0..n)
+            .map(|_| {
+                e = 0.3 * e + rng.normal(0.0, 0.076);
+                level + e
+            })
+            .collect()
+    }
+
+    fn t1_ramp(seed: u64, n: usize) -> Vec<f64> {
+        let mut rng = crate::telemetry_bench::GaussRng::new(seed);
+        let mut e = 0.0f64;
+        (0..n)
+            .map(|i| {
+                e = 0.3 * e + rng.normal(0.0, 0.076);
+                10.0 - 4e-4 * i as f64 + e
+            })
+            .collect()
+    }
+
+    /// T7 (FAIL BEFORE): the rover's battery sag runs along its certified
+    /// calibration trend — it must be reported as a confirmed drift, not
+    /// chased through guarded adaptation.
+    #[test]
+    fn battery_sag_along_trend_is_reported_not_adapted() {
+        use crate::rover::{RoverFault, RoverSim, ROVER_CHANNELS};
+
+        let mut sim = RoverSim::new(3);
+        sim.inject(1500, RoverFault::BatteryCell { severity: 0.7 });
+        let data = sim.run(3000);
+        let calib: Vec<Vec<f64>> = data.iter().map(|c| c[..1000].to_vec()).collect();
+        let mon = HybridMonitor::calibrate(&calib).expect("calibration");
+        let mut ap = AutoPilot::new(mon);
+        let valid = [true; ROVER_CHANNELS];
+        let mut sample = [0.0f64; ROVER_CHANNELS];
+        let mut first_battery_alarm: Option<(usize, &'static str)> = None;
+        for t in 1000..3000usize {
+            for ch in 0..ROVER_CHANNELS {
+                sample[ch] = data[ch][t];
+            }
+            let events = ap.push(&sample, &valid);
+            // Parity (cross-channel reconstruction) is out of scope for this
+            // change (Phase 2) — only the trend-aware legs are asserted on.
+            let battery_alarm = events.iter().find_map(|ev| match ev {
+                Event::Alarm { report, class, .. }
+                    if (report.channel == 5 || report.channel == 6)
+                        && matches!(report.leg, Leg::LevelShift | Leg::ResidualCusum) =>
+                {
+                    Some(*class)
+                }
+                _ => None,
+            });
+            if let Some(class) = battery_alarm {
+                let has_adapt = events.iter().any(|ev| matches!(ev, Event::AdaptationStarted { .. }));
+                assert!(!has_adapt, "the battery alarm at t={t} must not also start an adaptation");
+                first_battery_alarm.get_or_insert((t, class));
+            }
+        }
+        let (t, class) = first_battery_alarm.expect("the battery sag must be reported");
+        assert!((1500..1800).contains(&t), "first battery alarm at {t}, expected in 1500..1800");
+        assert!(
+            class == "drift" || class == "drift_confirmed",
+            "unexpected class {class} for the battery-sag alarm"
+        );
+    }
+
+    /// T8 (mutation guard): a recalibration candidate must never certify a
+    /// fresh trend on its own buffer — the runaway here has R2~0.68 over a
+    /// 400-sample window, which a naive gate would certify.
+    #[test]
+    fn adaptation_does_not_certify_a_new_drift() {
+        let calib_len = 2048usize;
+        let n = 5000usize;
+        let (mut ch0, ch1) = {
+            let mut rng = crate::telemetry_bench::GaussRng::new(555);
+            let mut e0 = 0.0f64;
+            let ch0: Vec<f64> = (0..n).map(|_| { e0 = 0.3 * e0 + rng.normal(0.0, 0.076); 5.0 + e0 }).collect();
+            let mut e1 = 0.0f64;
+            let ch1: Vec<f64> = (0..n).map(|_| { e1 = 0.3 * e1 + rng.normal(0.0, 0.076); 5.0 + e1 }).collect();
+            (ch0, ch1)
+        };
+        // A step large enough to cross per-sample residual/CUSUM thresholds
+        // immediately would be caught by those (unchanged, existing) legs
+        // before the level leg (rolling mean) ever gets a chance to react —
+        // that race is a property of the detector architecture, not of
+        // this change. Use a small initial offset (below the CUSUM slack)
+        // that grows into a clear level shift, the same relative scale
+        // `autonomous_gauntlet`'s regime-shift fixture (0.8 sigma) already
+        // proves routes through LevelShift.
+        for t in 3000..n {
+            ch0[t] += 0.06 + 3e-4 * (t - 3000) as f64;
+        }
+        let calib = vec![ch0[..calib_len].to_vec(), ch1[..calib_len].to_vec()];
+        let mut mon = HybridMonitor::calibrate(&calib).expect("calibration");
+        mon.set_leg_enabled(Leg::Parity, false);
+        let mut ap = AutoPilot::new(mon);
+        let valid = [true, true];
+        let mut sample = [0.0f64; 2];
+        let mut confirmed = false;
+        for t in calib_len..n {
+            sample[0] = ch0[t];
+            sample[1] = ch1[t];
+            for ev in ap.push(&sample, &valid) {
+                match ev {
+                    Event::RolledBack { .. } => confirmed = true,
+                    Event::Alarm { report, class, .. } if report.channel == 0 && class == "drift_confirmed" => {
+                        confirmed = true;
+                    }
+                    Event::Recalibrated { .. } => {
+                        assert!(
+                            ap.monitor().trend(0).is_none(),
+                            "a recalibration candidate must never certify a new trend on ch0"
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert!(
+            confirmed,
+            "the runaway disguised as a fresh drift must be refused (RolledBack or drift_confirmed) by t={n}"
+        );
+    }
+
+    /// T8b (FAIL on the "candidate re-fits its own rate" mutant): an
+    /// opposite-sign step takes the guarded-adaptation path; the accepted
+    /// candidate must inherit ch0's exact certified rate, not refit it.
+    #[test]
+    fn recalibration_keeps_the_certified_rate() {
+        let n = 6000usize;
+        let (mut ch0, ch1) = t1_like_stream(11, n);
+        // A step magnitude that routes through the level leg (rolling
+        // mean) rather than the per-sample residual/CUSUM legs — see the
+        // comment in `adaptation_does_not_certify_a_new_drift` on why a
+        // multi-sigma step would win that race regardless of this change.
+        for t in 2500..n {
+            ch0[t] += 0.08;
+        }
+        let calib_len = 1000usize;
+        let calib = vec![ch0[..calib_len].to_vec(), ch1[..calib_len].to_vec()];
+        let mut mon = HybridMonitor::calibrate(&calib).expect("calibration");
+        mon.set_leg_enabled(Leg::Parity, false);
+        let original_slope = mon.trend(0).expect("ch0 must certify a trend").slope;
+        let mut ap = AutoPilot::new(mon);
+        let valid = [true, true];
+        let mut sample = [0.0f64; 2];
+        let mut recal_at: Option<usize> = None;
+        let end = n.min(calib_len + 4500);
+        for t in calib_len..end {
+            sample[0] = ch0[t];
+            sample[1] = ch1[t];
+            for ev in ap.push(&sample, &valid) {
+                match ev {
+                    Event::Recalibrated { .. } => {
+                        recal_at.get_or_insert(t);
+                    }
+                    Event::Alarm { report, .. }
+                        if report.channel == 0 && matches!(report.leg, Leg::LevelShift | Leg::ResidualCusum) =>
+                    {
+                        if let Some(r) = recal_at {
+                            assert!(
+                                t - r >= 1500,
+                                "ch0 alarmed ({:?}) at t={t}, only {} samples after recalibration at {r}",
+                                report.leg,
+                                t - r
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let r = recal_at.expect("the opposite-sign step must trigger an accepted recalibration");
+        let new_slope = ap.monitor().trend(0).expect("ch0 must still be certified after recalibration").slope;
+        assert_eq!(
+            new_slope.to_bits(),
+            original_slope.to_bits(),
+            "recalibration must keep the certified rate exactly (old {original_slope}, new {new_slope})"
+        );
+        let _ = r;
+    }
+
+    /// T9 (mutation guard for `adopt_channel`'s tr_t0 re-base): a trend
+    /// channel quarantined through a recalibration must keep its trend
+    /// frame through it. Without the re-base, the reference is off by
+    /// roughly slope x elapsed-ticks, which gives a false alarm or no
+    /// recovery.
+    #[test]
+    fn quarantined_trend_channel_keeps_its_frame_through_recalibration() {
+        let calib_len = 2048usize;
+        let n = 6000usize;
+        let ch0 = t1_ramp(21, n);
+        let ch1 = ar03_const(22, n, 5.0);
+        let mut ch2 = ar03_const(23, n, 5.0);
+
+        let calib =
+            vec![ch0[..calib_len].to_vec(), ch1[..calib_len].to_vec(), ch2[..calib_len].to_vec()];
+        let mut mon = HybridMonitor::calibrate(&calib).expect("calibration");
+        mon.set_leg_enabled(Leg::Parity, false);
+        assert!(mon.trend(0).is_some(), "ch0 must certify a trend");
+
+        // ch0 frozen for stream ticks [300, 700) -> repeated-value quarantine.
+        let mut ch0_stream = ch0.clone();
+        let freeze_val = ch0_stream[calib_len + 300];
+        for v in ch0_stream[(calib_len + 300)..(calib_len + 700)].iter_mut() {
+            *v = freeze_val;
+        }
+        // ch2 steps by 5 sd from stream tick 400 -> triggers an adaptation
+        // while ch0 is quarantined.
+        let sd2 = {
+            let c = &ch1[..calib_len];
+            let m = c.iter().sum::<f64>() / c.len() as f64;
+            (c.iter().map(|x| (x - m) * (x - m)).sum::<f64>() / c.len() as f64).sqrt()
+        };
+        // 0.8 sigma: the same relative magnitude `autonomous_gauntlet`'s
+        // regime-shift fixture uses, which reliably routes through
+        // LevelShift rather than the per-sample residual/CUSUM legs.
+        for v in ch2[(calib_len + 400)..].iter_mut() {
+            *v += 0.8 * sd2;
+        }
+
+        let mut ap = AutoPilot::new(mon);
+        let valid = [true; 3];
+        let mut sample = [0.0f64; 3];
+        let (mut quarantined_at, mut recal_at, mut unquarantined_at) = (None, None, None);
+        let mut post_recal_alarm: Option<(usize, Leg)> = None;
+        for t in calib_len..n {
+            sample[0] = ch0_stream[t];
+            sample[1] = ch1[t];
+            sample[2] = ch2[t];
+            for ev in ap.push(&sample, &valid) {
+                match ev {
+                    Event::Quarantined { tick, channel: 0 } => {
+                        quarantined_at.get_or_insert(tick as usize);
+                    }
+                    Event::Recalibrated { tick } => {
+                        recal_at.get_or_insert(tick as usize);
+                    }
+                    Event::Unquarantined { tick, channel: 0 } => {
+                        unquarantined_at.get_or_insert(tick as usize);
+                    }
+                    Event::Alarm { report, .. }
+                        if report.channel == 0 && matches!(report.leg, Leg::LevelShift | Leg::ResidualCusum) =>
+                    {
+                        if let Some(r) = recal_at {
+                            if t > r && t - r < 2000 {
+                                post_recal_alarm.get_or_insert((t, report.leg));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let q = quarantined_at.expect("ch0's frozen stretch must quarantine it");
+        let r = recal_at.expect("ch2's step must trigger an accepted recalibration");
+        assert!(q < r, "quarantined at {q}, recalibrated at {r}: the test needs q < r");
+        let u = unquarantined_at.expect("ch0 must recover and be unquarantined");
+        assert!(
+            u >= r && u <= r + 1500,
+            "unquarantined at {u}, expected within [{r}, {}]",
+            r + 1500
+        );
+        assert!(
+            post_recal_alarm.is_none(),
+            "false alarm on ch0 at {:?} within 2000 samples after recalibration at {r}",
+            post_recal_alarm
+        );
     }
 }

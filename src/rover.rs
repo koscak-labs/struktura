@@ -283,4 +283,43 @@ mod tests {
         let t = alarm_at.expect("bearing fault must be detected");
         assert!(t < 2000, "detection at {} should be well before end", t);
     }
+
+    /// T6 (FAIL BEFORE the drift-calibration change): the rover's battery
+    /// channels (voltage ch5, SOC ch6) have a real slow discharge in
+    /// calibration; a clean continuation of that same discharge must not
+    /// raise a level-shift or residual-CUSUM alarm. Parity is out of scope
+    /// here and not asserted. Master: battery_voltage LevelShift fires in
+    /// every seed, first at 1465-1700.
+    #[test]
+    fn clean_rover_battery_channels_do_not_alarm() {
+        use crate::autopilot::{AutoPilot, Event};
+        use crate::monitor::{HybridMonitor, Leg};
+
+        for seed in 1..=10u64 {
+            let mut sim = RoverSim::new(seed);
+            let data = sim.run(3000);
+            let calib: Vec<Vec<f64>> = data.iter().map(|c| c[..1000].to_vec()).collect();
+            let mon = HybridMonitor::calibrate(&calib).expect("calibration");
+            let mut ap = AutoPilot::new(mon);
+            let valid = [true; ROVER_CHANNELS];
+            let mut sample = [0.0f64; ROVER_CHANNELS];
+            for t in 1000..3000 {
+                for ch in 0..ROVER_CHANNELS {
+                    sample[ch] = data[ch][t];
+                }
+                for ev in ap.push(&sample, &valid) {
+                    if let Event::Alarm { report, .. } = ev {
+                        assert!(
+                            !((report.channel == 5 || report.channel == 6)
+                                && matches!(report.leg, Leg::LevelShift | Leg::ResidualCusum)),
+                            "seed {seed}: false {:?} alarm on ch{} (battery) at t={}",
+                            report.leg,
+                            report.channel,
+                            report.tick
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
