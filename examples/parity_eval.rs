@@ -59,6 +59,12 @@ struct Score {
     pre_q_steps: usize,
     /// False alarms per 500-step bin of 1000..3000.
     bins: [usize; 4],
+    /// Matched windows: false alarms and steps while no channel is quarantined,
+    /// in steps 1000..1120 and per 500-step bin.
+    early_alarms: usize,
+    early_steps: usize,
+    free_alarms: [usize; 4],
+    free_steps: [usize; 4],
 }
 
 fn run(seed: u64, fault: Option<(RoverFault, Vec<usize>)>) -> Score {
@@ -80,9 +86,19 @@ fn run(seed: u64, fault: Option<(RoverFault, Vec<usize>)>) -> Score {
     let mut last: Vec<(usize, (usize, u8))> = Vec::new();
     let mut last_ch: Vec<(usize, usize)> = Vec::new();
     let mut quarantined_at: Option<usize> = None;
+    let mut in_q = [false; ROVER_CHANNELS];
     for t in 1000..3000 {
         for ch in 0..ROVER_CHANNELS {
             sample[ch] = data[ch][t];
+        }
+        // Counted before this step's events: the step is quarantine-free if no
+        // channel was quarantined when it arrived.
+        let free = !in_q.iter().any(|&q| q);
+        if free {
+            s.free_steps[(t - 1000) / 500] += 1;
+            if t < 1120 {
+                s.early_steps += 1;
+            }
         }
         for ev in ap.push(&sample, &valid) {
             let (ch, is_q, what) = match &ev {
@@ -96,8 +112,13 @@ fn run(seed: u64, fault: Option<(RoverFault, Vec<usize>)>) -> Score {
                     }
                     (report.channel, false, format!("{:?}/{class}", report.leg))
                 }
+                Event::Unquarantined { channel, .. } => {
+                    in_q[*channel] = false;
+                    continue;
+                }
                 Event::Quarantined { channel, .. } => {
                     quarantined_at.get_or_insert(t);
+                    in_q[*channel] = true;
                     (*channel, true, "quarantine".to_string())
                 }
                 _ => continue,
@@ -113,6 +134,12 @@ fn run(seed: u64, fault: Option<(RoverFault, Vec<usize>)>) -> Score {
                 s.bins[(t - 1000) / 500] += 1;
                 if quarantined_at.is_none() {
                     s.pre_q_alarms += 1;
+                }
+                if free {
+                    s.free_alarms[(t - 1000) / 500] += 1;
+                    if t < 1120 {
+                        s.early_alarms += 1;
+                    }
                 }
                 let dup_ch = last_ch.iter().any(|&(lt, c)| c == ch && t - lt < 50);
                 last_ch.retain(|&(lt, _)| t - lt < 50);
@@ -143,8 +170,12 @@ fn main() {
         a.false_q += b.false_q;
         a.pre_q_alarms += b.pre_q_alarms;
         a.pre_q_steps += b.pre_q_steps;
+        a.early_alarms += b.early_alarms;
+        a.early_steps += b.early_steps;
         for i in 0..4 {
             a.bins[i] += b.bins[i];
+            a.free_alarms[i] += b.free_alarms[i];
+            a.free_steps[i] += b.free_steps[i];
         }
     };
     for seed in 1..=seeds {
@@ -183,4 +214,10 @@ fn main() {
         );
     }
     println!("clean runs with any false event: {clean_runs_alarming}/{seeds}");
+    for (name, s) in [("fault", &fault), ("clean", &clean)] {
+        let rate = |a: usize, n: usize| if n == 0 { "-".to_string() } else { format!("{:.2}", 1000.0 * a as f64 / n as f64) };
+        let bins: Vec<String> = (0..4).map(|i| format!("{} ({}/{})", rate(s.free_alarms[i], s.free_steps[i]), s.free_alarms[i], s.free_steps[i])).collect();
+        println!("{name} runs, matched windows (no channel quarantined): steps 1000..1120 {} per 1000 ({}/{}); per bin 1000/1500/2000/2500: {}",
+            rate(s.early_alarms, s.early_steps), s.early_alarms, s.early_steps, bins.join(", "));
+    }
 }
