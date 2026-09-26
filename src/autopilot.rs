@@ -96,6 +96,12 @@ pub struct AutoPilot {
     /// current recovery span. Each such flap doubles the span.
     released_at: Vec<Option<u64>>,
     flaps: Vec<u32>,
+    /// (culprit channel, tick) of the last isolated parity alarm classified
+    /// "spike" — section B's persistence escalation: a second isolated
+    /// spike on the SAME channel within the monitor's `res_span` is not
+    /// another transient, it's a persistent offset, and is escalated to a
+    /// quarantine instead of logged and re-firing forever.
+    parity_spike: Option<(usize, u64)>,
 }
 
 /// A drift latch decays after this many quiet samples on the channel.
@@ -131,6 +137,67 @@ fn next_flaps(flaps: u32, released_at: Option<u64>, tick: u64) -> u32 {
     }
 }
 
+/// Sections A/B of the parity-isolation redesign: turn a raw alarm report
+/// into (the report to use, its fault class, whether it's a sensor
+/// failure to quarantine). Non-Parity alarms are unchanged. A Parity alarm
+/// is re-attributed to the monitor's own blame-rule verdict
+/// ([`HybridMonitor::parity_culprit`]) rather than classified from
+/// whichever channel's persistence happened to fire first — classifying
+/// the firing channel makes quarantine depend on channel order (see the
+/// design notes: a coupled pair's spike storm never quarantined the
+/// actually-faulted channel when it came first in the CSV).
+///
+/// - No culprit (ambiguous): hold every over-threshold channel
+///   ([`HybridMonitor::hold_parity`]) so the alarm does not re-fire every
+///   `res_span` ticks and reset every other leg's streak with it; report
+///   `cross_channel_ambiguous`, never a failure.
+/// - Culprit found: re-attribute (channel, observed = its z, threshold =
+///   parity_thr) and classify as usual. A `cross_channel_inconsistency`
+///   quarantines, same as today. A `spike` on the SAME culprit within the
+///   monitor's `res_span` of the last isolated spike is not another
+///   transient — it's a persistent offset — so it escalates to
+///   `cross_channel_inconsistency` and quarantines; otherwise it's
+///   remembered and logged once.
+fn triage(
+    mon: &mut HybridMonitor,
+    spike: &mut Option<(usize, u64)>,
+    r: AlarmReport,
+    tick: u64,
+) -> (AlarmReport, &'static str, bool) {
+    if r.leg != Leg::Parity {
+        let class = classify_alarm(&r);
+        let failed = is_sensor_failure(&r, class);
+        return (r, class, failed);
+    }
+    match mon.parity_culprit() {
+        None => {
+            mon.hold_parity();
+            (r, "cross_channel_ambiguous", false)
+        }
+        Some((culprit, z_culprit)) => {
+            let re = AlarmReport {
+                leg: Leg::Parity,
+                channel: culprit,
+                tick: r.tick,
+                observed: z_culprit,
+                threshold: r.threshold,
+                hit_gap: r.hit_gap,
+            };
+            let mut class = classify_alarm(&re);
+            if class == "spike" {
+                let escalate = matches!(*spike, Some((c, t0)) if c == culprit && tick.saturating_sub(t0) <= mon.res_span());
+                if escalate {
+                    class = "cross_channel_inconsistency";
+                } else {
+                    *spike = Some((culprit, tick));
+                }
+            }
+            let failed = class == "cross_channel_inconsistency";
+            (re, class, failed)
+        }
+    }
+}
+
 impl AutoPilot {
     #[must_use]
     pub fn new(monitor: HybridMonitor) -> AutoPilot {
@@ -156,6 +223,7 @@ impl AutoPilot {
                 r
             },
             flaps: vec![0; channels],
+            parity_spike: None,
         }
     }
 
@@ -189,10 +257,11 @@ impl AutoPilot {
                 }
                 if let Some(_leg) = alarm {
                     if let Some(report) = self.monitor.last_alarm() {
-                        let class = classify_alarm(&report);
+                        let (report, class, failed) =
+                            triage(&mut self.monitor, &mut self.parity_spike, report, tick);
                         match report.leg {
                             // Sensor-failure signatures → quarantine the channel
-                            _ if is_sensor_failure(&report, class) => failure = Some((report, class)),
+                            _ if failed => failure = Some((report, class)),
                             // Environment may have changed → guarded adaptation,
                             // unless the same channel already forced a recent
                             // recalibration: that pattern is a sustained trend
@@ -263,8 +332,9 @@ impl AutoPilot {
                 // repeated-value leg off there).
                 if self.monitor.push_with_validity(sample, valid).is_some() {
                     if let Some(report) = self.monitor.last_alarm() {
-                        let class = classify_alarm(&report);
-                        if is_sensor_failure(&report, class) {
+                        let (report, class, failed) =
+                            triage(&mut self.monitor, &mut self.parity_spike, report, tick);
+                        if failed {
                             failure = Some((report, class));
                         }
                     }
@@ -305,8 +375,9 @@ impl AutoPilot {
                         threshold: 0.0,
                         hit_gap: 0,
                     });
-                    let class = classify_alarm(&guard_report);
-                    if is_sensor_failure(&guard_report, class) {
+                    let (guard_report, class, failed) =
+                        triage(candidate, &mut self.parity_spike, guard_report, tick);
+                    if failed {
                         // A sensor failed, not the new regime: quarantine it
                         // and drop the candidate.
                         failure = Some((guard_report, class));

@@ -38,6 +38,13 @@
 //! worst-case tick is `t % DFA_STRIDE == 0` with all legs enabled. There is
 //! no allocation, no recursion, and no unbounded loop in `push`.
 //!
+//! Leg 7's cross-channel blame rule (`parity_culprit_now`, section A of the
+//! parity-isolation redesign) is O(C²), but runs only on the rare tick a
+//! channel's parity 2-in-20 persistence completes — not every tick — and
+//! allocates nothing. Calibration additionally builds a pairwise residual
+//! scale (`pair_sd`, O(L·C²) time, O(L·C) temporary memory, dropped before
+//! `calibrate` returns).
+//!
 //! # Memory bound
 //!
 //! Per channel: `WINDOW + ROLL` f64 ring slots + 6 calibration scalars +
@@ -359,6 +366,17 @@ struct ChannelState {
     q_run: usize,
     /// Consecutive real readings that pass the recovery checks.
     q_good: usize,
+    /// Cross-channel-ambiguous spam guard (section C): 0 = not held; k >= 1
+    /// = held, with k-1 consecutive clean (at-or-below-threshold) parity
+    /// scores seen since the hold started. Released after `RECOVER_SPAN`
+    /// clean scores in a row, or when the quarantined set changes. Survives
+    /// [`HybridMonitor::reset`] on purpose — the whole point is to keep an
+    /// unresolved cross-channel disagreement from re-firing (and resetting
+    /// every other leg's streak) every `res_span` ticks.
+    parity_hold: usize,
+    /// Whether this channel's parity score was over threshold the last time
+    /// leg 7 was scored for it (false when the leg wasn't scored at all).
+    parity_over: bool,
 }
 
 /// Consecutive healthy real readings a quarantined channel must show before
@@ -397,6 +415,26 @@ pub struct HybridMonitor {
     /// at configuration time — standard flight-monitor practice.
     leg_enabled: [bool; 7],
     config: MonitorConfig,
+    /// Pairwise residual scale for the full-mode blame rule (section A):
+    /// `pair_sd[k*n+l]` is the RMS, over calibration, of `r_k + w_kl r_l`
+    /// (channel `l`'s value cancels exactly), floored at 1e-9. Empty below
+    /// 3 channels — with 2, kappa_kl -> 1 and no pair can ever isolate.
+    pair_sd: Vec<f64>,
+    /// Per-channel: whether this channel's pair relations are still
+    /// trustworthy. Set false by `adopt_channel` (its relations were
+    /// calibrated against a reconstructor that has since been replaced);
+    /// the blame rule refuses to run at all while any is false.
+    pair_ok: Vec<bool>,
+    /// Same-sample residual `x_k - sample_pred[k]` for the blame rule
+    /// (NaN outside `push_with_validity`).
+    sample_res: Vec<f64>,
+    /// Whether every channel was valid on the sample `push_with_validity`
+    /// is currently processing (an empty `valid` slice counts as valid).
+    sample_all_valid: bool,
+    /// The full-mode blame rule's verdict for the current/most recent
+    /// Parity alarm: `Some((culprit, z_culprit))` when isolated, `None`
+    /// when ambiguous. Carried alongside `last_alarm`.
+    last_culprit: Option<(usize, f64)>,
 }
 
 /// Linear reconstruction model: one channel estimated from all others.
@@ -791,6 +829,10 @@ impl HybridMonitor {
         // zero sources, so `pred == bias == mean` and the leg degenerates to a raw
         // |v - mean| / sd z-score that duplicates the residual leg without the
         // AR(1) term (koscak-labs/struktura#16). Inert below two channels.
+        // Temporary raw-residual buffer (dropped at the end of calibration):
+        // resid_buf[t*channels+ch] = clean[ch][t] - pred, needed below to
+        // build the pairwise scale S_kl for the full-mode blame rule.
+        let mut resid_buf: Vec<f64> = if channels >= 3 { vec![0.0; length * channels] } else { Vec::new() };
         let parity_thr = if channels >= 2 {
             let mut parity_scores = Vec::with_capacity(length);
             for t in 0..length {
@@ -801,7 +843,11 @@ impl HybridMonitor {
                     for (s, c) in clean.iter().enumerate() {
                         pred += r.weights[s] * c[t];
                     }
-                    let z = (clean[ch][t] - pred).abs() / r.sd;
+                    let resid = clean[ch][t] - pred;
+                    if channels >= 3 {
+                        resid_buf[t * channels + ch] = resid;
+                    }
+                    let z = resid.abs() / r.sd;
                     if z > mz {
                         mz = z;
                     }
@@ -812,6 +858,34 @@ impl HybridMonitor {
         } else {
             f64::INFINITY
         };
+
+        // Pairwise residual scale S_kl (section A): u_kl = (r_k + w_kl r_l)
+        // / S_kl is k's reconstruction error with l's contribution cancelled
+        // exactly — k's model refitted without l, up to a scale factor. Only
+        // meaningful with >= 3 channels: with 2, kappa_kl -> 1 and no pair
+        // can ever isolate the other (see `parity_culprit_now`).
+        let pair_sd: Vec<f64> = if channels >= 3 {
+            let mut s = vec![0.0f64; channels * channels];
+            for k in 0..channels {
+                let wk = &recon[k].weights;
+                for l in 0..channels {
+                    if k == l {
+                        continue;
+                    }
+                    let wkl = wk[l];
+                    let mut ss = 0.0f64;
+                    for t in 0..length {
+                        let v = resid_buf[t * channels + k] + wkl * resid_buf[t * channels + l];
+                        ss += v * v;
+                    }
+                    s[k * channels + l] = crate::sqrt(ss / length as f64).max(1e-9);
+                }
+            }
+            s
+        } else {
+            Vec::new()
+        };
+        drop(resid_buf);
 
         let state = clean
             .iter()
@@ -832,6 +906,8 @@ impl HybridMonitor {
                 q_prev: c[length - 1],
                 q_run: 1,
                 q_good: 0,
+                parity_hold: 0,
+                parity_over: false,
             })
             .collect();
 
@@ -854,6 +930,11 @@ impl HybridMonitor {
             sample_pred: vec![f64::NAN; channels],
             leg_enabled: [true, true, true, true, true, true, channels >= 2],
             config,
+            pair_sd,
+            pair_ok: vec![true; channels],
+            sample_res: vec![f64::NAN; channels],
+            sample_all_valid: true,
+            last_culprit: None,
         })
     }
 
@@ -901,19 +982,31 @@ impl HybridMonitor {
             }
             self.sample_pred[ch] = pred;
         }
-        let mut first: Option<(Leg, Option<AlarmReport>)> = None;
+        // Same-sample residuals and an all-valid flag for the full-mode
+        // blame rule (section A): a forward-filled channel's residual looks
+        // like a fault, so isolation must not run at all on a sample where
+        // any channel was invalid (see `parity_culprit_now`).
+        self.sample_all_valid =
+            (0..sample.len()).all(|s| valid.get(s).copied().unwrap_or(true));
+        for ch in 0..sample.len() {
+            let x_ch = if valid.get(ch).copied().unwrap_or(true) { sample[ch] } else { self.state[ch].prev };
+            self.sample_res[ch] = x_ch - self.sample_pred[ch];
+        }
+        let mut first: Option<(Leg, Option<AlarmReport>, Option<(usize, f64)>)> = None;
         for (ch, &v) in sample.iter().enumerate() {
             let is_valid = valid.get(ch).copied().unwrap_or(true);
             let value = if is_valid { Some(v) } else { None };
             if let Some(leg) = self.push_channel(ch, value) {
-                first.get_or_insert((leg, self.last_alarm));
+                first.get_or_insert((leg, self.last_alarm, self.last_culprit));
                 self.alarmed = false;
             }
         }
         self.sample_pred.fill(f64::NAN);
-        let (leg, report) = first?;
+        self.sample_res.fill(f64::NAN);
+        let (leg, report, culprit) = first?;
         self.alarmed = true;
         self.last_alarm = report;
+        self.last_culprit = culprit;
         Some(leg)
     }
 
@@ -964,6 +1057,10 @@ impl HybridMonitor {
             }
             return None;
         }
+        // Synchronous == fed via push_with_validity, which fills sample_pred
+        // (and sample_res / sample_all_valid) for every channel before any
+        // is pushed; a standalone/multi-rate push_channel call leaves it NaN.
+        let synchronous = !self.sample_pred[ch].is_nan();
         // Parity prediction must be computed before borrowing state mutably.
         let parity_pred = {
             let r = &self.recon[ch];
@@ -1071,26 +1168,53 @@ impl HybridMonitor {
         // predictor its own reconstruction.
         if self.leg_enabled[6] && !self.quarantined.iter().any(|&q| q) {
             let (pred, sd) = parity_pred;
+            let thr = self.parity_thr;
             let pz = (v - pred).abs() / sd;
-            if pz > self.parity_thr {
+            st.parity_over = pz > thr;
+            // Section C (hold / spam guard): a held channel's clean streak
+            // advances (or resets on a fresh exceedance) every scored
+            // sample, released after RECOVER_SPAN clean scores in a row.
+            // NaN-safe: an indeterminate score neither advances nor resets it.
+            if st.parity_hold > 0 && pz.is_finite() {
+                st.parity_hold = if pz > thr { 1 } else { st.parity_hold + 1 };
+                if st.parity_hold > RECOVER_SPAN {
+                    st.parity_hold = 0;
+                }
+            }
+            let held = st.parity_hold > 0;
+            if pz > thr {
                 for i in 1..RES_HITS {
                     st.parity_hit_times[i - 1] = st.parity_hit_times[i];
                 }
                 st.parity_hit_times[RES_HITS - 1] = t;
                 let oldest = st.parity_hit_times[0];
                 if oldest != u64::MAX && t - oldest < self.config.res_span {
-                    self.alarmed = true;
-                    self.last_alarm = Some(AlarmReport {
-                        leg: Leg::Parity,
-                        channel: ch,
-                        tick: t,
-                        observed: pz,
-                        threshold: self.parity_thr,
-                        hit_gap: t - oldest,
-                    });
-                    return Some(Leg::Parity);
+                    let hit_gap = t - oldest;
+                    // Drop the state borrow: the blame rule below reads self
+                    // immutably (O(n^2), section A).
+                    let culprit = if synchronous { self.parity_culprit_now() } else { None };
+                    if held && culprit.is_none() {
+                        // Still unresolved and already held: don't re-fire
+                        // or re-hold; just clear this channel's hits so the
+                        // next completed 2-in-20 gets a fresh look.
+                        self.state[ch].parity_hit_times = [u64::MAX; RES_HITS];
+                    } else {
+                        self.alarmed = true;
+                        self.last_culprit = culprit;
+                        self.last_alarm = Some(AlarmReport {
+                            leg: Leg::Parity,
+                            channel: ch,
+                            tick: t,
+                            observed: pz,
+                            threshold: thr,
+                            hit_gap,
+                        });
+                        return Some(Leg::Parity);
+                    }
                 }
             }
+        } else {
+            st.parity_over = false;
         }
 
         if repeat_alarm && self.leg_enabled[1] {
@@ -1125,7 +1249,7 @@ impl HybridMonitor {
             let mut lin = [0.0f64; WINDOW];
             let start = (t + 1) % WINDOW as u64;
             for (i, slot) in lin.iter_mut().enumerate() {
-                *slot = st.ring[((start + i as u64) % WINDOW as u64) as usize];
+                *slot = self.state[ch].ring[((start + i as u64) % WINDOW as u64) as usize];
             }
             let a = dfa_into(&lin, &mut self.scratch).alpha;
             let st = &mut self.state[ch];
@@ -1175,6 +1299,100 @@ impl HybridMonitor {
         self.last_alarm
     }
 
+    /// Full-mode cross-channel blame rule (section A of the parity-isolation
+    /// redesign). Channel `f` is IMPLICATED when its own parity z exceeds
+    /// the threshold AND it still looks inconsistent against every OTHER
+    /// live channel taken alone: `|u_fg| > parity_thr` for every `g != f`,
+    /// where `u_fg` is f's reconstruction error with g's contribution
+    /// cancelled exactly (channel g's own value drops out of the formula).
+    /// A healthy channel can only be implicated this way if at least two
+    /// OTHER channels are anomalous at once, since excluding the one truly
+    /// faulty channel is what would clear it.
+    ///
+    /// The culprit is the implicated channel with the largest z (lowest
+    /// index on an exact tie). Returns `None` (ambiguous) below 3 channels,
+    /// while any channel is quarantined, on a sample where any channel was
+    /// invalid, or while any channel's pair relations are stale
+    /// ([`HybridMonitor::adopt_channel`]). Does not gate on R² — a healthy
+    /// witness with a weak relation still falsifies isolation correctly;
+    /// see the design notes on why gating witnesses by R² is wrong.
+    /// O(n^2), no allocation.
+    fn parity_culprit_now(&self) -> Option<(usize, f64)> {
+        let n = self.calib.len();
+        if n < 3 || !self.sample_all_valid {
+            return None;
+        }
+        if self.quarantined.iter().any(|&q| q) || self.pair_ok.iter().any(|&ok| !ok) {
+            return None;
+        }
+        let mut best: Option<(usize, f64)> = None;
+        for f in 0..n {
+            let rf = self.sample_res[f];
+            let zf = rf.abs() / self.recon[f].sd;
+            // NaN-safe: an indeterminate z never qualifies as a candidate.
+            if zf.is_nan() || zf <= self.parity_thr {
+                continue;
+            }
+            let mut implicated = true;
+            for g in 0..n {
+                if g == f {
+                    continue;
+                }
+                let sfg = self.pair_sd[f * n + g];
+                let u = (rf + self.recon[f].weights[g] * self.sample_res[g]) / sfg;
+                let uz = u.abs();
+                // NaN-safe: an indeterminate witness never clears f.
+                if uz.is_nan() || uz <= self.parity_thr {
+                    implicated = false;
+                    break;
+                }
+            }
+            if implicated {
+                let replace = match best {
+                    Some((_, bz)) => zf > bz,
+                    None => true,
+                };
+                if replace {
+                    best = Some((f, zf));
+                }
+            }
+        }
+        best
+    }
+
+    /// The full-mode blame rule's verdict for the most recent Parity alarm:
+    /// `Some((culprit, z_culprit))` when isolated, `None` when ambiguous or
+    /// when the last alarm was not a Parity alarm at all.
+    #[must_use]
+    pub(crate) fn parity_culprit(&self) -> Option<(usize, f64)> {
+        match self.last_alarm {
+            Some(r) if r.leg == Leg::Parity => self.last_culprit,
+            _ => None,
+        }
+    }
+
+    /// Section C (spam guard): hold every live channel whose parity score
+    /// was over threshold on the sample just processed. A held channel's
+    /// hits still accumulate; when its 2-in-20 next completes,
+    /// `push_channel` re-runs the blame rule and only re-raises if it now
+    /// names a culprit.
+    pub(crate) fn hold_parity(&mut self) {
+        let quarantined = &self.quarantined;
+        for (ch, st) in self.state.iter_mut().enumerate() {
+            if !quarantined[ch] && st.parity_over {
+                st.parity_hold = 1;
+            }
+        }
+    }
+
+    /// The residual/parity exceedance-pairing window in samples
+    /// ([`MonitorConfig::res_span`]), used by the autopilot's spike ->
+    /// quarantine escalation (section B).
+    #[must_use]
+    pub(crate) fn res_span(&self) -> u64 {
+        self.config.res_span
+    }
+
     /// Switch a channel to virtual mode: its own detector legs stop (the
     /// sensor is declared dead), and [`HybridMonitor::virtual_value`]
     /// serves a reconstructed reading from the surviving channels.
@@ -1182,12 +1400,21 @@ impl HybridMonitor {
     pub fn quarantine(&mut self, ch: usize) {
         if ch < self.quarantined.len() {
             self.quarantined[ch] = true;
-            let st = &mut self.state[ch];
-            // Recovery tracking starts from the reading that got it
-            // quarantined, so a stuck run keeps counting.
-            st.q_prev = st.prev;
-            st.q_run = st.run;
-            st.q_good = 0;
+            {
+                let st = &mut self.state[ch];
+                // Recovery tracking starts from the reading that got it
+                // quarantined, so a stuck run keeps counting.
+                st.q_prev = st.prev;
+                st.q_run = st.run;
+                st.q_good = 0;
+            }
+            // The quarantined set just changed: every parity hold releases
+            // (section C) rather than surviving into a monitor with fewer
+            // live channels.
+            for st in self.state.iter_mut() {
+                st.parity_hold = 0;
+                st.parity_hit_times = [u64::MAX; RES_HITS];
+            }
         }
     }
 
@@ -1228,6 +1455,14 @@ impl HybridMonitor {
         if ch < self.calib.len() && other.calib.len() == self.calib.len() {
             self.calib[ch] = other.calib[ch].clone();
             self.recon[ch] = other.recon[ch].clone();
+            // ch's pair relations (S_kl, w_kl for k or l == ch) were fitted
+            // against the reconstructor just replaced: this monitor never
+            // isolates using ch again (section E). Conservative — matches
+            // today's behavior of never isolating around a just-adopted
+            // channel's relations.
+            if ch < self.pair_ok.len() {
+                self.pair_ok[ch] = false;
+            }
         }
     }
 
@@ -1237,21 +1472,29 @@ impl HybridMonitor {
     pub fn unquarantine(&mut self, ch: usize) {
         if ch < self.quarantined.len() {
             self.quarantined[ch] = false;
-            let st = &mut self.state[ch];
-            if st.q_good >= WINDOW {
-                st.ring = st.q_ring;
-                st.roll_ring = st.q_ring;
-                st.prev = st.q_prev;
-                st.run = st.q_run;
+            {
+                let st = &mut self.state[ch];
+                if st.q_good >= WINDOW {
+                    st.ring = st.q_ring;
+                    st.roll_ring = st.q_ring;
+                    st.prev = st.q_prev;
+                    st.run = st.q_run;
+                }
+                st.q_good = 0;
+                st.cusum_pos = 0.0;
+                st.cusum_neg = 0.0;
+                st.dfa_streak = 0;
+                st.roll_streak = 0;
+                st.res_hit_times = [u64::MAX; RES_HITS];
+                st.miss_times = [u64::MAX; MISS_HITS];
+                st.parity_hit_times = [u64::MAX; RES_HITS];
             }
-            st.q_good = 0;
-            st.cusum_pos = 0.0;
-            st.cusum_neg = 0.0;
-            st.dfa_streak = 0;
-            st.roll_streak = 0;
-            st.res_hit_times = [u64::MAX; RES_HITS];
-            st.miss_times = [u64::MAX; MISS_HITS];
-            st.parity_hit_times = [u64::MAX; RES_HITS];
+            // The quarantined set just changed: release every parity hold
+            // (section C), same as `quarantine`.
+            for st in self.state.iter_mut() {
+                st.parity_hold = 0;
+                st.parity_hit_times = [u64::MAX; RES_HITS];
+            }
         }
     }
 
@@ -1660,6 +1903,45 @@ mod tests {
     fn calibrate_rejects_too_short() {
         let short = synth_spacecraft(100, 42);
         assert!(HybridMonitor::calibrate(&short).is_none());
+    }
+
+    /// T10 (section E): adopt_channel invalidates the adopted channel's pair
+    /// relations monitor-wide — the full-mode blame rule refuses outright
+    /// while ANY channel's pair_ok is false, not just when that channel
+    /// would have been a witness or a candidate culprit.
+    #[test]
+    fn adopted_channel_turns_off_its_pair_relations() {
+        let calib = synth_spacecraft(700, 5150 + 100);
+        let other_calib = synth_spacecraft(700, 5150 + 300);
+        let mut mon = HybridMonitor::calibrate(&calib).expect("calibration");
+        let other = HybridMonitor::calibrate(&other_calib).expect("calibration");
+        let n = mon.channels();
+        assert!(mon.pair_ok.iter().all(|&ok| ok), "pair_ok must start all true");
+
+        // Clean isolation control: channel 0's residual is huge, every
+        // other channel's is exactly 0, so 0 is implicated and nobody else
+        // is — the blame rule must isolate it here.
+        mon.sample_all_valid = true;
+        mon.sample_res = vec![0.0; n];
+        mon.sample_res[0] = 100.0;
+        let before = mon.parity_culprit_now();
+        assert_eq!(before.map(|(ch, _)| ch), Some(0), "control must isolate channel 0, got {:?}", before);
+
+        mon.adopt_channel(3, &other);
+        assert!(!mon.pair_ok[3], "pair_ok[3] must be false after adopt_channel");
+        assert!(
+            (0..n).filter(|&c| c != 3).all(|c| mon.pair_ok[c]),
+            "only the adopted channel's pair_ok should change"
+        );
+
+        // Same evidence as the control, but the blame rule must now refuse
+        // outright rather than still isolating channel 0.
+        mon.sample_res = vec![0.0; n];
+        mon.sample_res[0] = 100.0;
+        assert!(
+            mon.parity_culprit_now().is_none(),
+            "blame rule must refuse while any pair_ok is false"
+        );
     }
 }
 

@@ -8,6 +8,14 @@ use struktura::codegen::Channel;
 const NORMAL_SAMPLES: &str = include_str!("../../data/normal_sample.csv");
 const FAULT_SAMPLES: &str = include_str!("../../data/fault_sample.csv");
 
+/// Explanation text for a `cross_channel_ambiguous` alarm: two or more
+/// channels disagree with each other, but the blame rule could not pin the
+/// inconsistency on a single one of them, so nothing is quarantined. Used
+/// in place of `explain_alarm`/`classify_alarm`'s generic parity text,
+/// which does not know about this class.
+const AMBIGUOUS_PARITY: &str =
+    "these channels disagree, but which sensor is wrong cannot be told from them; nothing is quarantined";
+
 fn read_input(path: &str) -> Vec<f64> {
     if path == "-" {
         return read_stdin();
@@ -3711,12 +3719,13 @@ fn cmd_rover() {
         for ch in 0..ROVER_CHANNELS { sample[ch] = data[ch][t]; }
         for ev in ap.push(&sample, &valid) {
             match &ev {
-                Event::Alarm { report, .. } => {
+                Event::Alarm { report, class, .. } => {
                     let lid = report.leg as u8;
                     if t - last_t < 200 { continue; }
                     _last_leg = lid; last_t = t; alarm_count += 1;
                     let ch_name = ROVER_CHANNEL_NAMES.get(report.channel).unwrap_or(&"?");
-                    println!("  t={:>5}  ⚠ {}: {}", t, ch_name, explain_alarm(report));
+                    let explanation = if *class == "cross_channel_ambiguous" { AMBIGUOUS_PARITY } else { explain_alarm(report) };
+                    println!("  t={:>5}  ⚠ {}: {}", t, ch_name, explanation);
                 }
                 Event::Quarantined { channel, .. } => {
                     q_count += 1;
@@ -3794,7 +3803,7 @@ fn emit_event(t: usize, ev: &struktura::autopilot::Event, json: bool) {
     use struktura::monitor::explain_alarm;
     match ev {
         Event::Alarm { report, class, .. } => {
-            let explanation = explain_alarm(report);
+            let explanation = if *class == "cross_channel_ambiguous" { AMBIGUOUS_PARITY } else { explain_alarm(report) };
             if json {
                 println!("{{\"event\":\"alarm\",\"t\":{},\"channel\":{},\"class\":\"{}\",\"explanation\":\"{}\"}}",
                     t, report.channel, class, explanation);
@@ -3934,7 +3943,11 @@ fn run_guard(content: &str, baseline_n: usize, json: bool, cfg: struktura::monit
                     last_alarm.push((t, leg_id));
                     if dup { continue; }
                     alarm_count += 1;
-                    let explanation = struktura::monitor::explain_alarm(report);
+                    let explanation = if *class == "cross_channel_ambiguous" {
+                        AMBIGUOUS_PARITY
+                    } else {
+                        struktura::monitor::explain_alarm(report)
+                    };
                     let name = ch_name(report.channel);
                     let score_ratio = report.observed / report.threshold.max(1e-12);
                     let flat = baseline_constant(&ap, report.channel);
@@ -4594,13 +4607,17 @@ fn cmd_copilot_compare(args: &[String]) {
         let mut dfa_event = None;
         for ev in ap.push(&sample, &valid) {
             match &ev {
-                Event::Alarm { report, .. } => {
+                Event::Alarm { report, class, .. } => {
                     let leg_id = (report.channel, report.leg as u8);
                     let dup = last_alarm_leg.iter().any(|&(lt, ll)| ll == leg_id && t.saturating_sub(lt) < 50);
                     last_alarm_leg.retain(|&(lt, _)| t.saturating_sub(lt) < 50);
                     last_alarm_leg.push((t, leg_id));
                     if !dup {
-                        let explanation = struktura::monitor::explain_alarm(report);
+                        let explanation = if *class == "cross_channel_ambiguous" {
+                            AMBIGUOUS_PARITY
+                        } else {
+                            struktura::monitor::explain_alarm(report)
+                        };
                         dfa_event = Some(format!("⚠ {}", explanation.chars().take(30).collect::<String>()));
                         if first_dfa_alarm.is_none() { first_dfa_alarm = Some(t); }
                     }

@@ -4,6 +4,81 @@ All notable changes to Struktura are documented here.
 
 ## Unreleased
 
+- Cross-channel parity (`guard`, `AutoPilot`) no longer blames whichever
+  channel's own 2-in-20 persistence happened to complete first. With three
+  or more channels, none quarantined, on a synchronous sample where every
+  channel is valid, a full-mode blame rule (`parity_culprit_now`) now asks:
+  which channel is still inconsistent no matter which single OTHER channel
+  is left out of the check? That channel — the one with the largest z on a
+  tie, lowest index — is the culprit; the report is re-attributed to it
+  (channel, observed z, threshold) before classification, so quarantine no
+  longer depends on column order (previously: whichever fault channel came
+  first in the CSV quarantined a healthy neighbor instead, or never
+  quarantined at all if it was column 0). When no single channel is
+  implicated this way (two channels alone; a coupled pair plus an unrelated
+  third; a healthy channel that only looks inconsistent because two OTHER
+  channels are anomalous at once) the alarm gets the new class
+  `cross_channel_ambiguous`: logged, nothing quarantined, `guard` prints it
+  in plain words instead of the generic parity explanation ("these channels
+  disagree, but which sensor is wrong cannot be told from them; nothing is
+  quarantined"). A repeated isolated spike on the SAME channel within the
+  monitor's `res_span` is no longer logged forever — the second one
+  escalates to `cross_channel_inconsistency` and quarantines, matching how
+  a persistent offset should have been handled all along. An unresolved
+  ambiguous alarm now holds every over-threshold channel (`hold_parity`)
+  so it does not re-fire (and call `AutoPilot::reset` reset every other
+  leg's streak with it) every `res_span` ticks; a held channel keeps
+  recording exceedances, and re-raises only once the blame rule can name a
+  culprit for it, or releases after 192 consecutive clean scores or a
+  change to the quarantined set. `HybridMonitor::adopt_channel` now also
+  marks that channel's pair relations stale (`pair_ok`), so a monitor
+  recalibrated while a channel was quarantined never isolates using that
+  channel's relations again — conservative, matching today's behavior of
+  never isolating around a just-adopted channel. `report.channel` of a
+  re-attributed Parity alarm can now differ from the channel whose
+  persistence actually fired; a consumer keying off `report.channel` for a
+  Parity alarm should read `class` too. Full mode is otherwise
+  bit-identical (same thresholds, same scoring), and single- and
+  two-channel monitors are unaffected in substance (with two channels the
+  blame rule never has enough evidence to isolate anyone; ambiguous instead
+  of quarantining is the only visible change, e.g. the two-channel repro
+  below). `docs/claims.tsv`: `guard-two-channel-parity-ambiguous` (new,
+  the F=a/F=b repro), `guard-triplex-quarantines-faulty-{a,b,c}` and
+  `control-triplex-healthy` (new), `guard-pair-plus-unrelated-not-isolated`
+  and `guard-ambiguous-parity-keeps-other-legs` (new),
+  `guard-second-sensor-during-quarantine` and
+  `control-quarantine-partners-silent` (new); `guard-rover` (row 23) is
+  unchanged (predicted and verified byte-identical: at row 2210 the
+  implicated set is `{motor_current_A, imu_accel_g, battery_soc}` with
+  `motor_current_A` the largest z, and at row 2595 only `battery_soc` is
+  implicated, so both stay isolated exactly as before; every rover pair
+  relation has R² <= 0.17, well under any reduced-mode gate, so that leg
+  was never reached either way). Repro (`struktura guard`, prints the new
+  ambiguous text, "0 quarantines"):
+  `awk -v F=b 'function r(){x=(x*16807)%2147483647; return x/2147483647} function g(){return (r()+r()+r()+r()-2)} BEGIN{x=31; s=0; print "a,b"; for(t=0;t<3000;t++){s=0.98*s+g(); a=s+0.05*g(); b=3*s+0.15*g(); if(t>=2000 && F=="b") b+=1.5; if(t>=2000 && F=="a") a+=0.5; printf "%.5f,%.5f\n",a,b}}' | struktura guard - --baseline 1000`
+  (today this instead says "a declared dead").
+  Deliberately NOT changed in this release: parity still goes fully silent
+  the moment ANY channel is quarantined, for every other live channel, not
+  just a reduced check against the survivors — a reduced-mode design was
+  drafted and rejected: on `examples/rover.csv`, running a reduced parity
+  check against `battery_soc` while `motor_current_A` is quarantined
+  raises a NEW false alarm on `battery_soc`'s own normal SOC discharge
+  (which leaves its calibrated range from about row 1894), not a
+  detection — the scripted battery-drain fault starts at row 2600, and the
+  existing row-2595 alarm already IS that same normal-discharge effect. A
+  static linear parity model cannot tell a monotonic channel's normal
+  trend from a fault, so gating a reduced check on reconstruction quality
+  (R² >= 0.9) does not save it: rover's own pair relations explain only
+  0.4-21% of variance, so that gate would also have silenced the
+  legitimate full-mode isolations above. This stays a documented coverage
+  gap (see the README Limitations section) rather than a shipped
+  false-alarm source; it is conservative in the fail-safe direction (a
+  fault on a second sensor during a quarantine is reported, not
+  quarantined, and keeps degrading the quarantined channel's virtual
+  reading, which is the direction the existing quarantine/reconstruction
+  design already fails safe in). Python and WASM bindings pass the new
+  `cross_channel_ambiguous` class string through unchanged; their
+  explanation text for it is still the generic parity text (follow-up).
 - DFA on windows with a constant run (forward-filled or quantized
   telemetry). A box size that tiles only the constant part has a
   fluctuation of exactly 0, but the one-pass least-squares identity
