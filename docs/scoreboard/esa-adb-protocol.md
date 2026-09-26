@@ -5,16 +5,17 @@ verbatim from the evaluation directory. The paths inside them are the author's m
 
 **What the record shows:**
 - The protocol was written before the first run.
-- It was amended eleven times, and each amendment says what had been seen when it was written.
-- It covers guard at struktura 1.8.5 (Amendment 3), f1f00f2 (Amendment 9), a49534a (Amendment 10) and
-  38cb83e (Amendment 11).
+- It was amended twelve times, and each amendment says what had been seen when it was written.
+- It covers guard at struktura 1.8.5 (Amendment 3), f1f00f2 (Amendment 9), a49534a (Amendment 10),
+  38cb83e (Amendment 11) and ccd86c5, the DFA flat-box fix (Amendment 12).
 - It also covers the benchmark's `struktura_dfa` algorithm (Amendments 4-8), which is not on the
   scoreboard page.
 
 **File times (local, CEST).** The protocol file is appended to, so its time is that of the last
 amendment. These are local file times, not an independent timestamp.
-- `PROTOCOL.md`: 2026-09-26 08:38:05 (Amendment 11 appended)
+- `PROTOCOL.md`: 2026-09-26 12:17:49 (Amendment 12 appended)
 - 38cb83e prediction `run-38cb83e/preds/guard.npz`: 2026-09-26 08:39:27
+- ccd86c5 prediction `run-ccd86c5/preds/guard.npz`: 2026-09-26 12:18:46
 
 The scripts in `esa-adb/eval/` were checked against this pipeline on master d439fb8, starting from
 the raw files:
@@ -22,7 +23,8 @@ the raw files:
 - identical guard predictions and 20 shifts;
 - 125 of 126 metric values equal and none different.
 
-The scoreboard numbers come from those scripts on 38cb83e (Amendment 11 in the report).
+The scoreboard numbers come from those scripts on 38cb83e (Amendment 11 in the report). On ccd86c5
+(Amendment 12) the guard prediction matrix is byte-identical, so the same numbers hold.
 
 ## Protocol and amendments
 
@@ -212,6 +214,16 @@ Run with the ported scripts (struktura repo esa-adb/eval/, validated in PR #35 a
 125/126 metric values equal, 0 different). Controls: 20 circular shifts of the new predictions (same seeds and
 offset rule). Reported whatever it scores, with every event kind against a49534a, and the scoreboard page
 updated to these numbers.
+
+## Amendment 12 (2026-09-26, written BEFORE the run below; requested by the struktura maintainers)
+Re-run of the Amendment 11 Guard protocol on struktura branch fix/dfa-flat-boxes, commit ccd86c5 (not yet on
+master). It changes every Rust DFA path (dfa, dfa_into, dfa_scratch, dfa_fast_into, dfa_short): a box whose
+one-pass residual is within 1e-9 of its own terms is recomputed from centred explicit residuals, and a box size
+with F^2 <= 1e-24 * mean(profile^2) no longer enters the fit. Guard's DFA leg uses dfa_fast_into, so predictions
+may change. Same data (prep output), same calibration block, cooldown 50, same scripts (esa-adb/eval). If the
+prediction matrix is byte-identical to 38cb83e/a342c16, that is reported and nothing else is re-scored; otherwise
+the 20 circular shifts are regenerated and all 21 predictions scored with the official code, reported whatever
+they score.
 ```
 
 ## Analysis report
@@ -365,4 +377,13 @@ vs 20 circular shifts: Anomaly EW recall 0.103 (3/29, max shift 0.034), EW F0.5 
 (max 0.421), channel F0.5 0.085: all p 0.048; alarming precision 0.167 p 0.333. RareEvent+Anomaly EW recall
 0.169 (11/65, max 0.031), EW F0.5 0.111, AFF F0.5 0.479, channel F0.5 0.124: all p 0.048; alarming precision
 0.289 p 0.714. ADTQC 0.992 / 0.826 (undefined for most shifts, not compared).
+
+## Amendment 12 (2026-09-26): guard on ccd86c5 (DFA flat-box fix, branch fix/dfa-flat-boxes)
+
+Wheel built from ccd86c5, installed binary hash-checked against the build; the installed struktura.dfa on the
+known flat-edge window (test row 2535177, channel 42, W=256) gives alpha 1.612071 / r2 0.835197 where 797d785
+gave -1.606352 / 0.023052, so the fix is in the module. Guard prediction matrix byte-identical to 38cb83e
+(136 alarm ticks, 0 cells differ), event kinds and alarm legs identical: the DFA leg raised no alarm on this data
+before or after. Per the amendment, nothing re-scored; the page's 38cb83e scores hold for ccd86c5.
+`run-ccd86c5/guard.log`, `run-ccd86c5/compare.log`.
 ```
