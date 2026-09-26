@@ -4,6 +4,12 @@ All notable changes to Struktura are documented here.
 
 ## Unreleased
 
+- `struktura rover` (the demo) printed at most one alarm per 200 steps
+  across all channels, so recurring thermal alarms hid others: the battery
+  cell degradation it scripts at step 2600 was detected (battery voltage at
+  2822, state of charge at 2880) but never shown. Repeats are now merged
+  per channel and leg, as in `guard`. The demo now shows all three scripted
+  faults, and its false `comm_signal` quarantine at 1116.
 - New `examples/parity_eval.rs`: fault isolation on the simulated rover (60
   seeds, one scripted fault per run plus a clean run per seed; ground truth
   from `src/rover.rs`). It documents a limitation of the current monitor on
