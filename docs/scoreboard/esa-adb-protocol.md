@@ -5,7 +5,8 @@ verbatim from the evaluation directory. The paths inside them are the author's m
 
 **What the record shows:**
 - The protocol was written before the first run.
-- It was amended fourteen times, and each amendment says what had been seen when it was written.
+- It was amended sixteen times (plus 15a and 15b), and each amendment says what had been seen when it
+  was written.
 - It covers guard at struktura 1.8.5 (Amendment 3), f1f00f2 (Amendment 9), a49534a (Amendment 10),
   38cb83e (Amendment 11) and ccd86c5, the DFA flat-box fix (Amendment 12).
 - Amendment 13 is branch fix/parity-isolation (45b92ec). It did worse on this data and was not
@@ -15,12 +16,21 @@ verbatim from the evaluation directory. The paths inside them are the author's m
   - It detected more events: 8 of 29 against 3.
   - It raised about 16 times the alarms (2,254 against 136) and nearly 4 times the quarantines (527
     against 138).
+- Amendments 15, 15a and 15b extend the evaluation to the other 12 Mission 1 channel groups.
+  - They were written before any group was run. They were revised once after a protocol review, again
+    before any run.
+  - The results are not in this record yet.
+- Amendment 16 is branch exp/diff-parity (adb2673). It raised alarms and quarantines, lost one Rare
+  Event + Anomaly event, and was not merged.
+- The report also records that on master, channels 41, 42, 45 and 46 stay quarantined from 2009-05-25
+  to the end of the test split.
 - It also covers the benchmark's `struktura_dfa` algorithm (Amendments 4-8), which is not on the
   scoreboard page.
 
 **File times (local, CEST).** The protocol file is appended to, so its time is that of the last
 amendment. These are local file times, not an independent timestamp.
-- `PROTOCOL.md`: 2026-09-26 23:10:24 (Amendment 14 appended)
+- `PROTOCOL.md`: 2026-09-27 01:32:03 (Amendment 15b appended, after 16)
+- adb2673 prediction `run-adb2673/preds/guard.npz`: 2026-09-27 01:29:12
 - dac7c4c prediction `run-dac7c4c/preds/guard.npz`: 2026-09-26 23:18:51
 - 38cb83e prediction `run-38cb83e/preds/guard.npz`: 2026-09-26 08:39:27
 - ccd86c5 prediction `run-ccd86c5/preds/guard.npz`: 2026-09-26 12:18:46
@@ -257,6 +267,102 @@ esa-adb/eval scripts. Reported whatever it gives: event kinds, alarm legs, alarm
 offset_after_recovery), quarantines/releases/adaptations per channel against the baseline, and, if the prediction
 matrix differs, all six official metrics against 20 regenerated circular shifts. No merge until reported (the
 maintainers' gate).
+
+## Amendment 15 (2026-09-27, written BEFORE any run on channels outside 41-46): all Mission 1 target groups
+Question: does the channel 41-46 result (guard's alarms hit more Anomaly events than 20 time-shifted copies of
+themselves) hold across Mission 1, or is it a property of that one subset?
+Units, fixed now: ESA's own channel Groups (channels.csv, column Group) that have target channels. Group 8 is
+channels 41-46 (already reported, Amendment 11/12 numbers, not re-run here). The other 12: group 3 (12,13,19,20,
+27,28,36,37), 4 (14,21,29,30,38), 5 (17,18,25,26,34,35), 6 (16,24,32,33,40), 7 (15,22,23,31,39), 9 (47,48,49),
+10 (50,51,52), 13 (57,58,59,60), 14 (61,62,63), 15 (64,65), 16 (66), 18 (70..76). Together with group 8 these are
+all 58 target channels. Every group is run; none is dropped after results. A group that cannot run (crash, memory,
+no clean calibration block) is reported as not run, with the reason.
+Per group, identical to the 41-46 protocol: esa-adb/eval prep.py restricted to the group's channels
+(ESA_CHANNELS; channels 4..11 are refused and none are targets), struktura master faf1434 (installed .pyd
+hash-checked; PR #39 on master since is docs only), Guard with cooldown 50 calibrated on the first 20,160-row train
+block in which all of the group's channels are labelled nominal, prediction = alarm and rolled_back events per
+channel, 20 circular shifts (same seeds and offset rule), official ESAScores / ChannelAwareFScore / ADTQC with the
+labels restricted to the group's channels, both label selections. No parameter is changed per group.
+Primary outcome per group: Anomaly-label event-wise recall against its 20 shifts, p = (1 + #shifts >= observed)/21.
+A group with 0 detected Anomaly events counts as not above its shifts.
+Mission-level summary, fixed now: k = number of the 12 groups whose primary p is 1/21. Reported with the binomial
+tail P(X >= k) for n = 12, q = 1/21 (k=2: 0.109, k=3: 0.017, k=4: 0.0019, k=5: 0.00015). Caveat stated in advance:
+the groups share the same time period and some share anomalies, so they are not independent and the tail is only
+indicative. Secondary, reported the same way: Rare Event + Anomaly event-wise recall; Anomaly channel F0.5 and
+affiliation F0.5; alarming precision; alarms per group and quarantines per group.
+The script change (ESA_CHANNELS in prep.py and score.py, default 41-46) is checked first: prep with the default
+must reproduce the existing channel 41-46 arrays byte for byte.
+
+## Amendment 15a (2026-09-27, written BEFORE any group run, after a read-only protocol review, workflow
+## wf_b64143b0-37c; supersedes the mission-level summary and the secondary list of Amendment 15)
+Done before this amendment: only the default-channel regression (groups/regress/log.txt, 2026-09-27 01:06:
+PREP_IDENTICAL train True, test True). No group has been prepared, run or scored.
+Why: the groups are far from independent. Every group's test split has the same 7,364,161 rows, so shift seed s
+is the same rotation in every group. id_116 and id_134 are labelled on all 58 target channels, id_145 on 53;
+groups 3 and 5 have identical Anomaly sets; groups 9 and 10 share 19 events; group 6's set is exactly {id_116,
+id_134, id_145}. The 12 groups hold 104 group-events but only 47 distinct Anomaly IDs. The binomial tail of
+Amendment 15 is therefore withdrawn.
+Mission-level test, fixed now (the only mission-level inference): T = sum over the 12 groups of TP_g =
+EW_recall_g x N_g, N_g = number of distinct test Anomaly IDs on the group's channels as score.py load_truth selects
+them: 5, 25, 5, 3, 5, 21, 19, 4, 3, 4, 5, 5 for groups 3, 4, 5, 6, 7, 9, 10, 13, 14, 15, 16, 18. The same T for each
+shift seed (one common rotation of all groups). p_mission = (1 + #{s: T_s >= T_guard}) / 21. The same test is
+reported for Rare Event + Anomaly (N_g = 15, 50, 15, 17, 29, 45, 42, 16, 5, 6, 8, 14). k (groups whose own p is 1/21)
+is reported descriptively, with no binomial tail. (groups/mission.py asserts the N_g, integer TP, equal row counts
+and equal offsets across groups.)
+Decision, fixed now: the 41-46 result is said to hold across Mission 1 only if p_mission = 1/21 for Anomaly T.
+Otherwise the report says it does not generalise under this protocol. No group is declared a success on its own;
+per-group p-values are descriptive. Rare Event + Anomaly and the novel-event test are reported whatever they give,
+next to the primary.
+Novel-event secondary, fixed now: the mission-level test restricted to the test Anomaly IDs of the 12 groups that
+have no labels.csv row on channels 41-46 (26 IDs; 22 are in group 4, so this is stated now to be essentially a
+group 4 test; groups 6, 13, 15 and 16 have none and contribute 0). Computed with the official ESAScores and
+select_labels {"Category": ["Anomaly"], "ID": novel IDs}, which restricts recall only (false positives use all
+labels). Also reported: which Anomaly IDs guard detected per group, with id_116, id_134 and id_145 flagged
+(groups/score_novel.py).
+Missing scores, fixed now: a metric that raises or whose child fails is retried once (score.py), then recorded as
+NOT_COMPUTED. A group counts toward k and T only with Guard and all 20 shifts defined for that selection; a group
+still short, or not run, is reported as incomplete (m of 20) and is dropped from T for Guard and every shift alike.
+A group where Guard raises no alarm is recorded as EW recall 0 (the official ESAScores raises on an empty
+prediction).
+Secondary per group against its 20 shifts (p descriptive), for Anomaly and Rare Event + Anomaly: EW recall, ESAScores
+EW_F_0.50, AFF F0.5, channel F0.5, alarming precision. ADTQC for Guard only, without p. Alarms, quarantines, every
+event kind and alarm leg per group are descriptive only (circular shifts preserve them).
+Official-prep check per group, fixed now: before each group's Guard run, prep.py with the group's ESA_CHANNELS on
+the 3_months split (split_at 2000-04-01) must equal the official 3_months.train.csv
+(esa-adb-fork/data/preprocessed/multivariate/ESA-Mission1-semi-supervised/) in timestamps, float32 values and labels
+(check_prep_vs_official.py). This covers each group's calibration rows 0..20159. A mismatch stops that group: it is
+reported as not run, with the diff.
+Structural notes, stated now: every group calibrates on train rows 0..20159 (the earliest label on any target channel
+is 2000-02-10). Group 16 (one channel) runs with the parity leg inert by construction; group 15 (two channels)
+reconstructs each channel from the other only. guard.py records the distinct values per channel in the calibration
+block, so a degenerate calibration is visible. None of this changes calibration, parameters or inclusion; the
+primary p is unaffected because each group's shifts come from its own predictions.
+Script changes before any run (esa-adb/eval): score.py refuses an ESA_CHANNELS that does not match the prep output
+and no longer aborts a group when a metric fails twice; summarize.py prints incomplete (m of 20) instead of a p;
+guard.py adds cal_distinct_per_channel to its metadata. A rescore of an existing channel 41-46 prediction with the
+changed score.py must reproduce its stored scores.
+
+## Amendment 16 (2026-09-27, written BEFORE the run below; requested by the struktura maintainers)
+Guard on branch exp/diff-parity, commit adb2673 (pushed, not on master), channels 41-46 only (the Amendment 11-14
+setting; the group extension of Amendments 15/15a is separate). Change, src/monitor.rs only: the parity leg fits its
+models on sample-to-sample changes instead of levels (threshold = Gumbel level of the changed models' calibration z;
+each channel's change predicted from the same sample's changes of the others); virtual readings and the recovery
+check keep the level models. Baseline: master b0a3b86, whose src and crates equal faf1434 (git diff empty), so the
+faf1434 run of Amendment 14 is the master baseline. Wheel built in my own worktree and target dir from adb2673,
+installed .pyd hash-checked. Same data, calibration block, cooldown 50, esa-adb/eval scripts. Reported whatever it
+gives: event kinds, alarm legs and classes, quarantines/releases per channel, and, if predictions differ, all six
+official metrics against 20 regenerated circular shifts (EW recall, precision and F0.5, affiliation F0.5, channel
+F0.5, alarming precision, ADTQC). Maintainers' rule, stated before the run: no merge if alarms or quarantines rise
+or recall falls. Their prediction: parity quarantines change, total quarantines move little, recall is the risk.
+
+## Amendment 15b (2026-09-27, written BEFORE any group run; adds descriptive outcomes only)
+Seen before this note (on channels 41-46 only, from the Amendment 14/16 event dumps): on master, channels 41, 42, 45
+and 46 are quarantined at rows 2,521,594-2,521,600 (2009-05-25) and never released, so guard watches 2 of 6 channels
+for the last 65.8% of the test split. Added for every group, descriptive only (no p, no effect on the decision rule
+of 15a): the full event stream (events_dump.py), the channels still quarantined at the end and since which row, the
+fraction of test rows each channel spends quarantined, and the fraction of test rows with at least one channel of
+the group quarantined. The groups run on master faf1434 (wheel reinstalled and hash-checked by the chain; the chain
+stops if the installed module is not that build).
 ```
 
 ## Analysis report
@@ -471,4 +577,34 @@ precision 0.192 (0.289) p 0.429, AFF F0.5 0.573 (0.479) p 0.048, channel F0.5 0.
 16x the alarms. Under the rule stated before the run (stays off master if quarantines or false alarms get worse or
 recall drops): quarantines and alarms are worse, so it stays off master; recall did not drop.
 `run-dac7c4c/{guard.log,compare.log,classes.log,summary.md,run.log}`, `run-faf1434/{guard.log,compare.log}`.
+
+## Finding on master (from the Amendment 14/16 event dumps): four channels quarantined for two thirds of the test split
+
+Master faf1434 (identical predictions to 38cb83e/ccd86c5, the numbers on the scoreboard page), full event stream
+`run-faf1434/events_master.csv`, `groups/coverage.py`: at row 2,521,594 (2009-05-25 13:17) a parity
+cross_channel_inconsistency quarantines channel 41; channels 46, 42 and 45 follow at rows 2,521,598-2,521,600.
+None of the four is released again: 4,842,567 rows, 65.8% of the test split. Time quarantined per channel over the
+whole test split: 41, 42, 45, 46 each 66.0%, 43 0.3%, 44 0.2%; rows with any channel quarantined 66.3%. Master's
+138 quarantines minus 134 releases are exactly these four. Release needs a run of readings consistent with the
+channel's current calibration (recovery_span); they never produce one. Which calibration each holds at that row
+(master has 7 recalibrations, one in rows 2.5M-3M) was not checked. 19 of the 29 Anomaly events (41 of 65 Rare
+Event + Anomaly) start after that row; all but one are also labelled on channel 43 or 44. The page's scores are what
+guard achieves with this state. adb2673 (Amendment 16) keeps 42, 45 and 46 quarantined from rows 2,521,599-2,521,601.
+
+## Amendment 16 (2026-09-27): guard on exp/diff-parity adb2673 (not merged) vs master faf1434
+
+Own worktree and target dir, installed .pyd hash-checked (52b5a938). Events faf1434 -> adb2673: alarm 136 -> 233;
+quarantined 138 -> 232 (by channel 41..46 [25,15,17,14,48,19] -> [24,15,13,14,147,19]); unquarantined 134 -> 229;
+adaptation_started 10 -> 11; recalibrated 7 -> 8; rolled_back 0 -> 1; classes stuck 104 -> 201, regime_shift 6 -> 7,
+drift 18 -> 20, spike 3 -> 5, cross_channel_inconsistency 4 -> 0, correlation_change 1 -> 0. Prediction matrix 234
+vs 136 alarm ticks, 202 cells differ (167 on channel 45), first at 307,261, where master's parity quarantines
+channel 43 for 8,282 rows and the branch does not. After that, channel 45's stuck/quarantine cycle runs about three
+times as often (47 -> 146 quarantines before row 2.52M); why was not isolated. The generator of shift seed 0 died
+silently in the chain; it was regenerated (offset 5,747,723, as in every other run) and scored, so all 20 shifts
+are in. Official metrics vs 20 shifts (master in brackets): Anomaly EW recall 0.103 = 3/29 (3/29) p 0.048, EW F0.5
+0.018 (0.035), AFF F0.5 0.361 (0.429) p 0.238 (master p 0.048), channel F0.5 0.078 (0.085), alarming precision
+0.200 (0.167); Rare Event + Anomaly EW recall 0.154 = 10/65 (11/65), EW F0.5 0.055 (0.111), AFF F0.5 0.412 (0.479),
+channel F0.5 0.113 (0.124). Under the maintainers' rule (no merge if alarms or quarantines rise or recall falls) it
+fails on all three. `run-adb2673/{guard.log,compare.log,classes.log,events_diffparity.csv,events_compare.log,
+summary.md,run.log}`.
 ```
