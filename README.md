@@ -77,18 +77,18 @@ Reproduce with `cargo run --release --example structure_vs_amplitude` (0.4 s), o
 
 | detector (116 labelled windows) | windows caught | false alarms | per 1,000 samples | streaming | builds for Cortex-M |
 |---|---|---|---|---|---|
-| **struktura `guard`** | 36 | **35** | **0.12** | yes | **yes** |
-| **struktura `guard --sensitivity high`** | **49** | 48 | 0.16 | yes | **yes** |
-| extended-isolation-forest 0.2.3 | 47 | 182 | 0.61 | no (batch) | no |
+| **struktura `guard`** | 45 | **46** | **0.15** | yes | **yes** |
+| **struktura `guard --sensitivity high`** | 57 | 55 | 0.18 | yes | **yes** |
+| extended-isolation-forest 0.2.3 | 47 | 168 | 0.56 | no (batch) | no |
 | limit check (1.5 × p95, 3 in a row) | 48 | 240 | 0.80 | yes | trivial |
 | EWMA chart (λ 0.2, 3σ) | 68 | 758 | 2.53 | yes | trivial |
 | CUSUM on raw values (k 0.5σ, h 5σ) | 66 | 860 | 2.87 | yes | trivial |
 | ankane STL (anomaly_detection 0.4.0) | 69 | 954 | 3.19 | no (batch) | no |
 | grafana augurs BOCPD (augurs-changepoint 0.10.2) | 77 | 1,461 | 4.88 | no (batch) | no |
 
-`guard` raises by far the fewest false alarms and, at its default setting, catches the fewest windows. That trade suits paging a person, where false alarms are what gets a monitor switched off. `--sensitivity high` catches as many windows as the limit check (49 vs 48) with a fifth of its false alarms (48 vs 240). That setting was chosen from a sweep of five on this same benchmark, so treat it as optimistic; on clean synthetic slow-wander streams it raises 2-3 false alarms in 30 where the default raises none. If you need to catch every labelled window and can triage many alarms, BOCPD, STL or even an EWMA chart catch more. The isolation forest timed out on 10 of the 58 series (quantized values) and those count as no alarms, so its row understates it. On the clean control series every detector here is silent.
+`guard` raises by far the fewest false alarms and, at its default setting, catches the fewest windows. That trade suits paging a person, where false alarms are what gets a monitor switched off. `--sensitivity high` catches more windows than the limit check (57 vs 48) with under a quarter of its false alarms (55 vs 240). That setting was chosen from a sweep of five on this same benchmark (before sensor recovery existed), so treat it as optimistic; on clean synthetic slow-wander streams it raises 2-3 false alarms in 30 where the default raises none. If you need to catch every labelled window and can triage many alarms, BOCPD, STL or even an EWMA chart catch more. The isolation forest timed out on 10 of the 58 series (quantized values) and those count as no alarms, so its row understates it; it is not seeded, so its row varies between runs (182 false alarms in an earlier run). On the clean control series every detector here is silent.
 
-Most of `guard`'s remaining false alarms come from its drift (residual-CUSUM) leg on daily cycles and on flat metrics with occasional spikes. The opt-in `--quiet-drift` changes little (35 → 33 false alarms, 36 → 35 windows).
+Up to 1.8.7 these rows were lower (default 36 windows, 35 false alarms; high 49 and 48): a sensor `guard` quarantined, for example a series that sat on one value for a while, stayed quarantined for good, so the rest of that series was never watched. Now a quarantined sensor is checked on its own readings and comes back after 192 healthy samples in a row. That recovery rule was set in advance, not tuned on NAB. The opt-in `--quiet-drift` changes little (46 → 45 false alarms, 45 → 44 windows).
 
 Reproduce: clone NAB (commit `ea702d7`) and run `NAB_DIR=path/to/NAB cargo run --release --example nab_eval` for `guard` and the limit check (weekly in CI), or `cargo run --release` in [bench/compare](bench/compare/) for every detector above ([RESULTS.md](bench/compare/RESULTS.md)).
 
@@ -144,11 +144,14 @@ struktura guard: 3000 samples x 5 channels (motor_current_A, wheel_rpm, imu_acce
   row   2208  ⚠ motor_current_A (2.6x threshold): the signal's behavior changed and predictions are failing
   row   2210  ⚠ motor_current_A (1.7x threshold): this channel disagrees with what the other channels' physics says it should be
   row   2210  ✗ motor_current_A declared dead, using reconstructed values
-  6 faults detected across 2000 samples (0 adaptations, 1 quarantines)
+  row   2592  ✓ motor_current_A readings healthy again, monitoring it again
+  row   2595  ⚠ battery_soc (1.4x threshold): this channel disagrees with what the other channels' physics says it should be
+  row   2595  ✗ battery_soc declared dead, using reconstructed values
+  7 faults detected across 2000 samples (0 adaptations, 2 quarantines)
 <!-- /example -->
 ```
 
-That is the full output; `examples/rover.csv` is a simulated rover with scripted faults and ships in the repo.
+That is the full output; `examples/rover.csv` is a simulated rover with three scripted faults and ships in the repo: a wheel bearing degrading from row 1500, a motor overcurrent from 2200 to about 2400, and faster battery drain from 2600. All three are reported. A quarantined sensor is watched on its own readings and comes back once they are healthy again (motor current, row 2592). The battery drain is reported as the battery reading disagreeing with the other channels, not as battery degradation.
 
 A dead sensor is quarantined and its value reconstructed from the other channels (R² > 0.9). A permanent environment change is re-learned through a guarded candidate baseline, which is rolled back if the new regime is really a fault. Drift that looks like a regime change is refused.
 

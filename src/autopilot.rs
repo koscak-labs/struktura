@@ -7,7 +7,10 @@
 //!    failure on one channel (stuck, sustained missingness, cross-channel
 //!    inconsistency) quarantines that channel: its legs go silent, its
 //!    reading is served by reconstruction from the survivors, and
-//!    monitoring continues degraded.
+//!    monitoring continues degraded. Its real readings are still checked
+//!    against its calibration; after [`crate::monitor::RECOVER_SPAN`]
+//!    healthy samples in a row it is monitored again (a data gap filled
+//!    with repeats, or a sensor that came back, is not dead forever).
 //! 2. **Guarded self-recalibration.** A level-shift alarm may mean the
 //!    environment changed rather than broke (new operating mode, new
 //!    thermal regime). The autopilot collects a candidate window of the
@@ -50,6 +53,9 @@ pub enum Event {
     Alarm { tick: u64, report: AlarmReport, class: &'static str },
     /// A channel was declared dead and switched to virtual mode.
     Quarantined { tick: u64, channel: usize },
+    /// A quarantined channel's own readings passed the recovery checks for
+    /// [`crate::monitor::RECOVER_SPAN`] samples; it is monitored again.
+    Unquarantined { tick: u64, channel: usize },
     /// A level shift triggered adaptation; candidate collection started.
     AdaptationStarted { tick: u64 },
     /// The candidate monitor passed its guard window and took over.
@@ -125,7 +131,15 @@ impl AutoPilot {
 
         match &mut self.mode {
             Mode::Monitoring => {
-                if let Some(_leg) = self.monitor.push_with_validity(sample, valid) {
+                let alarm = self.monitor.push_with_validity(sample, valid);
+                for ch in 0..self.channels {
+                    if self.quarantined[ch] && self.monitor.recovered(ch) {
+                        self.monitor.unquarantine(ch);
+                        self.quarantined[ch] = false;
+                        events.push(Event::Unquarantined { tick, channel: ch });
+                    }
+                }
+                if let Some(_leg) = alarm {
                     if let Some(report) = self.monitor.last_alarm() {
                         let class = classify_alarm(&report);
                         match report.leg {
@@ -320,6 +334,10 @@ mod tests {
                         if channel == 2 && quarantine_at.is_none() => {
                             quarantine_at = Some(tick);
                         }
+                    // ch2 stays frozen: it must never come back.
+                    Event::Unquarantined { tick, channel: 2 } => {
+                        panic!("still-frozen sensor released at {}", tick);
+                    }
                     Event::Recalibrated { tick } => {
                         recal_count += 1;
                         if recal_at.is_none() {
@@ -401,5 +419,61 @@ mod tests {
             }
         }
         assert!(rolled_back, "runaway disguised as regime change must be refused");
+    }
+
+    /// A sensor that freezes briefly (a data gap filled with repeats, a
+    /// transient stick) is quarantined, must come back once its readings are
+    /// healthy again, and a later real fault on it must still be reported.
+    /// Before recovery existed, quarantine was permanent and the fault below
+    /// raised nothing.
+    #[test]
+    fn briefly_frozen_sensor_recovers_and_is_monitored_again() {
+        let n = 10_000usize;
+        let calib = synth_spacecraft(2048, 4242 + 100);
+        let stream = synth_spacecraft(n, 4242 + 200);
+        let sd2: f64 = {
+            let c = &calib[2];
+            let m = c.iter().sum::<f64>() / c.len() as f64;
+            (c.iter().map(|x| (x - m) * (x - m)).sum::<f64>() / c.len() as f64).sqrt()
+        };
+        let mon = HybridMonitor::calibrate(&calib).expect("calibration");
+        let mut ap = AutoPilot::new(mon);
+        let valid = [true; 6];
+        let mut sample = [0.0f64; 6];
+        let (mut quarantined, mut released, mut fault_alarm) = (None, None, None);
+        for t in 0..n {
+            for ch in 0..6 {
+                let mut v = stream[ch][t];
+                // ch2 (temperature) freezes for 200 samples, then is healthy.
+                if ch == 2 && (3000..3200).contains(&t) {
+                    v = stream[2][3000];
+                }
+                // A real step fault on ch2 long after it came back.
+                if ch == 2 && t >= 8000 {
+                    v += 8.0 * sd2;
+                }
+                sample[ch] = v;
+            }
+            for ev in ap.push(&sample, &valid) {
+                match ev {
+                    Event::Quarantined { tick, channel: 2 } => {
+                        quarantined.get_or_insert(tick);
+                    }
+                    Event::Unquarantined { tick, channel: 2 } => {
+                        released.get_or_insert(tick);
+                    }
+                    Event::Alarm { tick, report, .. } if report.channel == 2 && tick >= 8000 => {
+                        fault_alarm.get_or_insert(tick);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let q = quarantined.expect("the frozen stretch must quarantine ch2");
+        assert!((3000..3200).contains(&(q as usize)), "quarantined at {q}");
+        let r = released.expect("ch2 must come back after its readings recover");
+        assert!((3200..8000).contains(&(r as usize)), "released at {r}");
+        let a = fault_alarm.expect("the step on the recovered sensor must be reported");
+        assert!((8000..8100).contains(&(a as usize)), "fault alarm at {a}");
     }
 }

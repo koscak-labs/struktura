@@ -122,7 +122,7 @@ pub struct MonitorConfig {
     /// rescale residuals that are clearly autocorrelated in calibration
     /// (see `cusum_residual_scale`). Off by default. The effect is small: on
     /// the NAB real-data series, counted in alarm episodes, false alarms go
-    /// from 35 to 33 and detected windows from 36 to 35 (examples/nab_eval.rs).
+    /// from 46 to 45 and detected windows from 45 to 44 (examples/nab_eval.rs).
     /// Spikes that only the drift leg caught are found later or by other legs.
     pub quiet_drift: bool,
 }
@@ -352,7 +352,20 @@ struct ChannelState {
     parity_hit_times: [u64; RES_HITS],
     dfa_streak: usize,
     roll_streak: usize,
+    /// While quarantined: the channel's own (real) readings, tracked against
+    /// its calibration to decide whether it has recovered.
+    q_ring: [f64; WINDOW],
+    q_prev: f64,
+    q_run: usize,
+    /// Consecutive real readings that pass the recovery checks.
+    q_good: usize,
 }
+
+/// Consecutive healthy real readings a quarantined channel must show before
+/// [`HybridMonitor::recovered`] reports it: two monitoring windows, so its
+/// rings are refilled with real data and a stuck run that the calibration
+/// never saw would have been seen twice over.
+pub const RECOVER_SPAN: usize = 2 * WINDOW;
 
 /// Streaming hybrid monitor over `n_channels` telemetry channels.
 ///
@@ -815,6 +828,10 @@ impl HybridMonitor {
                 parity_hit_times: [u64::MAX; RES_HITS],
                 dfa_streak: 0,
                 roll_streak: 0,
+                q_ring: [0.0; WINDOW],
+                q_prev: c[length - 1],
+                q_run: 1,
+                q_good: 0,
             })
             .collect();
 
@@ -909,16 +926,42 @@ impl HybridMonitor {
             return None;
         }
         // Quarantined sensor: substitute the reconstructed reading so the
-        // ring state stays coherent for a later unquarantine; its own
-        // detector legs stay silent (the sensor is declared dead).
+        // ring state stays coherent; its own detector legs stay silent (the
+        // sensor is declared dead). Its real readings are still checked
+        // against its calibration, so it can come back (`recovered`).
         if self.quarantined[ch] {
             let virt = self.virtual_value(ch).map(|(v, _)| v).unwrap_or(0.0);
+            // Parity only when no other channel is quarantined: their raw
+            // readings would feed the prediction.
+            let others_live =
+                self.quarantined.iter().enumerate().all(|(s, &q)| s == ch || !q);
+            let parity_z = match value {
+                Some(v) if self.leg_enabled[6] && others_live && !self.sample_pred[ch].is_nan() => {
+                    Some((v - self.sample_pred[ch]).abs() / self.recon[ch].sd)
+                }
+                _ => None,
+            };
+            let (res_thr, parity_thr) = (self.res_thr, self.parity_thr);
+            let cc = &self.calib[ch];
             let st = &mut self.state[ch];
             let t = st.t;
             st.t += 1;
             st.prev = virt;
             st.ring[(t % WINDOW as u64) as usize] = virt;
             st.roll_ring[(t % ROLL as u64) as usize] = virt;
+            match value {
+                Some(v) => {
+                    st.q_run = if v == st.q_prev { st.q_run + 1 } else { 1 };
+                    let zs = (v - (cc.ar_a + cc.ar_b * st.q_prev)) / cc.ar_sd;
+                    let good = (!cc.repeat_enabled || st.q_run < cc.max_run + REPEAT_MARGIN)
+                        && zs.abs() <= res_thr
+                        && parity_z.map_or(true, |z| z <= parity_thr);
+                    st.q_good = if good { st.q_good + 1 } else { 0 };
+                    st.q_prev = v;
+                    st.q_ring[(t % WINDOW as u64) as usize] = v;
+                }
+                None => st.q_good = 0,
+            }
             return None;
         }
         // Parity prediction must be computed before borrowing state mutably.
@@ -1139,13 +1182,46 @@ impl HybridMonitor {
     pub fn quarantine(&mut self, ch: usize) {
         if ch < self.quarantined.len() {
             self.quarantined[ch] = true;
+            let st = &mut self.state[ch];
+            // Recovery tracking starts from the reading that got it
+            // quarantined, so a stuck run keeps counting.
+            st.q_prev = st.prev;
+            st.q_run = st.run;
+            st.q_good = 0;
         }
     }
 
-    /// Return a quarantined channel to normal operation.
+    /// True once a quarantined channel's own readings have passed the
+    /// recovery checks for [`RECOVER_SPAN`] consecutive samples: no
+    /// repeated-value run the calibration did not allow, residuals within
+    /// the residual leg's threshold, and (when no other channel is
+    /// quarantined) consistent with the other channels.
+    #[must_use]
+    pub fn recovered(&self, ch: usize) -> bool {
+        ch < self.quarantined.len() && self.quarantined[ch] && self.state[ch].q_good >= RECOVER_SPAN
+    }
+
+    /// Return a quarantined channel to normal operation. If it has recovered,
+    /// its rings are refilled with its own recent readings in place of the
+    /// reconstructed ones, and its detector state starts clean.
     pub fn unquarantine(&mut self, ch: usize) {
         if ch < self.quarantined.len() {
             self.quarantined[ch] = false;
+            let st = &mut self.state[ch];
+            if st.q_good >= WINDOW {
+                st.ring = st.q_ring;
+                st.roll_ring = st.q_ring;
+                st.prev = st.q_prev;
+                st.run = st.q_run;
+            }
+            st.q_good = 0;
+            st.cusum_pos = 0.0;
+            st.cusum_neg = 0.0;
+            st.dfa_streak = 0;
+            st.roll_streak = 0;
+            st.res_hit_times = [u64::MAX; RES_HITS];
+            st.miss_times = [u64::MAX; MISS_HITS];
+            st.parity_hit_times = [u64::MAX; RES_HITS];
         }
     }
 

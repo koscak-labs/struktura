@@ -4,6 +4,25 @@ All notable changes to Struktura are documented here.
 
 ## Unreleased
 
+- A quarantined sensor can come back. Until now `guard`, `Guard` in
+  Python/JS and AutoPilot quarantined a channel on a stuck run, sustained
+  missing data or cross-channel inconsistency, and nothing ever lifted it:
+  a data gap filled with repeats silenced that sensor for the rest of the
+  run (on ESA-ADB, all six channels by 2007, silent for 6.7 years). While
+  quarantined, a channel's own readings are now checked against its
+  calibration (no stuck run the calibration did not allow, residuals within
+  the residual leg's threshold, consistent with the other channels when
+  none of them is quarantined); after `RECOVER_SPAN` (192) such samples in
+  a row it is monitored again, its rings refilled with its real readings.
+  New event `Unquarantined` (CLI: "readings healthy again"; JSON event
+  `unquarantine`; Python/JS kind `unquarantined`). A sensor that stays stuck
+  is never released (tested). Effects: NAB default 36 -> 45 of 116 windows,
+  35 -> 46 false alarms; `--sensitivity high` 49 -> 57 windows, 48 -> 55
+  false alarms; `--quiet-drift` 35 -> 44 windows, 33 -> 45 false alarms;
+  clean control series still silent. `examples/rover.csv`: the motor current
+  sensor comes back at row 2592 after its fault ends, and the scripted
+  battery drain from row 2600, missed before, is reported at 2595.
+  Reported by the ESA-ADB evaluation.
 - `bench/flight` (embedded-monitor evidence): the bare-metal ARM Cortex-M3
   QEMU build now passes at `-O2`, struktura's own suggested compile line,
   instead of falling back to `-O1`. At plain `-O2` a stack slot in the test

@@ -1,9 +1,9 @@
 # struktura head-to-head comparison — results
 
-Date: 2026-09-24
+Date: 2026-09-24; re-run 2026-09-26 after quarantine recovery (guard rows changed, see below)
 Machine: Intel(R) Core(TM) Ultra 9 185H, Windows 11, rustc 1.95.0, `cargo build --release`
 NAB: https://github.com/numenta/NAB, commit `ea702d7` (58 series, `labels/combined_windows.json`)
-Crate: `struktura` 1.8.3 (path dependency `../..`)
+Crate: `struktura` master after 1.8.7, with quarantine recovery (path dependency `../..`)
 
 Standalone crate at `bench/compare/` (own `Cargo.toml` with a `[workspace]` table,
 `publish = false`, depends on struktura via `path = "../.."`). Verified NOT part of the
@@ -18,8 +18,8 @@ per-series timings: `bench/compare/run.err`. Raw stdout (identical to the tables
 
 | # | Contender | Crate / version | Type | Settings |
 |---|---|---|---|---|
-| 1a | struktura guard (default) | struktura 1.8.3 | streaming | `AutoPilot` + `HybridMonitor::calibrate_with`, `MonitorConfig::default()`, exactly as `examples/nab_eval.rs` / `cmd_guard`. 50-tick same-leg alarm dedupe. |
-| 1b | struktura guard (quiet_drift) | struktura 1.8.3 | streaming | Same, `MonitorConfig { quiet_drift: true, .. }`. |
+| 1a | struktura guard (default) | struktura master after 1.8.7 | streaming | `AutoPilot` + `HybridMonitor::calibrate_with`, `MonitorConfig::default()`, exactly as `examples/nab_eval.rs` / `cmd_guard`. 50-tick same-leg alarm dedupe. |
+| 1b | struktura guard (quiet_drift) | struktura master after 1.8.7 | streaming | Same, `MonitorConfig { quiet_drift: true, .. }`. |
 | 2/3 | augurs-changepoint BOCPD | augurs-changepoint 0.10.2 (wraps `changepoint` 0.15.0's `BocpdTruncated`) | batch (internally steps once/sample) | `NormalGammaDetector::default()` (hazard_lambda 250, `NormalGamma::new_unchecked(0,1,1,1)` — crate defaults, untuned). Run on calib+rest concatenated; only changepoints at or after `calib.len()` are counted as alarms, so calib plays the same "seen but not a label source" role as for the other detectors. This single entry stands in for both the "grafana augurs" and "changepoint crate (BOCPD)" contenders in the task brief, since augurs-changepoint 0.10.2 is a thin wrapper around `changepoint::BocpdTruncated` — running both separately would have scored the same algorithm twice under two names. The standalone `changepoint` crate also builds and is in `Cargo.lock` (0.15.0) as a transitive dependency. |
 | — | augurs-outlier | augurs-outlier 0.10.2 | n/a | **No usable API for this task.** `augurs::outlier` detects which *series* among a group of similar series is an outlier at each timestamp (`OutlierDetector::detect` takes a `Vec<Series>`); it has no single-series point/changepoint API. Builds fine; dropped after ~5 minutes reading `mad.rs`/`lib.rs` (`Series` struct at line 84, `OutlierDetector` trait at line 198) confirmed it isn't the right shape for NAB-style univariate anomaly detection. |
 | 4 | ankane STL | anomaly_detection 0.4.0 | batch | `AnomalyDetector::fit(&data_f32, period)`. Needs a seasonality period (no default that fits NAB's mixed sampling rates); period estimated per-series from the calibration segment's median timestamp spacing (`86400s / interval`, same estimate `examples/nab_eval.rs`'s `diagnose()` uses), clamped to `[2, len/4]`. This is a documented-API requirement the crate has no default for — noted per the task's "if unsuited, use documented defaults and say so" rule. Scored on the post-calibration segment only (batch, no calibration data used beyond the period estimate). |
@@ -44,16 +44,23 @@ No detector was tuned on NAB labels, including struktura.
 
 | detector | windows caught / 116 | false alarms | FA / 1000 samples |
 |---|---:|---:|---:|
-| struktura guard (default) | 36 | 35 | 0.12 |
-| struktura guard (quiet_drift) | 35 | 33 | 0.11 |
+| struktura guard (default) | 45 | 46 | 0.15 |
+| struktura guard (quiet_drift) | 44 | 45 | 0.15 |
 | augurs-changepoint BOCPD | 77 | 1461 | 4.88 |
 | ankane STL (anomaly_detection) | 69 | 954 | 3.19 |
-| extended-isolation-forest* | 47 | 182 | 0.61 |
+| extended-isolation-forest* | 47 | 168 | 0.56 |
 | limit check (baseline) | 48 | 240 | 0.80 |
 | EWMA chart (baseline) | 68 | 758 | 2.53 |
 | CUSUM (baseline) | 66 | 860 | 2.87 |
 
 \* 10/58 series timed out (>8 s) and were scored as "no alarms"; see contender notes above.
+The forest is not seeded, so its row varies between runs (the 2026-09-24 run: 182 false
+alarms, 0.61 per 1000).
+
+Up to 1.8.7 guard caught 36 windows with 35 false alarms (quiet_drift: 35 and 33). A
+quarantined sensor then stayed quarantined for good, so a series whose only channel was
+quarantined went unwatched for the rest of its length. Now a quarantined sensor comes back
+after 192 healthy samples in a row; that rule was set in advance, not tuned on NAB.
 
 ## Table 2 — Synthetic suite (30 seeds, calibration on first 768 of 2000 samples)
 
@@ -61,16 +68,16 @@ Clean streams — false alarms out of 30:
 
 | stream | guard (default) | guard (quiet) | BOCPD | STL | iso-forest | limit | EWMA | CUSUM |
 |---|---|---|---|---|---|---|---|---|
-| white | 0/30 | 0/30 | 0/30 | 4/30 | 17/30 | 0/30 | 26/30 | 28/30 |
-| AR(0.7) | 0/30 | 0/30 | 30/30 | 2/30 | 14/30 | 4/30 | 30/30 | 30/30 |
-| AR(0.95) | 0/30 | 0/30 | 30/30 | 0/30 | 17/30 | 15/30 | 30/30 | 30/30 |
+| white | 0/30 | 0/30 | 0/30 | 4/30 | 18/30 | 0/30 | 26/30 | 28/30 |
+| AR(0.7) | 0/30 | 0/30 | 30/30 | 2/30 | 15/30 | 4/30 | 30/30 | 30/30 |
+| AR(0.95) | 0/30 | 0/30 | 30/30 | 0/30 | 19/30 | 15/30 | 30/30 | 30/30 |
 
 Shifts at sample 1000 — detected/30, early-false-alarm count, median delay (samples):
 
 | shift | guard (default) | guard (quiet) | BOCPD | STL | iso-forest | limit | EWMA | CUSUM |
 |---|---|---|---|---|---|---|---|---|
-| white->brown (random walk) | 30, 0 early, 13 | 30, 0 early, 14 | 25, 5 early, 7 | 5, 0 early, 823 | 23, 7 early, 46 | 30, 0 early, 17 | 17, 13 early, 7 | 16, 14 early, 8 |
-| white->AR(0.9) std x2.3 (amplitude) | 30, 0 early, 16 | 30, 0 early, 16 | 26, 4 early, 8 | 16, 0 early, 562 | 21, 7 early, 97 | 30, 0 early, 48 | 17, 13 early, 8 | 16, 14 early, 10 |
+| white->brown (random walk) | 30, 0 early, 13 | 30, 0 early, 14 | 25, 5 early, 7 | 5, 0 early, 823 | 19, 11 early, 33 | 30, 0 early, 17 | 17, 13 early, 7 | 16, 14 early, 8 |
+| white->AR(0.9) std x2.3 (amplitude) | 30, 0 early, 16 | 30, 0 early, 16 | 26, 4 early, 8 | 16, 0 early, 562 | 21, 7 early, 105 | 30, 0 early, 48 | 17, 13 early, 8 | 16, 14 early, 10 |
 | white->AR(0.9) var-matched (correlation) | 30, 0 early, 100 | 30, 0 early, 100 | 15, 15 early, 7 | 5, 1 early, 833 | 0, 7 early, - | 7, 0 early, 371 | 17, 13 early, 26 | 16, 14 early, 20 |
 
 The isolation forest is randomized, so its cells vary slightly between runs.
@@ -95,11 +102,11 @@ std-only transitive dependencies (`once_cell`/`wide`/`stlrs`/`getrandom`), none 
 
 ## Where struktura is worse than a competitor
 
-- **Window recall on NAB is struktura's weakest number here.** 36/116 (guard default) and
-  35/116 (quiet_drift) windows caught is the *lowest* of all 8 detectors. BOCPD (77), STL
-  (69), EWMA (68) and raw CUSUM (66) catch about twice as many labeled windows, at 22-42x
-  the false alarms. Struktura's real advantage on NAB is precision (35 false alarms vs.
-  182-1461 for the others, 0.12/1000 samples vs. 0.61-4.88), not recall. A team optimizing
+- **Window recall on NAB is struktura's weakest number here.** 45/116 (guard default) and
+  44/116 (quiet_drift) windows caught is the *lowest* of all 8 detectors. BOCPD (77), STL
+  (69), EWMA (68) and raw CUSUM (66) catch about 1.5-1.7x as many labeled windows, at 16-32x
+  the false alarms. Struktura's real advantage on NAB is precision (46 false alarms vs.
+  168-1461 for the others, 0.15/1000 samples vs. 0.56-4.88), not recall. A team optimizing
   purely for "catch every labeled window" gets more hits from BOCPD, STL, EWMA or CUSUM on
   this benchmark.
 - **Delayed-onset variance/correlation changes with no amplitude jump**: on the "white ->

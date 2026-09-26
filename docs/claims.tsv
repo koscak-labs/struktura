@@ -14,7 +14,7 @@ voyager-alpha	fast	0	struktura voyager	alpha=0.989 && alpha=0.801 && inconclusiv
 heliopause-alpha	fast	0	struktura heliopause	1.137 && 1.056 && inconclusive
 ims-first-alarm	fast	0	struktura ims	recording 970 && 984
 guard-sylv	fast	1	struktura guard data/sylv_spike.csv	row    500 && 2 faults detected
-guard-rover	fast	1	struktura guard examples/rover.csv --baseline 1000	fault confirmed && 6 faults detected
+guard-rover	fast	1	struktura guard examples/rover.csv --baseline 1000	fault confirmed && row   2201  ⚠ motor_current_A && row   2592  ✓ motor_current_A readings healthy again && row   2595  ⚠ battery_soc && 7 faults detected
 control-sylv-healthy	fast	0	head -499 data/sylv_spike.csv | struktura guard - --baseline 333	HEALTHY, 166 samples, no anomalies
 control-rover-healthy	fast	0	head -1601 examples/rover.csv | struktura guard - --baseline 1000	HEALTHY, 600 samples, no anomalies
 control-monitor-clean	fast	0	struktura monitor-perf	Alarms on clean stream:            0
@@ -25,15 +25,15 @@ evolve-coverage	slow	0	struktura evolve	71.0% && 97.0% && 71.0% (gen 1) -> 92.0%
 control-sylv-healthy-quiet	fast	0	head -499 data/sylv_spike.csv | struktura guard - --baseline 333 --quiet-drift	HEALTHY, 166 samples, no anomalies
 limitation-quiet-spike	fast	1	struktura guard data/sylv_spike.csv --quiet-drift	1 faults detected
 limitation-guard-short-file	fast	2	struktura guard data/ims_timeline.csv	calibration failed (need >= 192 samples, got 25)
-nab-default	slow	0	cargo run -q --release --example nab_eval	TOTAL                      58     116        36        35       0.12   |          48       240       0.80
-nab-quiet	slow	0	QUIET=1 cargo run -q --release --example nab_eval	TOTAL                      58     116        35        33       0.11   |          48       240       0.80
+nab-default	slow	0	cargo run -q --release --example nab_eval	TOTAL                      58     116        45        46       0.15   |          48       240       0.80
+nab-quiet	slow	0	QUIET=1 cargo run -q --release --example nab_eval	TOTAL                      58     116        44        45       0.15   |          48       240       0.80
 control-nab-clean	slow	0	QUIET=1 cargo run -q --release --example nab_eval	artificialNoAnomaly         5       0         0         0       0.00
 opssat-dfa-short	slow	0	cargo run -q --release --example opssat_eval	segments=2123 test=529 && dfa_short alpha | 0.943 | 0.882 && dfa_short alpha of shuffled values | 0.554 && segment length | 0.734 && log variance | 0.590 && dfa_short alpha | 0.925 && dfa_short alpha of shuffled values | 0.461 && dfa_short alpha | 0.908 && dfa_short alpha of shuffled values | 0.743
 control-calib-selfcheck-synthetic	fast	0	cargo run -q --release --example calib_selfcheck_eval	warnings white 0/30, AR(0.7) 1/30, AR(0.95) 0/30
 calib-selfcheck-nab	slow	0	cargo run -q --release --example calib_selfcheck_eval	| contains a labelled anomaly | 6 | 4 | && | no labelled anomaly | 2 | 6 | && check skipped (calibration half < 768): 40
 sensitivity-high-synthetic	fast	0	HORIZON=1e5 cargo run -q --release --example structure_vs_amplitude	| white -> AR(0.9), variance-matched | 27/30, 0 early, median 146 | 30/30, 0 early, median 68 | 7/30, 0 early, median 371 |
 limitation-sensitivity-high-clean	fast	0	HORIZON=1e5 cargo run -q --release --example structure_vs_amplitude	| AR(0.7) | 0/30 | 2/30 | 4/30 | && | AR(0.95) | 0/30 | 3/30 | 15/30 |
-nab-sensitivity-high	slow	0	HORIZON=1e5 cargo run -q --release --example nab_eval	TOTAL                      58     116        49        48       0.16   |          48       240       0.80
+nab-sensitivity-high	slow	0	HORIZON=1e5 cargo run -q --release --example nab_eval	TOTAL                      58     116        57        55       0.18   |          48       240       0.80
 control-nab-clean-high	slow	0	HORIZON=1e5 cargo run -q --release --example nab_eval	artificialNoAnomaly         5       0         0         0       0.00
 generated-hybrid-c-equals-rust	fast	0	cargo test -q --test hybrid_c_matches_rust -- --nocapture	hybrid_c_matches_rust: STRUKTURA_DIFF_SEED= && hybrid_c_matches_rust: compared 200 windows && test result: ok. 1 passed
 generated-c-monitor-and-cfs-equal-rust	fast	0	cargo test -q --test c_monitor_matches_rust -- --nocapture	c_monitor_matches_rust: window 512 compared && c_monitor_matches_rust: window 64 compared && c_monitor_matches_rust: window 72 compared && cfs_app_time_order: compared && test result: ok. 2 passed

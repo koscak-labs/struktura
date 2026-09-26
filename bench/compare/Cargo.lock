@@ -1470,7 +1470,7 @@ checksum = "fd516b22a2daf83737f16616e24cab0f76e36b72a333782f3bccbc159d924617"
 
 [[package]]
 name = "struktura"
-version = "1.8.3"
+version = "1.8.7"
 dependencies = [
  "libm",
 ]

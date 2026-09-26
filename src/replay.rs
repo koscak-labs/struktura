@@ -305,6 +305,7 @@ pub fn run_investigation(
                     report.tick = t as u64;
                 }
                 Event::Quarantined { tick, .. }
+                | Event::Unquarantined { tick, .. }
                 | Event::AdaptationStarted { tick }
                 | Event::Recalibrated { tick } => *tick = t as u64,
                 Event::RolledBack { tick, guard_report } => {

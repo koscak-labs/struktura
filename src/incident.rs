@@ -240,6 +240,9 @@ impl IncidentBuilder {
                 incident.add_context(ContextEvent::new(*tick, "quarantined", format!("channel={}", channel)));
                 incident.resolution = Some(format!("channel {} quarantined at tick {}", channel, tick));
             }
+            Event::Unquarantined { tick, channel } => {
+                incident.add_context(ContextEvent::new(*tick, "unquarantined", format!("channel={}", channel)));
+            }
             Event::Recalibrated { tick } => {
                 incident.add_context(ContextEvent::new(*tick, "recalibrated", ""));
                 incident.resolution = Some(format!("recalibrated at tick {}", tick));

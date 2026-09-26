@@ -42,6 +42,7 @@ pub fn guard(values: &[f64], calib: usize) -> String {
                 Event::Recalibrated { .. } => format!("{{\"t\":{},\"kind\":\"recalibrated\"}}", t),
                 Event::RolledBack { .. } => format!("{{\"t\":{},\"kind\":\"confirmed\"}}", t),
                 Event::Quarantined { .. } => format!("{{\"t\":{},\"kind\":\"quarantined\"}}", t),
+                Event::Unquarantined { .. } => format!("{{\"t\":{},\"kind\":\"unquarantined\"}}", t),
             };
             events.push(item);
         }

@@ -2925,6 +2925,10 @@ fn cmd_mission() {
                     "  t={:>6}  \x1b[31mQUARANTINE\x1b[0m   {} declared dead -> virtual mode",
                     tick, names[channel]
                 ),
+                Event::Unquarantined { tick, channel } => println!(
+                    "  t={:>6}  \x1b[32mRECOVERED\x1b[0m    {} readings healthy again -> monitored",
+                    tick, names[channel]
+                ),
                 Event::AdaptationStarted { tick } => println!(
                     "  t={:>6}  \x1b[36mADAPTING\x1b[0m     level shift: collecting new-regime window",
                     tick
@@ -3646,10 +3650,10 @@ fn cmd_guard(args: &[String]) {
                 println!("struktura guard <file.csv> [--baseline N] [--sensitivity normal|high] [--json] [--watch] [--webhook URL] [--quiet-drift]");
                 println!("  Monitor any CSV for anomalies. Exit: 0=healthy 1=fault 2=error");
                 println!("  --sensitivity  normal (default): fewest false alarms. high: catches more, alarms more");
-                println!("                 (NAB: 36 -> 49 of 116 windows, 35 -> 48 false alarms; clean slow-wander");
+                println!("                 (NAB: 45 -> 57 of 116 windows, 46 -> 55 false alarms; clean slow-wander");
                 println!("                 synthetic streams 0 -> 2-3 of 30)");
-                println!("  --quiet-drift  Clip what the drift leg sees; small effect (NAB: 35 -> 33 false alarms,");
-                println!("                 36 -> 35 windows); a spike only the drift leg catches is found later or not at all");
+                println!("  --quiet-drift  Clip what the drift leg sees; small effect (NAB: 46 -> 45 false alarms,");
+                println!("                 45 -> 44 windows); a spike only the drift leg catches is found later or not at all");
                 println!("  --watch        Follow the file (like tail -f), monitor new rows live");
                 println!("  --interval MS  Poll interval for --watch (default 1000ms)");
                 println!("  --webhook URL  POST anomaly alerts to a Slack/Discord/PagerDuty webhook");
@@ -3683,9 +3687,10 @@ fn cmd_guard(args: &[String]) {
 
 /// Threshold design horizon for `--sensitivity high`: 1 expected false alarm
 /// per 1e5 clean samples instead of the default 1e6. On NAB (episode
-/// counting) this took guard from 36 to 49 of 116 windows and from 35 to 48
-/// false alarms; chosen from a sweep of 1e3..1e7 on the same benchmark
-/// (examples/nab_eval.rs with HORIZON=...).
+/// counting) this takes guard from 45 to 57 of 116 windows and from 46 to 55
+/// false alarms (36 -> 49 and 35 -> 48 before quarantined sensors could
+/// recover, when the horizon was chosen from a sweep of 1e3..1e7 on the same
+/// benchmark: examples/nab_eval.rs with HORIZON=...).
 const HIGH_SENSITIVITY_HORIZON: f64 = 1e5;
 
 fn guard_config(quiet: bool, high: bool) -> struktura::monitor::MonitorConfig {
@@ -3926,6 +3931,10 @@ fn cmd_rover() {
                     let ch_name = ROVER_CHANNEL_NAMES.get(*channel).unwrap_or(&"?");
                     println!("  t={:>5}  ✗ {} dead, virtual readings active", t, ch_name);
                 }
+                Event::Unquarantined { channel, .. } => {
+                    let ch_name = ROVER_CHANNEL_NAMES.get(*channel).unwrap_or(&"?");
+                    println!("  t={:>5}  ✓ {} readings healthy again, monitored", t, ch_name);
+                }
                 Event::AdaptationStarted { .. } =>
                     println!("  t={:>5}  ↻ environment change? learning new baseline...", t),
                 Event::Recalibrated { .. } =>
@@ -4004,6 +4013,10 @@ fn emit_event(t: usize, ev: &struktura::autopilot::Event, json: bool) {
         Event::Quarantined { channel, .. } => {
             if json { println!("{{\"event\":\"quarantine\",\"t\":{},\"channel\":{}}}", t, channel); }
             else { eprintln!("  row {:>6}  ✗ ch{} declared dead, using reconstructed values", t, channel); }
+        }
+        Event::Unquarantined { channel, .. } => {
+            if json { println!("{{\"event\":\"unquarantine\",\"t\":{},\"channel\":{}}}", t, channel); }
+            else { eprintln!("  row {:>6}  ✓ ch{} readings healthy again, monitoring it again", t, channel); }
         }
         Event::AdaptationStarted { .. } => {
             if json { println!("{{\"event\":\"adapting\",\"t\":{}}}", t); }
@@ -4130,6 +4143,14 @@ fn run_guard(content: &str, baseline_n: usize, json: bool, cfg: struktura::monit
                         println!("{{\"event\":\"quarantine\",\"t\":{},\"channel\":\"{}\"}}", t, name);
                     } else {
                         eprintln!("  row {:>6}  ✗ {} declared dead, using reconstructed values", t, name);
+                    }
+                }
+                Event::Unquarantined { channel, .. } => {
+                    let name = ch_name(*channel);
+                    if json {
+                        println!("{{\"event\":\"unquarantine\",\"t\":{},\"channel\":\"{}\"}}", t, name);
+                    } else {
+                        eprintln!("  row {:>6}  ✓ {} readings healthy again, monitoring it again", t, name);
                     }
                 }
                 Event::AdaptationStarted { .. } => {

@@ -9,4 +9,7 @@ struktura guard: 3000 samples x 5 channels (motor_current_A, wheel_rpm, imu_acce
   row   2208  ⚠ motor_current_A (2.6x threshold): the signal's behavior changed and predictions are failing
   row   2210  ⚠ motor_current_A (1.7x threshold): this channel disagrees with what the other channels' physics says it should be
   row   2210  ✗ motor_current_A declared dead, using reconstructed values
-  6 faults detected across 2000 samples (0 adaptations, 1 quarantines)
+  row   2592  ✓ motor_current_A readings healthy again, monitoring it again
+  row   2595  ⚠ battery_soc (1.4x threshold): this channel disagrees with what the other channels' physics says it should be
+  row   2595  ✗ battery_soc declared dead, using reconstructed values
+  7 faults detected across 2000 samples (0 adaptations, 2 quarantines)

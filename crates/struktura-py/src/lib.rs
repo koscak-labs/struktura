@@ -301,6 +301,11 @@ impl Guard {
                     d.set_item("tick", tick)?;
                     d.set_item("channel", channel)?;
                 }
+                Event::Unquarantined { tick, channel } => {
+                    d.set_item("kind", "unquarantined")?;
+                    d.set_item("tick", tick)?;
+                    d.set_item("channel", channel)?;
+                }
                 Event::AdaptationStarted { tick } => {
                     d.set_item("kind", "adaptation_started")?;
                     d.set_item("tick", tick)?;

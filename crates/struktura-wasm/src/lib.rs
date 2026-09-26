@@ -318,6 +318,7 @@ impl Guard {
             .map(|ev| match ev {
                 Event::Alarm { tick, report, class } => GuardEvent { class: Some(class), ..GuardEvent::with_report("alarm", tick, &report) },
                 Event::Quarantined { tick, channel } => GuardEvent { channel: Some(channel), ..GuardEvent::bare("quarantined", tick) },
+                Event::Unquarantined { tick, channel } => GuardEvent { channel: Some(channel), ..GuardEvent::bare("unquarantined", tick) },
                 Event::AdaptationStarted { tick } => GuardEvent::bare("adaptation_started", tick),
                 Event::Recalibrated { tick } => GuardEvent::bare("recalibrated", tick),
                 Event::RolledBack { tick, guard_report } => GuardEvent::with_report("rolled_back", tick, &guard_report),
