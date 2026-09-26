@@ -47,6 +47,26 @@ All notable changes to Struktura are documented here.
   unused they cause no `-Wunused-function` error. The self-test now uses
   them and prints the alarm tick itself (404) and the channel; it printed one
   past the tick (405) before. `hyb_push` is unchanged.
+- Generated hybrid C, two audit findings:
+  - One NaN reading switched the C's residual CUSUM leg off on that channel
+    for good: the clamp `if (x < 0.0) x = 0.0` keeps a NaN, while Rust's
+    `max(0.0)` turns it into 0. The clamp is now `if (!(x > 0.0)) x = 0.0`.
+    The oracle gained a NaN-then-step fault: 0/240 mismatches with the fix,
+    20/240 with the old clamp.
+  - The sample counters were `unsigned long`, 32 bits on most
+    microcontrollers, so they wrapped after 2^32 samples (50 days at 1 kHz),
+    after which the DFA and level legs went back to their 96-sample warm-up,
+    the rings jumped position, and the residual leg's "previous hit"
+    sentinel could match a real tick. They are now
+    `unsigned long long`, as Rust's `u64`. The ring positions come from a
+    32-bit phase counter (the tick modulo WINDOW x ROLL x DFA_STRIDE), so
+    no 64-bit division is needed: with the 64-bit tick used directly,
+    Cortex-M3 `-O2` flash grew from 6,600 to 7,464 bytes (`__udivmoddi4`,
+    and 96 software divisions per DFA evaluation). With the phase counter
+    it is 6,680 bytes, and RAM 9,568 bytes (was 9,520); QEMU alarms at the
+    same tick and leg at every optimization level. One oracle stream is 40,000 samples long, so the phase
+    counter wraps in it; the oracle does not detect a wrong phase period
+    (tried: 0/240), since write and read positions stay consistent.
 - `guard` no longer monitors a column that always increases and is named
   like a time (time, timestamp, epoch, date, clock, t, ts, utc, ...), for
   example epoch nanoseconds with jitter. Only exactly even steps were left

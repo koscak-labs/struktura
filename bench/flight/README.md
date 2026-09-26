@@ -94,11 +94,18 @@ built with `run.sh`'s size_probe flags, `-fno-early-inlining` and
 
 | level | flash (`.text`) | RAM (`.bss`) |
 |-------|-----------------:|-------------:|
-| `-O0` | 8644 B | 9520 B |
-| `-O1` | 7128 B | 9520 B |
-| `-O2` | 6600 B | 9520 B |
-| `-O3` | 6872 B | 9520 B |
-| `-Os` | 6284 B | 9520 B |
+| `-O0` | 8796 B | 9568 B |
+| `-O1` | 7224 B | 9568 B |
+| `-O2` | 6680 B | 9568 B |
+| `-O3` | 6984 B | 9568 B |
+| `-Os` | 6356 B | 9568 B |
+
+Measured 2026-09-26, after the sample counters became 64-bit (they wrapped
+after 2^32 samples) and the ring positions moved to a 32-bit phase counter.
+Before, with 32-bit counters: 8644 / 7128 / 6600 / 6872 / 6284 B flash and
+9520 B RAM. Using the 64-bit tick for the ring positions directly would
+have cost 7464 B at `-O2`, most of it libgcc's `__udivmoddi4`. The QEMU run
+alarms at tick 1504 on the stuck-value leg at every level, as before.
 
 RAM is constant across levels: `.bss` is dominated by the 6-channel
 `hyb_monitor_t` ring buffers (`2 x 96 x 8 B x 6 channels ~= 9216 B` plus

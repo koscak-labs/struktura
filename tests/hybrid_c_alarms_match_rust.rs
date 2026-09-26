@@ -6,7 +6,8 @@
 //! CUSUM) and no parity or missingness leg, so those two are disabled on the Rust
 //! side. Streams come from seeded generators (white, AR(1) with phi 0.3..0.97,
 //! random walk, quantized) with injected faults (step, stuck, variance change,
-//! drift, spike) on 1..3 channel calibrations.
+//! drift, spike, one NaN then a step) on 1..3 channel calibrations. One stream
+//! per run is 40,000 samples long, past the C ring phase counter's wrap.
 //!
 //! Two comparisons:
 //! - first alarm per stream through the per-channel `hyb_push`, no reset;
@@ -85,7 +86,7 @@ fn series(rng: &mut Rng, p: Proc, n: usize) -> Vec<f64> {
 /// Inject one fault into channel `ch` from tick `at`. Returns a label.
 fn inject(rng: &mut Rng, s: &mut [Vec<f64>], ch: usize, at: usize, scale: f64) -> &'static str {
     let n = s[ch].len();
-    match rng.next_u64() % 6 {
+    match rng.next_u64() % 7 {
         0 => {
             let k = (1.0 + 4.0 * rng.uniform()) * scale * if rng.uniform() < 0.5 { -1.0 } else { 1.0 };
             (at..n).for_each(|t| s[ch][t] += k);
@@ -114,6 +115,14 @@ fn inject(rng: &mut Rng, s: &mut [Vec<f64>], ch: usize, at: usize, scale: f64) -
                 }
             }
             "spike"
+        }
+        5 => {
+            // One NaN reading, then a step: a NaN must not disable any leg
+            // for the step that follows.
+            s[ch][at] = f64::NAN;
+            let k = (2.0 + 3.0 * rng.uniform()) * scale;
+            (at + 200..n).for_each(|t| s[ch][t] += k);
+            "nan+step"
         }
         _ => "none",
     }
@@ -252,6 +261,7 @@ fn hybrid_c_alarms_match_rust() {
     let mut examples: Vec<String> = Vec::new();
     let mut kinds = std::collections::BTreeMap::<String, usize>::new();
     let mut first_kinds = std::collections::BTreeMap::<&str, usize>::new();
+    let mut long_done = false;
 
     for k in 0..calibrations {
         let nch = 1 + (rng.next_u64() % 3) as usize;
@@ -266,10 +276,13 @@ fn hybrid_c_alarms_match_rust() {
 
         let mut cases = Vec::new();
         for _ in 0..per_calib {
-            let n = 1500;
+            // One long stream per run takes the C ring phase counter past its
+            // wrap (HYB_PHASE = WINDOW * ROLL * DFA_STRIDE = 18432 samples).
+            let n = if long_done { 1500 } else { 40_000 };
+            long_done = true;
             let mut stream: Vec<Vec<f64>> = procs.iter().map(|&p| series(&mut rng, p, n)).collect();
             let ch = (rng.next_u64() % nch as u64) as usize;
-            let at = 300 + (rng.next_u64() % 900) as usize;
+            let at = n - 1200 + (rng.next_u64() % 900) as usize;
             let fault = inject(&mut rng, &mut stream, ch, at, procs[ch].scale);
             *kinds.entry(fault.to_string()).or_default() += 1;
             cases.push(Case { label: format!("calib {k} nch {nch} ch {ch} {fault}@{at}"), stream });

@@ -44,3 +44,7 @@ generated-hybrid-c-equals-rust	fast	0	cargo test -q --test hybrid_c_matches_rust
 generated-c-monitor-and-cfs-equal-rust	fast	0	cargo test -q --test c_monitor_matches_rust -- --nocapture	c_monitor_matches_rust: window 512 compared && c_monitor_matches_rust: window 64 compared && c_monitor_matches_rust: window 72 compared && cfs_app_time_order: compared && test result: ok. 2 passed
 control-index-column-ignored	fast	1	awk 'BEGIN{print "t,value"} {print NR-1","$0}' data/sylv_spike.csv | struktura guard -	not monitoring t && 2 faults detected across 667 samples (0 adaptations, 0 quarantines)
 control-epoch-subsecond-column-ignored	fast	1	awk 'BEGIN{print "t,value"} {printf "%.3f,%s\n",1727000000+(NR-1)*0.1,$0}' data/sylv_spike.csv | struktura guard -	not monitoring t && 2 faults detected across 667 samples (0 adaptations, 0 quarantines)
+# esa-adb-mission1 (not run by this script: needs the ESA-ADB repository, the Mission 1 download
+#   and Python 3.8, about 14 minutes): docs/scoreboard/esa-adb.md, struktura 38cb83e, 3/29 Anomaly
+#   events at p = 0.048 against 20 time shifts. Re-run with that page's commands before quoting it
+#   for a later version.
