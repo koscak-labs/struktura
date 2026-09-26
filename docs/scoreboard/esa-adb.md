@@ -46,7 +46,9 @@ from the raw files, they gave:
 - identical guard predictions and 20 shifts;
 - 125 of 126 metric values equal and none different.
 
-The numbers here are from the same scripts on 38cb83e.
+The numbers here are from the same scripts on 38cb83e. They were rerun on ccd86c5, the DFA flat-box
+fix, which is on master as 64086cb. Guard's prediction matrix came out byte-identical, so the
+numbers hold. Guard's DFA check raised no alarm on this data before or after the fix.
 
 Guard over the 7.36 million test rows:
 - 136 alarms and no rolled-back adaptations;
