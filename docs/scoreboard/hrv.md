@@ -11,7 +11,7 @@ report? And does it add anything to conventional HRV measures?
 
 ## Protocol
 
-Written down before the first run.
+Written down before the first run: see [the protocol and first-run logs](preregistration-2026-09-26.md).
 
 - **Inputs:** NN intervals, taken from consecutive annotation pairs where both beats are normal
   (N), keeping 0.3-2.0 s. The example reads the WFDB `.ecg` annotation files directly.
@@ -27,7 +27,7 @@ Written down before the first run.
   segment's intervals and destroys their order. The protocol specified one shuffle; this example
   runs 20 and reports the median AUC and the range.
 
-## Results (struktura master 9d297d1, 2026-09-26)
+## Results (struktura master a49534a, 2026-09-26)
 
 | measure | healthy median | heart failure median | AUC, lower = heart failure |
 |---|---|---|---|
@@ -67,13 +67,27 @@ Written down before the first run.
 ## Reproduce
 
 ```
-# download nsr2db and chf2db from PhysioNet into one folder (RECORDS, *.hea, *.ecg)
-PHYSIONET_DIR=path/to/physionet cargo run --release --example hrv_eval
+for db in nsr2db chf2db; do
+  mkdir -p physionet/$db && cd physionet/$db
+  curl -fsSLO https://physionet.org/files/$db/1.0.0/SHA256SUMS.txt
+  for f in $(grep -oE '[^ ]+\.(hea|ecg)$|RECORDS$' SHA256SUMS.txt); do
+    curl -fsSLO https://physionet.org/files/$db/1.0.0/$f
+  done
+  grep -E ' (RECORDS|[^ ]+\.(hea|ecg))$' SHA256SUMS.txt | sha256sum -c --quiet - && cd ../..
+done
+PHYSIONET_DIR=physionet cargo run --release --example hrv_eval
 ```
 
+The numbers came from PhysioNet version 1.0.0 of both databases. Every file used (RECORDS, `.hea`,
+`.ecg`: 109 for nsr2db, 59 for chf2db) matches that version's published checksums. The checksum
+lists themselves have SHA-256 `8c4a45bc0cfcee86ac3427425d3e82d0194242de289d9efa7df99d823d50b4f9`
+(nsr2db) and `3a8cc781670b9cd85e3ab888bef73c74e9d486e6ff5937ac63ab34513eac5e3b` (chf2db).
+
 Source: [examples/hrv_eval.rs](../../examples/hrv_eval.rs). The run above prints every number on
-this page.
-- Every number that does not depend on a random generator matches the first run, which used the
-  published Python wheel 1.8.7.
+this page. Master 9d297d1 gave the same output.
+
+The protocol was first run in Python on the published wheel 1.8.7. Its logs are in
+[preregistration-2026-09-26.md](preregistration-2026-09-26.md).
+- Every number that does not depend on a random generator matches that run.
 - That run used a single shuffle (control AUC 0.471) and its own resampling (alpha1 CI
   [0.722, 0.919]).

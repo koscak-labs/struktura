@@ -125,6 +125,7 @@ fn record(dir: &str, db: &str, rec: &str) -> Record {
         .and_then(|f| f.split(['/', '(']).next()?.parse().ok())
         .expect("fs");
     let rr = nn_intervals(&read_annotations(&format!("{dir}/{db}/{rec}.ecg")), fs);
+    assert!(!rr.is_empty(), "{db}/{rec}: no NN intervals");
     let n = rr.len() as f64;
     let mean_nn = rr.iter().sum::<f64>() / n;
     let d2: f64 = rr.windows(2).map(|p| (p[1] - p[0]).powi(2)).sum();
@@ -291,6 +292,10 @@ fn main() {
     let mut recs = Vec::new();
     for db in ["nsr2db", "chf2db"] {
         let list = std::fs::read_to_string(format!("{dir}/{db}/RECORDS")).expect("read RECORDS");
+        assert!(
+            list.split_whitespace().next().is_some(),
+            "{dir}/{db}/RECORDS lists no records"
+        );
         for rec in list.split_whitespace() {
             recs.push(record(&dir, db, rec));
         }

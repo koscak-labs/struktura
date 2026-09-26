@@ -6,9 +6,10 @@
 //! (the archive's KDD Cup 2021 convention: a tolerance window, not exact localisation).
 //!
 //! Methods, fixed before running:
-//! - guard: the streaming monitor as `struktura guard` runs it (AutoPilot), calibrated on
-//!   the last min(train_end, 20000) training rows; prediction = row of the first alarm or
-//!   rolled-back adaptation in the test part; no event = no prediction (a miss).
+//! - guard: AutoPilot (the monitor behind `struktura guard` and the Python `Guard`) with its
+//!   default configuration, calibrated on the last min(train_end, 20000) training rows (the
+//!   CLI calibrates on its own split instead); prediction = row of the first alarm or
+//!   rolled-back adaptation in the test part; no event, or no calibration, = a miss.
 //! - offline dfa: rolling dfa_short alpha, window 128, stride 16; baseline = median and
 //!   MAD * 1.4826 of windows inside the training part; prediction = centre of the test
 //!   window with the largest robust z.
@@ -51,18 +52,18 @@ fn hit(p: Option<usize>, s: &Series) -> bool {
     p.is_some_and(|r| r + 100 >= s.begin && r <= s.end + 100)
 }
 
-fn guard(s: &Series) -> Option<usize> {
+/// Outer None: the training rows could not calibrate a monitor.
+fn guard(s: &Series) -> Option<Option<usize>> {
     let calib = s.x[s.train_end.saturating_sub(20000)..s.train_end].to_vec();
-    let mon = HybridMonitor::calibrate(&[calib])?;
-    let mut ap = AutoPilot::new(mon);
+    let mut ap = AutoPilot::new(HybridMonitor::calibrate(&[calib])?);
     for (i, &v) in s.x[s.train_end..].iter().enumerate() {
         for e in ap.push(&[v], &[true]) {
             if matches!(e, Event::Alarm { .. } | Event::RolledBack { .. }) {
-                return Some(s.train_end + i + 1);
+                return Some(Some(s.train_end + i + 1));
             }
         }
     }
-    None
+    Some(None)
 }
 
 fn median(v: &mut [f64]) -> f64 {
@@ -158,11 +159,14 @@ fn main() {
     files.sort();
     let series: Vec<Series> = files.iter().map(|p| load(p)).collect();
     let n = series.len();
+    assert!(n > 0, "no *.txt series in UCR_DIR={dir}");
 
     let names = ["guard", "offline dfa", "first difference", "raw z"];
+    let guards: Vec<Option<Option<usize>>> = series.iter().map(guard).collect();
     let preds: Vec<[Option<usize>; 4]> = series
         .iter()
-        .map(|s| [guard(s), offline_dfa(s), first_difference(s), raw_z(s)])
+        .zip(&guards)
+        .map(|(s, g)| [g.flatten(), offline_dfa(s), first_difference(s), raw_z(s)])
         .collect();
     let hits: Vec<[bool; 4]> = series
         .iter()
@@ -204,18 +208,23 @@ fn main() {
     let silent: Vec<usize> = (0..n).filter(|&i| preds[i][0].is_none()).collect();
     let rate = |idx: &[usize], k: usize| idx.iter().filter(|&&i| hits[i][k]).count();
     println!(
-        "guard alarmed on {}/{} series; its first alarm was within tolerance on {} of them",
+        "guard alarmed on {}/{} series; its first alarm was within tolerance on {} of them; \
+         training rows too short to calibrate on {} series (counted as misses)",
         alarmed.len(),
         n,
-        rate(&alarmed, 0)
+        rate(&alarmed, 0),
+        guards.iter().filter(|g| g.is_none()).count()
     );
-    println!(
-        "those series are easier for every method: first difference {}/{} there vs {}/{} on the series where guard stayed silent",
-        rate(&alarmed, 2),
-        alarmed.len(),
-        rate(&silent, 2),
-        silent.len()
-    );
+    for k in [1, 2, 3] {
+        println!(
+            "{} on the series guard alarmed on: {}/{}; on the series it stayed silent on: {}/{}",
+            names[k],
+            rate(&alarmed, k),
+            alarmed.len(),
+            rate(&silent, k),
+            silent.len()
+        );
+    }
     let only = (0..n)
         .filter(|&i| (hits[i][0] || hits[i][1]) && !hits[i][2] && !hits[i][3])
         .count();
