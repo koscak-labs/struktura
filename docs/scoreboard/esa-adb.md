@@ -57,8 +57,8 @@ Guard over the 7.36 million test rows:
 |---|---|---|---|---|---|
 | Anomaly (29) | event-wise recall | **0.103** (3 events) | 0.010 | 0.034 | 0.048 |
 | | event-wise F0.5 | 0.035 | 0.003 | 0.009 | 0.048 |
-| | channel F0.5 | 0.085 | 0.006 | 0.031 | 0.048 |
 | | affiliation F0.5 | 0.429 | 0.333 | 0.421 | 0.048 |
+| | channel F0.5 | 0.085 | 0.006 | 0.031 | 0.048 |
 | | alarming precision | 0.167 | 0.212 | 1.000 | 0.33 |
 | Rare Event or Anomaly (65) | event-wise recall | **0.169** (11 events) | 0.015 | 0.031 | 0.048 |
 | | event-wise F0.5 | 0.111 | 0.008 | 0.017 | 0.048 |
