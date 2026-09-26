@@ -6,8 +6,9 @@
 //! - α ≈ 0.7: moderate correlation (typical heterochromatin)
 //! - α ≈ 0.5: near-random (structural desert, repetitive elements)
 //!
-//! Human chr1 α=0.987 vs chimp chr1 α=0.936 — human DNA has 5.4%
-//! stronger structural memory (measured, not claimed).
+//! Bundled human chr1 (data/genome/chr1_human.fa.gz), GC% in 1 kb windows:
+//! overall α=0.967, R²=0.980 (docs/claims.tsv: genome-chr1-alpha). No chimp
+//! sequence is bundled, so no human-vs-chimp comparison is made here.
 
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;

@@ -18,7 +18,7 @@ struktura spacecraft  # multi-channel monitor
 
 ## 🔧 bearing & rotating machinery
 
-DFA scaling exponent increases consistently toward bearing failure — proven on the CWRU bearing dataset (3 fault types, all detected, R² > 0.99). this is predictive maintenance: know the bearing is degrading before it fails.
+a bearing fault can change the structure of its vibration. on the bundled CWRU excerpts (normal vs inner-race fault) α drops from 0.689 to 0.183 while RMS amplitude rises 11%. these are two separate recordings, not a run to failure; on the IMS run-to-failure bearing a plain RMS threshold trips earlier than the α alarm, so this is not an early-warning result (REPRODUCIBILITY.md).
 
 ```
 struktura demo                    # built-in CWRU data
@@ -40,7 +40,7 @@ cargo run --example cardiac_hrv -- apple_hrv.csv   # your export
 
 ## 🛰️ GNSS satellite signals
 
-DFA detects ionospheric scintillation — when the atmosphere disrupts GPS/Galileo signal structure. catches positioning degradation before the receiver reports errors.
+ionospheric scintillation disrupts GPS/Galileo signal structure, and DFA of receiver SNR is one way to look at it (see the citation). the example below is a synthetic demo; struktura has not been evaluated on real receiver data.
 
 ```
 cargo run --example gnss_signal                  # synthetic demo
@@ -51,7 +51,7 @@ cargo run --example gnss_signal -- snr_log.csv   # your receiver data
 
 ## 📖 text & writing rhythm
 
-human prose has long-range correlations in sentence lengths (α ≈ 0.7-0.9). AI-generated text has different structure. shuffling destroys it — proof that DFA measures sequential organization, not statistics.
+prose can have long-range correlations in sentence lengths, and shuffling the sentences destroys that order while keeping the length distribution, which is how to check that α measures sequence and not statistics. the bundled sample is already shuffled Austen (α=0.573); the unshuffled original is not shipped, and no human-vs-AI comparison has been measured.
 
 ```
 struktura text novel.txt
@@ -67,7 +67,7 @@ struktura market prices.csv
 
 ## 🧬 genome sequences
 
-chromosomal DNA has long-range correlation structure. α > 0.5 across all tested chromosomes (8 chromosomes, R² > 0.99). structural patterns correlate with functional boundaries.
+chromosomal DNA has long-range correlation structure in base composition. bundled human chr1, GC% in 1 kb windows: α=0.967, R²=0.980 (docs/claims.tsv: genome-chr1-alpha). one chromosome is bundled; other chromosomes are not measured here.
 
 ```
 struktura genome sequence.fa

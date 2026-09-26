@@ -4,6 +4,31 @@ All notable changes to Struktura are documented here.
 
 ## Unreleased
 
+- Claims corrected to what the code and data show (audit findings, plus
+  what checking them turned up):
+  - `struktura demo` printed "The bearing's vibration structure changed
+    BEFORE any amplitude threshold would have fired". The demo compares two
+    separate recordings, so it shows no timing, and on the IMS run-to-failure
+    bearing a plain RMS threshold trips first. It now prints the RMS
+    amplitude of both recordings (0.081 -> 0.090, +11%, pinned in the
+    claims ledger) next to α (0.689 -> 0.183). The same claim is gone from
+    docs/src/dfa.md and USE_CASES.md, whose bearing paragraph also said α
+    "increases toward failure" (on the bundled data it drops).
+  - `dfa()` and `dfa_scratch()` return the placeholder below 72 samples,
+    not 64: from 64 to 71 `dfa_box_sizes` gives fewer than 3 box sizes. The
+    docs say so; a test pins the boundary.
+  - GUARANTEES.md said there is no unsafe code; the C interface has 8
+    `unsafe extern "C"` functions and one `static mut`.
+  - src/genome.rs quoted human-vs-chimp α values that cannot be reproduced
+    (the chimp file in data/genome is an HTML 404 page); USE_CASES.md claimed
+    8 chromosomes with R² > 0.99. Both now quote the ledgered chr1 result
+    (α 0.967, R² 0.980). USE_CASES.md no longer claims that GNSS monitoring
+    catches degradation before the receiver (the example is synthetic) or
+    that AI text has a different structure (not measured).
+  - bench/compare/RESULTS.md: 10 of 58 NAB series timed out for the
+    isolation forest (the run log has 10), not 11. README: `--help` does not
+    list every command. CITATION.cff said 1.8.0; llms.txt said 1.7.2 and
+    linked a `main` branch that does not exist.
 - AutoPilot during a recalibration (found by the six-dimension audit, each
   finding reproduced by an independent verifier):
   - A channel quarantined while a new baseline was collected got its new

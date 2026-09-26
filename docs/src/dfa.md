@@ -20,9 +20,9 @@ The scaling exponent alpha is the slope of log *F(s)* vs log *s*.
 | ~1.0 | 1/f noise (pink noise) |
 | > 1.0 | Non-stationary / trend-dominated |
 
-## Why it works for anomaly detection
+## When it helps anomaly detection
 
-Healthy complex systems maintain a characteristic alpha. When the system degrades, alpha shifts — often before any amplitude-based monitor fires. The structure changes first.
+Many healthy systems keep a characteristic alpha, and some faults change it. Whether alpha moves before an amplitude monitor fires depends on the fault. On the bundled CWRU bearing excerpts alpha drops from 0.689 to 0.183 while RMS amplitude rises 11% (`struktura demo`). On the IMS run-to-failure bearing a plain RMS threshold trips earlier than the alpha alarm (see REPRODUCIBILITY.md). So alpha complements amplitude checks; it does not replace them.
 
 ## References
 

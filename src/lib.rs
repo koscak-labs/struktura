@@ -181,7 +181,7 @@ impl HealthVerdict {
 /// Compute the DFA scaling exponent of a time series.
 ///
 /// Returns alpha (the scaling exponent) and R-squared (fit quality).
-/// Requires at least 64 data points.
+/// Requires at least 72 data points.
 ///
 /// **Warning:** Any upstream preprocessing (filtering, detrending, artifact
 /// rejection) changes the signal's correlation structure and shifts alpha.
@@ -194,12 +194,13 @@ impl HealthVerdict {
 /// assert!(result.r_squared >= 0.0);
 /// ```
 ///
-/// Below 64 samples this returns the placeholder `alpha: 0.5, r_squared: 0.0`,
-/// which is not a measurement. Check `r_squared`, or use [`dfa_short`] for
-/// short series. From 64 to roughly 128 samples the box sizes (from 16 to
-/// n/4, see [`dfa_box_sizes`]) span a narrow range and α is noisy (values
-/// near 10 have been seen on 72-sample random walks); prefer [`dfa_short`]
-/// there too.
+/// Below 72 samples this returns the placeholder `alpha: 0.5, r_squared: 0.0`,
+/// which is not a measurement: below 64 by the length check, and from 64 to
+/// 71 because [`dfa_box_sizes`] gives fewer than 3 box sizes. Check
+/// `r_squared`, or use [`dfa_short`] for short series. From 72 to roughly 128
+/// samples the box sizes (from 16 to n/4) span a narrow range and α is noisy
+/// (values near 10 have been seen on 72-sample random walks); prefer
+/// [`dfa_short`] there too.
 #[must_use]
 pub fn dfa(values: &[f64]) -> DfaResult {
     let n = values.len();
@@ -450,8 +451,8 @@ pub fn dfa_into(values: &[f64], buf: &mut Vec<f64>) -> DfaResult {
 ///
 /// `scratch` must hold at least `values.len()` elements; only the first
 /// `values.len()` are written. Returns the neutral result
-/// (`alpha = 0.5`, `r_squared = 0.0`) for fewer than 64 samples or a scratch
-/// slice that is too short.
+/// (`alpha = 0.5`, `r_squared = 0.0`) for fewer than 72 samples (see [`dfa`])
+/// or a scratch slice that is too short.
 ///
 /// ```
 /// use struktura::dfa_scratch;
@@ -920,6 +921,21 @@ impl BaselineTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dfa_is_a_placeholder_below_72_samples() {
+        // Below 64 by the length check; 64..=71 because dfa_box_sizes gives
+        // fewer than 3 box sizes.
+        let mut scratch = [0.0; 72];
+        for n in 0..72 {
+            let v = white_noise(n, 7);
+            for r in [dfa(&v), dfa_scratch(&v, &mut scratch)] {
+                assert!(r.alpha == 0.5 && r.r_squared == 0.0, "n = {n}: {r:?}");
+            }
+        }
+        let v = white_noise(72, 7);
+        assert!(dfa(&v).r_squared > 0.0 && dfa_scratch(&v, &mut scratch).r_squared > 0.0);
+    }
 
     fn white_noise(n: usize, seed: u64) -> Vec<f64> {
         let mut state = seed;

@@ -24,4 +24,4 @@ If R-squared < 0.3, quality = Abstain. The crate will not diagnose a signal it c
 - All public types and functions follow semantic versioning.
 - Enums are `#[non_exhaustive]` — new variants may be added in minor versions.
 - The DFA algorithm is deterministic: same input always produces the same output.
-- No unsafe code anywhere in the crate.
+- No unsafe code outside the C interface: `src/ffi.rs` and `src/rover_flight.rs` export 8 `unsafe extern "C"` functions (raw-pointer arguments from C callers) and `src/rover_flight.rs` keeps one `static mut` monitor for them. Each exported function documents its `# Safety` contract. The Rust API itself is safe code.

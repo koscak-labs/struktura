@@ -447,7 +447,7 @@ The run is deterministic (seeded; two runs gave byte-identical output) and takes
 | `generate` | C99 / cFS / F´ / ROS code generation |
 | `pipe` | streaming DFA from stdin (Prometheus, MQTT, tail) |
 
-`struktura --help` lists everything.
+`struktura --help` lists the main commands; `smap`, `spacecraft`, `redblue`, `evolve`, `generate` and `pipe` are only in the table above.
 
 ## 🐳 Docker, Python, shell
 

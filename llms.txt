@@ -25,11 +25,11 @@ Hurst exponent.
 
 ## Docs
 
-- [README](https://github.com/koscak-labs/struktura/blob/main/README.md): quickstart, CLI examples, use cases, benchmarks
-- [USE_CASES.md](https://github.com/koscak-labs/struktura/blob/main/USE_CASES.md): domain-by-domain use cases with citations
-- [GUARANTEES.md](https://github.com/koscak-labs/struktura/blob/main/GUARANTEES.md): what the crate does and does not do
-- [REPRODUCIBILITY.md](https://github.com/koscak-labs/struktura/blob/main/REPRODUCIBILITY.md): every measured claim mapped to a runnable command
-- [docs/COMPARISON.md](https://github.com/koscak-labs/struktura/blob/main/docs/COMPARISON.md): honest comparison vs. Python/Rust alternatives
+- [README](https://github.com/koscak-labs/struktura/blob/master/README.md): quickstart, CLI examples, use cases, benchmarks
+- [USE_CASES.md](https://github.com/koscak-labs/struktura/blob/master/USE_CASES.md): domain-by-domain use cases with citations
+- [GUARANTEES.md](https://github.com/koscak-labs/struktura/blob/master/GUARANTEES.md): what the crate does and does not do
+- [REPRODUCIBILITY.md](https://github.com/koscak-labs/struktura/blob/master/REPRODUCIBILITY.md): every measured claim mapped to a runnable command
+- [docs/COMPARISON.md](https://github.com/koscak-labs/struktura/blob/master/docs/COMPARISON.md): honest comparison vs. Python/Rust alternatives
 - [API docs (docs.rs)](https://docs.rs/struktura)
 - [crates.io](https://crates.io/crates/struktura)
 
@@ -46,5 +46,5 @@ Hurst exponent.
 
 ## Citation
 
-If referencing struktura, cite via [CITATION.cff](https://github.com/koscak-labs/struktura/blob/main/CITATION.cff)
-(version 1.7.2). License: MIT OR Apache-2.0.
+If referencing struktura, cite via [CITATION.cff](https://github.com/koscak-labs/struktura/blob/master/CITATION.cff).
+License: MIT OR Apache-2.0.

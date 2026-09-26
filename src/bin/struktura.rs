@@ -412,8 +412,11 @@ fn cmd_demo() {
     println!();
     println!("  Verdict: {}\x1b[1m{}\x1b[0m", color, verdict_label);
     println!();
-    println!("  The bearing's vibration structure changed BEFORE");
-    println!("  any amplitude threshold would have fired.");
+    // Two separate recordings, so this compares size, not timing.
+    let rms = |v: &[f64]| (v.iter().map(|x| x * x).sum::<f64>() / v.len() as f64).sqrt();
+    let (rms_n, rms_f) = (rms(&normal), rms(&fault));
+    println!("  RMS amplitude:   {:.3} -> {:.3}  ({:+.0}%)", rms_n, rms_f, 100.0 * (rms_f / rms_n - 1.0));
+    println!("  On these two recordings alpha moves far more than amplitude.");
     println!();
     println!("  No training. No hyperparameters. Just math.");
     println!("  https://crates.io/crates/struktura");
