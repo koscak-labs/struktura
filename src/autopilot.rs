@@ -270,7 +270,18 @@ impl AutoPilot {
                     }
                 }
                 self.monitor.reset();
-                if failure.is_none() && buffer[0].len() >= *target {
+                // A buffer in which no live channel ever changed is a data
+                // outage (forward-filled gaps), not a new regime: on ESA-ADB a
+                // recalibration accepted 700 constant samples on all six
+                // channels, and the channels calibrated on it could not be
+                // judged afterwards. Keep the current monitor instead.
+                let outage = buffer[0].len() >= *target
+                    && (0..self.channels).all(|ch| {
+                        self.quarantined[ch] || buffer[ch].windows(2).all(|w| w[0] == w[1])
+                    });
+                if outage {
+                    self.mode = Mode::Monitoring;
+                } else if failure.is_none() && buffer[0].len() >= *target {
                     match HybridMonitor::calibrate(buffer) {
                         Some(mut candidate) => {
                             for ch in 0..self.channels {
@@ -594,6 +605,64 @@ mod tests {
             out[2].push(c);
         }
         out
+    }
+
+    /// A data outage that freezes every channel (gaps forward-filled) while an
+    /// adaptation collects its new baseline must not become that baseline.
+    /// Quantized telemetry repeats values often, so its calibration switches
+    /// the stuck check off and nothing ends the collection: the candidate was
+    /// calibrated on constant data and accepted (the ESA-ADB recalibration at
+    /// row 2,522,316, on 700 constant samples of all six channels).
+    #[test]
+    fn outage_is_not_accepted_as_a_new_baseline() {
+        let quantized = |n: usize, seed: u64| -> Vec<Vec<f64>> {
+            let mut rng = crate::telemetry_bench::GaussRng::new(seed);
+            let mut s = 0.0f64;
+            let mut out: Vec<Vec<f64>> = (0..2).map(|_| Vec::with_capacity(n)).collect();
+            for _ in 0..n {
+                s = 0.97 * s + rng.normal(0.0, 0.3);
+                out[0].push((s * 2.0).floor());
+                out[1].push((s * 2.0 + rng.normal(0.0, 0.2)).floor());
+            }
+            out
+        };
+        let calib = quantized(3000, 77);
+        let stream = quantized(8000, 78);
+        let mon = HybridMonitor::calibrate(&calib).expect("calibration");
+        assert!(
+            !mon.export().channels.iter().any(|c| c.repeat_enabled),
+            "the scenario needs the stuck check off, as on ESA-ADB"
+        );
+        let mut ap = AutoPilot::new(mon);
+        let (mut adapting, mut accepted_in_outage) = (None, false);
+        let mut frozen = [0.0f64; 2];
+        for t in 0..8000 {
+            let mut sample = [stream[0][t], stream[1][t]];
+            // A level change, then from its first adaptation on, an outage.
+            if t >= 2000 {
+                sample[0] += 20.0;
+                sample[1] += 20.0;
+            }
+            if let Some(a) = adapting {
+                if t >= a && t < a + 3000 {
+                    sample = frozen;
+                }
+            }
+            frozen = sample;
+            for ev in ap.push(&sample, &[true; 2]) {
+                match ev {
+                    Event::AdaptationStarted { tick } if adapting.is_none() => adapting = Some(tick as usize),
+                    Event::Recalibrated { tick } => {
+                        if let Some(a) = adapting {
+                            accepted_in_outage |= (tick as usize) < a + 3000;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert!(adapting.is_some(), "the level change must start an adaptation");
+        assert!(!accepted_in_outage, "a baseline collected during the outage was accepted");
     }
 
     /// A channel that is quarantined when a regime change is adapted to must
