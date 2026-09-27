@@ -4,6 +4,39 @@ All notable changes to Struktura are documented here.
 
 ## Unreleased
 
+- The stuck-sensor limit is extrapolated to the design horizon, like
+  every other leg's threshold. It was the longest run of a repeated value
+  seen in calibration plus 4: one sample of a tail. On a 400-sample
+  recalibration buffer it moved by one between near-identical buffers.
+  One sample of limit tripled an ESA-ADB channel's stuck alarms (traced by
+  the oura-0c session), and that is what sank two parity redesigns there.
+  Runs are now modelled as geometric, with the repeat probability measured
+  over the whole calibration. The limit is the first run length expected
+  less than once per design horizon, never below the old limit, so every
+  stick the old rule caught is still caught. The exported `max_run`
+  carries it, so the generated C uses the same limit.
+  - NAB: windows unchanged, false alarms 45 -> 41 (default), 44 -> 40
+    (`--quiet-drift`), 53 -> 50 (`--sensitivity high`). Stuck false alarms
+    at default: 9 -> 5.
+  - Unchanged: every bundled CSV's `guard`, `guard --json` and
+    `copilot-compare` output, the oura-26 recovery set (167 outputs), and
+    the rover harness.
+  - ESA-ADB Mission 1, Amendment 17, run by the
+    github-profile-space-robotics session:
+    - Events: alarms 136 -> 76, quarantines 138 -> 68, channel 45's
+      quarantines 48 -> 18. The run's event stream is byte-identical to a
+      Rust replica of the evaluation.
+    - Official scores against 20 time shifts: event-wise recall unchanged
+      (Anomaly 3/29, Rare Event + Anomaly 11/65).
+    - Event-wise F0.5 up: Anomaly 0.035 -> 0.083; Rare Event + Anomaly
+      0.111 -> 0.221.
+    - Anomaly affiliation F0.5 0.429 -> 0.452.
+    - Rare Event + Anomaly affiliation F0.5 0.479 -> 0.468 and alarming
+      precision 0.289 -> 0.268.
+  - Test: repeat_limit_extrapolates_chance_runs_to_the_design_horizon.
+    On clean data with repeat probability 0.2, master raises chance stuck
+    alarms; the new limit raises none, and a 500-sample stick is still
+    caught.
 - Python and WASM `Guard` merged repeat alarms per detector leg, although
   their docs said "same rule as the CLI". The CLI merges per (channel, leg)
   since b0a8719. Keyed on the leg alone, one channel's repeats hid another

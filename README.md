@@ -77,8 +77,8 @@ Reproduce with `cargo run --release --example structure_vs_amplitude` (0.4 s), o
 
 | detector (116 labelled windows) | windows caught | false alarms | per 1,000 samples | streaming | builds for Cortex-M |
 |---|---|---|---|---|---|
-| **struktura `guard`** | 45 | **45** | **0.15** | yes | **yes** |
-| **struktura `guard --sensitivity high`** | 55 | 53 | 0.18 | yes | **yes** |
+| **struktura `guard`** | 45 | **41** | **0.14** | yes | **yes** |
+| **struktura `guard --sensitivity high`** | 55 | 50 | 0.17 | yes | **yes** |
 | extended-isolation-forest 0.2.3 | 47 | 168 | 0.56 | no (batch) | no |
 | limit check (1.5 × p95, 3 in a row) | 48 | 240 | 0.80 | yes | trivial |
 | EWMA chart (λ 0.2, 3σ) | 68 | 758 | 2.53 | yes | trivial |
@@ -86,9 +86,9 @@ Reproduce with `cargo run --release --example structure_vs_amplitude` (0.4 s), o
 | ankane STL (anomaly_detection 0.4.0) | 69 | 954 | 3.19 | no (batch) | no |
 | grafana augurs BOCPD (augurs-changepoint 0.10.2) | 77 | 1,461 | 4.88 | no (batch) | no |
 
-`guard` raises by far the fewest false alarms and, at its default setting, catches the fewest windows. That trade suits paging a person, where false alarms are what gets a monitor switched off. `--sensitivity high` catches more windows than the limit check (55 vs 48) with under a quarter of its false alarms (54 vs 240). That setting was chosen from a sweep of five on this same benchmark (before sensor recovery existed), so treat it as optimistic; on clean synthetic slow-wander streams it raises 2-3 false alarms in 30 where the default raises none. If you need to catch every labelled window and can triage many alarms, BOCPD, STL or even an EWMA chart catch more. The isolation forest timed out on 10 of the 58 series (quantized values) and those count as no alarms, so its row understates it; it is not seeded, so its row varies between runs (182 false alarms in an earlier run). On the clean control series every detector here is silent.
+`guard` raises by far the fewest false alarms and, at its default setting, catches the fewest windows. That trade suits paging a person, where false alarms are what gets a monitor switched off. `--sensitivity high` catches more windows than the limit check (55 vs 48) with about a fifth of its false alarms (50 vs 240). That setting was chosen from a sweep of five on this same benchmark (before sensor recovery existed), so treat it as optimistic; on clean synthetic slow-wander streams it raises 2-3 false alarms in 30 where the default raises none. If you need to catch every labelled window and can triage many alarms, BOCPD, STL or even an EWMA chart catch more. The isolation forest timed out on 10 of the 58 series (quantized values) and those count as no alarms, so its row understates it; it is not seeded, so its row varies between runs (182 false alarms in an earlier run). On the clean control series every detector here is silent.
 
-Up to 1.8.7 these rows were lower (default 36 windows, 35 false alarms; high 49 and 48): a sensor `guard` quarantined, for example a series that sat on one value for a while, stayed quarantined for good, so the rest of that series was never watched. Now a quarantined sensor is checked on its own readings and comes back after 192 healthy samples in a row. That recovery rule was set in advance, not tuned on NAB. The opt-in `--quiet-drift` changes little (45 → 44 false alarms, 45 → 44 windows).
+Up to 1.8.7 these rows were lower (default 36 windows, 35 false alarms; high 49 and 48): a sensor `guard` quarantined, for example a series that sat on one value for a while, stayed quarantined for good, so the rest of that series was never watched. Now a quarantined sensor is checked on its own readings and comes back after 192 healthy samples in a row. That recovery rule was set in advance, not tuned on NAB. The opt-in `--quiet-drift` changes little (41 → 40 false alarms, 45 → 44 windows).
 
 Reproduce: clone NAB (commit `ea702d7`) and run `NAB_DIR=path/to/NAB cargo run --release --example nab_eval` for `guard` and the limit check (weekly in CI), or `cargo run --release` in [bench/compare](bench/compare/) for every detector above ([RESULTS.md](bench/compare/RESULTS.md)).
 
