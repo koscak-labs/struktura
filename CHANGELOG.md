@@ -4,6 +4,14 @@ All notable changes to Struktura are documented here.
 
 ## Unreleased
 
+- Python and WASM `Guard` merged repeat alarms per detector leg, although
+  their docs said "same rule as the CLI". The CLI merges per (channel, leg)
+  since b0a8719. Keyed on the leg alone, one channel's repeats hid another
+  channel's alarms. On ESA-ADB Mission 1 (the evaluation uses the Python
+  binding), master reports 180 alarms with the CLI's rule and 136 with the
+  old one; the monitor's decisions are the same. The ESA-ADB scores on
+  docs/scoreboard/esa-adb.md were made with the old rule and are to be
+  rescored.
 - Pre-release documentation fixes, from a verified audit of everything
   changed since 1.8.7:
   - NAB false-alarm counts in bench/compare/RESULTS.md (46/45 -> 45/44)
