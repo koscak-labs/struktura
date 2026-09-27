@@ -44,8 +44,8 @@ No detector was tuned on NAB labels, including struktura.
 
 | detector | windows caught / 116 | false alarms | FA / 1000 samples |
 |---|---:|---:|---:|
-| struktura guard (default) | 45 | 45 | 0.15 |
-| struktura guard (quiet_drift) | 44 | 44 | 0.15 |
+| struktura guard (default) | 45 | 41 | 0.14 |
+| struktura guard (quiet_drift) | 44 | 40 | 0.13 |
 | augurs-changepoint BOCPD | 77 | 1461 | 4.88 |
 | ankane STL (anomaly_detection) | 69 | 954 | 3.19 |
 | extended-isolation-forest* | 47 | 168 | 0.56 |
@@ -105,7 +105,7 @@ std-only transitive dependencies (`once_cell`/`wide`/`stlrs`/`getrandom`), none 
 - **Window recall on NAB is struktura's weakest number here.** 45/116 (guard default) and
   44/116 (quiet_drift) windows caught is the *lowest* of all 8 detectors. BOCPD (77), STL
   (69), EWMA (68) and raw CUSUM (66) catch about 1.5-1.7x as many labeled windows, at 16-32x
-  the false alarms. Struktura's real advantage on NAB is precision (45 false alarms vs.
+  the false alarms. Struktura's real advantage on NAB is precision (41 false alarms vs.
   168-1461 for the others, 0.15/1000 samples vs. 0.56-4.88), not recall. A team optimizing
   purely for "catch every labeled window" gets more hits from BOCPD, STL, EWMA or CUSUM on
   this benchmark.
