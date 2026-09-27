@@ -218,11 +218,13 @@ struct Guard {
 }
 
 /// Same rule as the CLI's guard output: drop an alarm whose detector already
-/// alarmed within `cooldown` samples.
+/// alarmed on the same channel within `cooldown` samples. (Keyed on the leg
+/// alone, as the CLI was before b0a8719, one channel's repeats hid another
+/// channel's alarms: 44 of 180 on ESA-ADB Mission 1.)
 struct Dedup {
     cooldown: u64,
     tick: u64,
-    recent: Vec<(u64, u8)>,
+    recent: Vec<(u64, (usize, u8))>,
 }
 
 impl Dedup {
@@ -230,11 +232,11 @@ impl Dedup {
         Dedup { cooldown, tick: 0, recent: Vec::new() }
     }
 
-    fn repeat(&mut self, t: u64, leg: u8) -> bool {
+    fn repeat(&mut self, t: u64, key: (usize, u8)) -> bool {
         let c = self.cooldown;
-        let dup = self.recent.iter().any(|&(lt, l)| l == leg && t - lt < c);
+        let dup = self.recent.iter().any(|&(lt, k)| k == key && t - lt < c);
         self.recent.retain(|&(lt, _)| t - lt < c);
-        self.recent.push((t, leg));
+        self.recent.push((t, key));
         dup
     }
 }
@@ -287,7 +289,7 @@ impl Guard {
         self.dedup.tick += 1;
         for ev in self.inner.push(&clean, &valid) {
             if let Event::Alarm { report, .. } = &ev {
-                if self.dedup.repeat(tick, report.leg as u8) {
+                if self.dedup.repeat(tick, (report.channel, report.leg as u8)) {
                     continue;
                 }
             }
