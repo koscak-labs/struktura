@@ -265,14 +265,15 @@ pub struct Guard {
     channels: usize,
     cooldown: u64,
     tick: u64,
-    recent: Vec<(u64, u8)>,
+    recent: Vec<(u64, (usize, u8))>,
 }
 
 #[wasm_bindgen]
 impl Guard {
     /// Calibrate on clean data, laid out as for Monitor (channel-major).
-    /// `cooldown` (default 50, as in the CLI): an alarm from the same detector within
-    /// this many samples of its previous one is not reported again; 0 reports all.
+    /// `cooldown` (default 50, as in the CLI): an alarm from the same detector on the
+    /// same channel within this many samples of its previous one is not reported
+    /// again; 0 reports all.
     #[wasm_bindgen(constructor)]
     pub fn new(clean: &[f64], channels: usize, cooldown: Option<u32>) -> Result<Guard, JsError> {
         let m = Monitor::new(clean, channels)?.inner;
@@ -311,12 +312,13 @@ impl Guard {
             .push(&clean, &valid)
             .into_iter()
             .filter(|ev| {
-                // Same rule as the CLI's guard output: drop a repeat of the same detector.
+                // Same rule as the CLI's guard output: drop a repeat of the same
+                // detector on the same channel.
                 let Event::Alarm { report, .. } = ev else { return true };
-                let leg = report.leg as u8;
-                let dup = recent.iter().any(|&(lt, l)| l == leg && t - lt < c);
+                let key = (report.channel, report.leg as u8);
+                let dup = recent.iter().any(|&(lt, k)| k == key && t - lt < c);
                 recent.retain(|&(lt, _)| t - lt < c);
-                recent.push((t, leg));
+                recent.push((t, key));
                 !dup
             })
             .map(|ev| match ev {
