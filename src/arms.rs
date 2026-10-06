@@ -105,7 +105,6 @@ pub struct ArmData {
 }
 
 /// Parse `key=<number>[unit]`; the number is the leading numeric prefix.
-fn metric_token(tok: &str) -> Option<(String, f64)> { metric_token_kind(tok).map(|(k, x, _)| (k, x)) }
 
 /// Like `metric_token`, also accepting pass/fail words (pass ok true yes / fail false no error, any case) as 1/0.
 fn metric_token_kind(tok: &str) -> Option<(String, f64, bool)> {

@@ -38,6 +38,12 @@ pub const INCIDENT_RATIO: f64 = 1.5;
 pub const MIN_SEG_ROWS: usize = 10;
 /// Contention is judged only when both deploys have this many busy rows.
 pub const MIN_BUSY_ROWS: usize = 5;
+/// A deploy's solo speed is judged only with at least this many solo sessions.
+pub const MIN_SOLO_SESSIONS: usize = 8;
+/// Contention is judged only with at least this many sessions that saw a busy neighbour.
+pub const MIN_BUSY_SESSIONS: usize = 5;
+/// A gap longer than this (seconds) on one server slot starts a new session.
+pub const SESSION_GAP_S: u64 = 1800;
 /// A request is "busy" when the other slot worked for at least this share of its lifetime.
 pub const BUSY_CUT: f64 = 0.5;
 
@@ -59,6 +65,9 @@ pub struct Row {
     /// ms per token = ms per step / mlen, so this separates drafter or content
     /// effects from per-step hardware cost. Reported, not modelled.
     pub mlen: f64,
+    /// Conversation / session id (see [`assign_sessions`]). Requests of one session are
+    /// not independent: verdicts weigh sessions equally and resample whole sessions.
+    pub session: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -83,8 +92,11 @@ pub struct Segment {
     pub n: usize,
     pub solo_n: usize,
     pub busy_n: usize,
-    /// Median of `ms - b·ctx_k` over solo requests: the deploy's timing at
-    /// zero context with an idle neighbour.
+    /// Distinct sessions among the solo / busy requests.
+    pub solo_sessions: usize,
+    pub busy_sessions: usize,
+    /// Median over solo sessions of each session's median `ms - b·ctx_k`: the
+    /// deploy's timing at zero context with an idle neighbour, one vote per session.
     pub level_ms: f64,
     /// How much slower a request runs while the other slot is busy, percent
     /// of `level_ms` (NaN when there are too few busy rows).
@@ -203,6 +215,45 @@ fn verdict_of(lo: f64, hi: f64, min_effect: f64) -> Verdict {
     else { Verdict::Inconclusive }
 }
 
+/// Assign session ids to requests. A session is a run of requests on one
+/// server child and slot whose context keeps growing (a conversation); it ends
+/// when the context drops below 90% of the previous request's (a new
+/// conversation, or a compaction) or after [`SESSION_GAP_S`] idle seconds.
+/// Input per request: (child id, slot, start unix s, context in K tokens);
+/// output: one session id per request, in input order.
+pub fn assign_sessions(keys: &[(u64, u64, u64, f64)]) -> Vec<u64> {
+    let mut idx: Vec<usize> = (0..keys.len()).collect();
+    idx.sort_by(|&a, &b| (keys[a].0, keys[a].1, keys[a].2).cmp(&(keys[b].0, keys[b].1, keys[b].2)));
+    let mut out = vec![0u64; keys.len()];
+    let mut sid = 0u64;
+    let mut prev: Option<usize> = None;
+    for &i in &idx {
+        let new = match prev {
+            None => true,
+            Some(p) => keys[p].0 != keys[i].0 || keys[p].1 != keys[i].1
+                || keys[i].2.saturating_sub(keys[p].2) > SESSION_GAP_S
+                || keys[i].3 < 0.9 * keys[p].3,
+        };
+        if new { sid += 1; }
+        out[i] = sid;
+        prev = Some(i);
+    }
+    out
+}
+
+/// Per-session medians of `vals` (paired with session ids), in first-seen order.
+fn session_medians(vals: &[(u64, f64)]) -> Vec<f64> {
+    let mut order: Vec<u64> = Vec::new();
+    let mut groups: Vec<Vec<f64>> = Vec::new();
+    for &(s, v) in vals {
+        match order.iter().position(|&o| o == s) {
+            Some(k) => groups[k].push(v),
+            None => { order.push(s); groups.push(vec![v]); }
+        }
+    }
+    groups.iter_mut().map(|g| median(g)).collect()
+}
+
 /// Analyze timing rows. `min_effect_pct` is the smallest deploy effect the
 /// caller believes (e.g. 2 × calibration CV); `n_boot` bootstrap resamples;
 /// `seed` makes the intervals reproducible.
@@ -223,16 +274,26 @@ pub fn analyze(rows: &[Row], min_effect_pct: f64, n_boot: usize, seed: u64) -> P
     if slope_clamped { b = 0.0; }
 
     let mut segments = Vec::new();
+    // Per segment: one value per SESSION (its median), so a chatty session gets one vote
+    // and the bootstrap resamples sessions, not their correlated requests.
     let mut solo_adj: Vec<Vec<f64>> = Vec::new();
     let mut busy_adj: Vec<Vec<f64>> = Vec::new();
     let mut incidents = Vec::new();
     for &(s, e) in &segs {
-        let sa: Vec<f64> = (s..e).filter(|&i| keep[i]).map(|i| rows[i].ms - b * rows[i].ctx_k).collect();
-        let sa = if sa.len() >= 2 { sa } else { (s..e).filter(|&i| solo[i]).map(|i| rows[i].ms - b * rows[i].ctx_k).collect() };
-        let ba: Vec<f64> = (s..e).filter(|&i| !solo[i]).map(|i| rows[i].ms - b * rows[i].ctx_k).collect();
-        let (level, sd_solo) = if sa.is_empty() { (f64::NAN, 1e-9) } else { robust_scale(&sa) };
-        let (busy_level, sd_busy) = if ba.is_empty() { (f64::NAN, 1e-9) } else { robust_scale(&ba) };
-        let contention_pct = if ba.len() >= MIN_BUSY_ROWS && sa.len() >= 2 { 100.0 * (busy_level - level) / level } else { f64::NAN };
+        let adj = |i: usize| (rows[i].session, rows[i].ms - b * rows[i].ctx_k);
+        let sa_rows: Vec<(u64, f64)> = (s..e).filter(|&i| keep[i]).map(adj).collect();
+        let sa_rows = if sa_rows.len() >= 2 { sa_rows } else { (s..e).filter(|&i| solo[i]).map(adj).collect() };
+        let ba_rows: Vec<(u64, f64)> = (s..e).filter(|&i| !solo[i]).map(adj).collect();
+        let sa_flat: Vec<f64> = sa_rows.iter().map(|x| x.1).collect();
+        let ba_flat: Vec<f64> = ba_rows.iter().map(|x| x.1).collect();
+        let sa = session_medians(&sa_rows);
+        let ba = session_medians(&ba_rows);
+        // Row-level spread drives incident detection; levels are medians of session medians.
+        let (_, sd_solo) = if sa_flat.is_empty() { (f64::NAN, 1e-9) } else { robust_scale(&sa_flat) };
+        let (_, sd_busy) = if ba_flat.is_empty() { (f64::NAN, 1e-9) } else { robust_scale(&ba_flat) };
+        let level = if sa.is_empty() { f64::NAN } else { median(&mut sa.clone()) };
+        let busy_level = if ba.is_empty() { f64::NAN } else { median(&mut ba.clone()) };
+        let contention_pct = if ba.len() >= MIN_BUSY_SESSIONS && sa.len() >= 2 { 100.0 * (busy_level - level) / level } else { f64::NAN };
         if e - s >= MIN_SEG_ROWS && level.is_finite() {
             for i in s..e {
                 let (centre, sd) = if solo[i] || !busy_level.is_finite() { (level, sd_solo) } else { (busy_level, sd_busy) };
@@ -247,9 +308,10 @@ pub fn analyze(rows: &[Row], min_effect_pct: f64, n_boot: usize, seed: u64) -> P
         let mut tp: Vec<f64> = (s..e).map(|i| rows[i].tps).collect();
         let mut cx: Vec<f64> = (s..e).map(|i| rows[i].ctx_k).collect();
         let mut ml: Vec<f64> = (s..e).filter(|&i| solo[i] && rows[i].mlen.is_finite()).map(|i| rows[i].mlen).collect();
-        segments.push(Segment { seg: rows[s].seg, first_row: s, n: e - s, solo_n: sa.len(), busy_n: ba.len(),
+        segments.push(Segment { seg: rows[s].seg, first_row: s, n: e - s, solo_n: sa_flat.len(), busy_n: ba_flat.len(),
+            solo_sessions: sa.len(), busy_sessions: ba.len(),
             level_ms: level, contention_pct, solo_mlen: median(&mut ml), median_ms: median(&mut st), median_tps: median(&mut tp),
-            median_ctx_k: median(&mut cx), busy_share: ba.len() as f64 / (e - s) as f64 });
+            median_ctx_k: median(&mut cx), busy_share: ba_flat.len() as f64 / (e - s) as f64 });
         solo_adj.push(sa);
         busy_adj.push(ba);
     }
@@ -261,7 +323,7 @@ pub fn analyze(rows: &[Row], min_effect_pct: f64, n_boot: usize, seed: u64) -> P
     // Solo speed: each segment against the nearest earlier segment with enough solo rows.
     let mut prev: Option<usize> = None;
     for j in 0..segments.len() {
-        let enough = solo_adj[j].len() >= MIN_SEG_ROWS;
+        let enough = solo_adj[j].len() >= MIN_SOLO_SESSIONS;
         if let Some(p) = prev {
             let (from, to) = (segments[p].seg, segments[j].seg);
             if !enough {
@@ -279,7 +341,7 @@ pub fn analyze(rows: &[Row], min_effect_pct: f64, n_boot: usize, seed: u64) -> P
         if enough { prev = Some(j); }
     }
     // Contention cost (percentage points of slowdown when the neighbour is busy).
-    let has = |j: usize| solo_adj[j].len() >= MIN_SEG_ROWS && busy_adj[j].len() >= MIN_BUSY_ROWS;
+    let has = |j: usize| solo_adj[j].len() >= MIN_SOLO_SESSIONS && busy_adj[j].len() >= MIN_BUSY_SESSIONS;
     let mut prev: Option<usize> = None;
     for j in 0..segments.len() {
         if !has(j) { continue; }
@@ -619,7 +681,7 @@ mod tests {
             let noise = rng.below(100) as f64 / 100.0 - 0.5;
             let mut ms = (level + 0.25 * ctx) * (1.0 + pen * busy) + noise;
             if i == 150 { ms += 300.0; }
-            rows.push(Row { seg, ctx_k: ctx, busy, ms, tps: 1000.0 / ms, mlen: 3.0 });
+            rows.push(Row { seg, ctx_k: ctx, busy, ms, tps: 1000.0 / ms, mlen: 3.0, session: i as u64 });
         }
         rows
     }
@@ -667,7 +729,7 @@ mod tests {
         let rows: Vec<Row> = (0..200).map(|i| {
             let ctx = 20.0 + rng.below(20) as f64;
             let ms = 50.0 + 0.25 * ctx + (rng.below(100) as f64 / 100.0 - 0.5);
-            Row { seg: if i < 100 { 1 } else { 2 }, ctx_k: ctx, busy: 0.0, ms, tps: 1000.0 / ms, mlen: f64::NAN }
+            Row { seg: if i < 100 { 1 } else { 2 }, ctx_k: ctx, busy: 0.0, ms, tps: 1000.0 / ms, mlen: f64::NAN, session: i as u64 }
         }).collect();
         let r = analyze(&rows, 1.16, 500, 3);
         let v = kind(&r, "solo")[0].verdict;
@@ -689,11 +751,77 @@ mod tests {
         let rows: Vec<Row> = (0..200).map(|i| {
             let ctx = rng.below(100) as f64;
             let ms = 50.0 - 0.2 * ctx + (rng.below(100) as f64 / 100.0);
-            Row { seg: if i < 100 { 1 } else { 2 }, ctx_k: ctx, busy: 0.0, ms, tps: 1000.0 / ms, mlen: f64::NAN }
+            Row { seg: if i < 100 { 1 } else { 2 }, ctx_k: ctx, busy: 0.0, ms, tps: 1000.0 / ms, mlen: f64::NAN, session: i as u64 }
         }).collect();
         let r = analyze(&rows, 1.16, 200, 4);
         assert!(r.slope_clamped);
         assert_eq!(r.slope_ms_per_kctx, 0.0);
+    }
+
+    /// Sessions with their own level (between-session sd ~15%) and tiny within-session noise.
+    fn clustered(seg_sessions: &[(u64, usize, usize, f64)], rng: &mut Rng) -> Vec<Row> {
+        // (segment, sessions, rows per session, level multiplier); one extra chatty session can be added by the caller.
+        let mut rows = Vec::new();
+        let mut sid = 0u64;
+        for &(seg, n_sess, per, mult) in seg_sessions {
+            for _ in 0..n_sess {
+                sid += 1;
+                let off = 1.0 + (rng.below(300) as f64 / 1000.0 - 0.15);
+                for _ in 0..per {
+                    let ms = 10.0 * mult * off * (1.0 + (rng.below(100) as f64 / 10000.0));
+                    rows.push(Row { seg, ctx_k: 20.0, busy: 0.0, ms, tps: 1000.0 / ms, mlen: f64::NAN, session: sid });
+                }
+            }
+        }
+        rows
+    }
+
+    #[test]
+    fn one_chatty_session_does_not_make_a_verdict() {
+        // Same config twice. Deploy 2 is dominated by ONE session that happens to run 40% slower
+        // (the audit's failure: request-level resampling called this SLOWER +75%).
+        let mut rng = Rng(21);
+        let mut rows = clustered(&[(1, 12, 6, 1.0), (2, 12, 6, 1.0)], &mut rng);
+        for _ in 0..200 { rows.push(Row { seg: 2, ctx_k: 20.0, busy: 0.0, ms: 14.0, tps: 1000.0 / 14.0, mlen: f64::NAN, session: 999 }); }
+        let r = analyze(&rows, 1.16, 1000, 7);
+        let v = kind(&r, "solo")[0].verdict;
+        assert!(v != Verdict::Slower && v != Verdict::Faster, "{:?}", r.comparisons);
+        assert_eq!(r.segments[1].solo_sessions, 13);
+        // The same rows treated as independent requests reproduce the false verdict.
+        let flat: Vec<Row> = rows.iter().enumerate().map(|(i, r)| Row { session: 100_000 + i as u64, ..*r }).collect();
+        let f = analyze(&flat, 1.16, 1000, 7);
+        assert_eq!(kind(&f, "solo")[0].verdict, Verdict::Slower, "request-level resampling should be fooled: {:?}", f.comparisons);
+    }
+
+    #[test]
+    fn real_effect_across_many_sessions_is_still_found() {
+        let mut rng = Rng(5);
+        let rows = clustered(&[(1, 20, 6, 1.0), (2, 20, 6, 0.7)], &mut rng);
+        let r = analyze(&rows, 1.16, 1000, 3);
+        let c = kind(&r, "solo")[0];
+        assert_eq!(c.verdict, Verdict::Faster, "{:?}", c);
+        assert!((c.delta + 30.0).abs() < 8.0, "{:?}", c);
+    }
+
+    #[test]
+    fn too_few_sessions_is_insufficient_however_many_rows() {
+        let mut rng = Rng(8);
+        let rows = clustered(&[(1, 20, 6, 1.0), (2, 4, 100, 0.5)], &mut rng);
+        let r = analyze(&rows, 1.16, 300, 3);
+        assert_eq!(kind(&r, "solo")[0].verdict, Verdict::Insufficient, "400 rows from 4 sessions is not enough");
+    }
+
+    #[test]
+    fn sessions_follow_growing_context_and_split_on_drop_gap_or_slot() {
+        let keys = [(1, 0, 100, 10.0), (1, 0, 110, 12.0), (1, 0, 120, 14.0), // one conversation
+                    (1, 0, 130, 2.0),                                     // context dropped: new
+                    (1, 0, 130 + SESSION_GAP_S + 5, 3.0),                 // long gap: new
+                    (1, 1, 111, 12.5),                                    // other slot: new
+                    (2, 0, 112, 12.6)];                                   // other child: new
+        let s = assign_sessions(&keys);
+        assert_eq!(s[0], s[1]); assert_eq!(s[1], s[2]);
+        let mut u = s.to_vec(); u.sort(); u.dedup();
+        assert_eq!(u.len(), 5, "{:?}", s);
     }
 
     #[test]
