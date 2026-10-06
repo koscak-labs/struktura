@@ -174,13 +174,19 @@ impl<const N: usize> Pruner<N> {
         let splits = self.splits.max(1);
         let mut total = 0.0f32;
         let mut best = f32::NEG_INFINITY;
+        // (sense value, residual without the sense) per stored episode does not depend on the
+        // split: compute it once per call (same values as computing it inside the loops).
+        let (mut fvs, mut rws) = ([0.0f32; N], [0.0f32; N]);
+        for s in 0..N {
+            if let Some(e) = brain.episode(s) { let (f, r) = Self::without(brain, &e.key, e.action, e.reward, j); fvs[s] = f; rws[s] = r; }
+        }
         for _ in 0..splits {
             let state = self.rng;
             let (mut sfr, mut sff) = ([0.0f32; A], [0.0f32; A]);
             for s in 0..N {
                 let Some(e) = brain.episode(s) else { continue };
                 if !self.coin() { continue; }
-                let (fv, rw) = Self::without(brain, &e.key, e.action, e.reward, j);
+                let (fv, rw) = (fvs[s], rws[s]);
                 let a = e.action as usize;
                 sfr[a] += fv * rw; sff[a] += fv * fv;
             }
@@ -190,7 +196,7 @@ impl<const N: usize> Pruner<N> {
                 let Some(e) = brain.episode(s) else { continue };
                 if self.coin() { continue; }
                 let a = e.action as usize;
-                let (fv, rw) = Self::without(brain, &e.key, e.action, e.reward, j);
+                let (fv, rw) = (fvs[s], rws[s]);
                 let beta = if sff[a] > 1e-6 { sfr[a] / sff[a] } else { 0.0 };
                 before += rw * rw;
                 let rr = rw - beta * fv; after += rr * rr;

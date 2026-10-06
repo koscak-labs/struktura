@@ -1762,6 +1762,7 @@ pub mod brain_features;
 pub mod brain_sslora;
 pub mod brain_grow;
 pub mod brain_cycle;
+pub mod brain_grok;
 pub mod brain_sleep;
 pub mod brain_prune;
 pub mod brain_genome;
