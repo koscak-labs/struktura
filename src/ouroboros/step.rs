@@ -35,14 +35,35 @@ pub struct Turn {
     pub id: String,
     pub recalled: bool,
     pub written: Vec<PathBuf>,
+    /// The mind's information-yield estimate per challenger ("knob=value", estimate).
+    pub brain: Vec<(String, super::mind::Yield)>,
+    /// Scored predictions the mind learned from.
+    pub brain_episodes: usize,
 }
 
 pub fn turn(ledger: &str, logs: &[(String, String)], cfg: &Config) -> Turn {
     let obs = observe(ledger, logs);
     let lessons = learn(&obs);
     let cons = constraints(&cfg.cli_constraints, &obs.lab.constraints);
-    let ag = agenda(&obs, &lessons, &cfg.knobs, &cons);
+    let mut ag = agenda(&obs, &lessons, &cfg.knobs, &cons);
     let cv = obs.lab.cal_cv_pct;
+    // The mind estimates each challenger's information yield from what similar past
+    // predictions taught; it only re-orders challengers (the agenda's rules keep
+    // re-measures first and never touch constraints or missing instruments).
+    let mind = super::mind::Mind::from_lab(&obs.lab);
+    let mut brain_notes = Vec::new();
+    for it in ag.iter_mut().filter(|i| i.kind == Kind::Challenger) {
+        let k = cfg.knobs.iter().find(|k| k.name == it.knob).unwrap();
+        let thr = design(it, k, &lessons, cv, 0).map(|d| d.threshold_pct).unwrap_or(lessons.band_pct);
+        let y = mind.estimate(&super::mind::situation_planned(&k.metric, thr, lessons.band_pct));
+        if !y.abstained {
+            it.score *= 0.5 + y.expected;
+            it.why = format!("{}; brain: yield {:.2}", it.why, y.expected);
+        }
+        brain_notes.push((format!("{}={}", it.knob, it.value), y));
+    }
+    ag.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
+        .then(a.knob.cmp(&b.knob)).then(a.value.cmp(&b.value)).then(a.pred.cmp(&b.pred)));
     let logs_digest: String = logs.iter().map(|(n, t)| format!("{}:{:x}", n, fnv64(t))).collect::<Vec<_>>().join(",");
     let cons_digest: String = cons.iter().map(|c| format!("{}{}{}", c.knob, c.op, c.value)).collect::<Vec<_>>().join(",");
 
@@ -59,7 +80,8 @@ pub fn turn(ledger: &str, logs: &[(String, String)], cfg: &Config) -> Turn {
     let top = pick.map(|i| format!("{}={}", i.knob, i.value)).unwrap_or_else(|| "none".into());
     let id = decision_id(&[&format!("{:x}", fnv64(ledger)), &logs_digest, &cfg.knobs_text, &cons_digest, &top]);
 
-    let mut t = Turn { lessons, cv_pct: cv, constraints: cons, agenda: ag.clone(), design: None, skipped, id: id.clone(), recalled: false, written: Vec::new() };
+    let mut t = Turn { lessons, cv_pct: cv, constraints: cons, agenda: ag.clone(), design: None, skipped, id: id.clone(), recalled: false, written: Vec::new(),
+        brain: brain_notes, brain_episodes: mind.episodes };
     let Some(item) = pick.cloned() else { return t };
     let k = cfg.knobs.iter().find(|k| k.name == item.knob).unwrap().clone();
 

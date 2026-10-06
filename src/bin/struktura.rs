@@ -5379,6 +5379,10 @@ fn cmd_loop(args: &[String]) {
                 r + 1, it.kind.as_str(), it.knob, it.value, it.pred.as_ref().map(|(p, n)| format!("{}::{}", p, n)).unwrap_or_default(), it.score,
                 it.observed_effect_pct.map(num).unwrap_or("null".into()), it.samples, it.why.replace('"', "'"));
         }
+        for (what, y) in &t.brain {
+            println!("{{\"event\":\"brain\",\"challenger\":\"{}\",\"yield\":{},\"evidence\":{},\"abstained\":{},\"cites\":[{}]}}", what, num(y.expected), num(y.evidence), y.abstained,
+                y.cites.iter().map(|c| format!("\"{}\"", c.replace('"', "'"))).collect::<Vec<_>>().join(","));
+        }
         if let Some(d) = &t.design { println!("{{\"event\":\"design\",\"manifest\":{}}}", d.manifest); }
         if let Some(g) = &g { println!("{{\"event\":\"gate\",\"state\":\"{}\",\"why\":\"{}\"}}", g.as_str(), g.why().replace('"', "'")); }
         println!("{{\"summary\":true,\"id\":\"{}\",\"recalled\":{},\"written\":{},\"calibration\":{},\"calibration_n\":{},\"band_pct\":{},\"cv_pct\":{},\"fragile\":{},\"easy\":{},\"agenda\":{}}}",
@@ -5395,6 +5399,13 @@ fn cmd_loop(args: &[String]) {
             let what = match &it.pred { Some((p, n)) => format!("{}::{}", p, n), None => format!("{} = {}", it.knob, it.value) };
             let eff = it.observed_effect_pct.map(|e| format!(" [{:+.1}%]", e)).unwrap_or_default();
             println!("   {:>2}. {:<16} {:<40} {:.2}{}  {}", r + 1, it.kind.as_str(), what, it.score, eff, it.why);
+        }
+        if !t.brain.is_empty() {
+            println!("  brain (learned from {} scored prediction(s)): expected information yield of each challenger's test", t.brain_episodes);
+            for (what, y) in t.brain.iter().take(4) {
+                if y.abstained { println!("    {:<14} abstained (evidence {:.1} too thin)", what, y.evidence); continue; }
+                println!("    {:<14} yield {:.2} (evidence {:.1}); like {}", what, y.expected, y.evidence, y.cites.join(", "));
+            }
         }
         for s in &t.skipped { println!("  not designed: {}", s); }
         match &t.design {

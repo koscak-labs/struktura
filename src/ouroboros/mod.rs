@@ -31,6 +31,7 @@ pub mod memory;
 pub mod backtest;
 pub mod gate;
 pub mod step;
+pub mod mind;
 
 use crate::arms::{rank, ArmData, ArmsReport, Direction};
 use crate::lab::{analyze, LabReport};
