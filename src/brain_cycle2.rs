@@ -52,6 +52,11 @@
 //! 10-epoch plateau the falsifier requires; the settings above (Hebbian growth every 250, v1's
 //! default, PRESS compression with `drop_tol` 0 and `max_drop` 4) were kept.
 //!
+//! Pre-registered test ([`crate::brain_grok2`]): FAILED, Fourier 2/5 fresh seeds, one-hot 0/5. With
+//! compression A ends above the no-compression control on 5/5 Fourier seeds (0.10-0.38 vs
+//! 0.00-0.05 held-out), but it rarely assembles all 12 needed products and the rise is not
+//! reliably sudden.
+//!
 //! no_std, no heap, bounded work per step (a compression pass is O(D * N * D^2) for D inputs
 //! and N memories), deterministic (no randomness at all).
 

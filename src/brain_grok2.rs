@@ -61,6 +61,40 @@
 //! and Hebbian growth found enough of the 12 same-frequency products; B keeps every base sense, its
 //! validation error never drops and it stays at 2 senses.
 //!
+//! ## RESULT (added after the one run; rule, thresholds and seeds unchanged)
+//!
+//! **FAIL on both encodings, as predicted: Fourier 2 of 5 fresh seeds pass, one-hot 0 of 5. The
+//! thesis fails its pre-registered test.**
+//!
+//! Fourier (held-out = test accuracy, mean of the last 10 epochs; chance 0.143; sizes = memories /
+//! grown senses, base = base senses still in the model; train is 1.000 in every arm from epoch 1):
+//!
+//! | seed | A jump (epoch) | held-out A / B / C | A size plateau -> jump start -> end, base | B end, base | groks A / B | pass |
+//! |------|----------------|--------------------|-------------------------------------------|-------------|-------------|------|
+//! | 6113 | none (+31 pts over epochs 9..21, slower than W) | 0.345 / 0.034 / 0.034 | 112/0 -> 112/9, 13 -> 1 | 256/2, 13 | 0 / 0 | fail |
+//! | 6229 | 35 | 0.345 / 0.048 / 0.000 | 112/0 -> 112/3 -> 112/7, 1 | 256/2, 13 | 2 / 0 | PASS |
+//! | 6337 | none | 0.207 / 0.028 / 0.034 | 112/0 -> 112/10, 13 -> 2 | 256/2, 13 | 0 / 0 | fail |
+//! | 6451 | 19 | 0.379 / 0.034 / 0.034 | 112/0 -> 112/2 -> 112/5, 1 | 256/2, 13 | 1 / 0 | PASS |
+//! | 6563 | none | 0.103 / 0.000 / 0.034 | 112/0 -> 112/11, 13 -> 1 | 256/2, 13 | 0 / 0 | fail |
+//!
+//! One-hot: no jump in any arm on any seed; held-out A 0.000 on 5/5, B 0.000..0.069, C
+//! 0.000..0.034. The pre-registered analysis prediction holds (every arm <= chance + 0.10, 5/5).
+//!
+//! What the numbers say:
+//! - **B never jumps** (0/10 runs): it keeps all base senses, its validation error never drops,
+//!   no grokking event fires, so its gate stays shut at 2 senses. **C** (grow-only, every slot
+//!   open) never generalizes either (<= 0.034): with the base senses in, the model fits the 16
+//!   pairs after 3 senses (5/5 seeds) and growth stops.
+//! - **A ends above B on 5/5 Fourier seeds** (+0.10 to +0.35), and the cause is compression:
+//!   removing 11-12 base senses (they overfit) frees growth budget, and Hebbian growth then finds
+//!   some of the 12 same-frequency products. Validation grokking events are rare (0-2 per run;
+//!   A ends at tier 1-3): the gain does not come from a sequence of gated tiers.
+//! - **Why it still fails**: A ends at 0.10-0.38, far from the 1.000 the right 12 products give
+//!   (v1's post-hoc ridge), with 5-11 senses mixing true products and junk: on 16 of 49 pairs a
+//!   single product does not pay on its own, so neither Hebbian growth nor PRESS elimination
+//!   reliably assembles the full set; and when A does rise, the rise is not reliably sudden
+//!   (6113: +31 pts over 12 epochs is not a jump under W = 10).
+//!
 //! no_std, no heap (the curves are fixed arrays), deterministic for a seed, CPU only.
 
 use crate::brain::Brain;
@@ -474,26 +508,27 @@ mod tests {
     }
 
     /// PRE-REGISTERED primary falsifier v2 (one-hot senses, 5 fresh seeds; criteria in the module docs).
+    /// RESULT: FAILED, 0/5 seeds; no jump in any arm, held-out A 0.000 on every seed (see module docs).
     /// Run: cargo test --release --lib brain_grok2 -- --ignored --nocapture
     #[test]
-    #[ignore = "pre-registered; not yet run"]
+    #[ignore = "FAILED as pre-registered: 0/5 seeds; one-hot held-out stays at or below chance in every arm (see module docs)"]
     fn falsifier_v2_onehot_groks_only_with_compression() {
         let (t, pass) = fresh(Encoding::OneHot);
         assert!(*pass, "one-hot: {}/5 seeds pass (need {})", t.iter().filter(|x| x.pass).count(), PASS_SEEDS);
     }
 
     /// PRE-REGISTERED secondary falsifier v2 (Fourier senses, same seeds and criteria).
+    /// RESULT: FAILED, 2/5 seeds (6229, 6451); held-out A 0.103-0.379 vs B 0.000-0.048, B never jumps (see module docs).
     #[test]
-    #[ignore = "pre-registered; not yet run"]
+    #[ignore = "FAILED as pre-registered: 2/5 seeds; A beats B on 5/5 but jumps on 2 (see module docs)"]
     fn falsifier_v2_fourier_groks_only_with_compression() {
         let (t, pass) = fresh(Encoding::Fourier);
         assert!(*pass, "fourier: {}/5 seeds pass (need {})", t.iter().filter(|x| x.pass).count(), PASS_SEEDS);
     }
 
     /// PRE-REGISTERED analysis prediction: with one-hot senses every arm ends at most chance + 0.10
-    /// held-out on every fresh seed.
+    /// held-out on every fresh seed. RESULT: holds on 5/5 (A 0.000, B <= 0.069, C <= 0.034).
     #[test]
-    #[ignore = "pre-registered; not yet run"]
     fn analysis_prediction_v2_onehot_stays_at_chance() {
         let (t, _) = fresh(Encoding::OneHot);
         let bound = 1.0 / P as f32 + crate::brain_grok::CHANCE_MARGIN;
