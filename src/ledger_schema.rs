@@ -113,7 +113,7 @@ const fn fuxi(kind: &'static str, fields: &'static [Field]) -> KindSchema { Kind
 pub const FUXI_ENVELOPE: &[Field] = &[req("v", Ty::Const("1")), req("strand", Ty::Const("\"fuxi\"")), req("ts", Ty::Num)];
 
 /// Daemon phases seen so far. Open set: an unknown phase is a warning.
-pub const DAEMON_PHASES: &[&str] = &["autogate", "ship", "protect", "feed", "run", "tick"];
+pub const DAEMON_PHASES: &[&str] = &["autogate", "ship", "protect", "feed", "run", "tick", "janitor"];
 
 use Ty::*;
 

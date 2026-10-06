@@ -1751,6 +1751,8 @@ pub mod ledger_schema;
 #[cfg(feature = "std")]
 pub mod twins;
 #[cfg(feature = "std")]
+pub mod oracle;
+#[cfg(feature = "std")]
 pub mod power;
 #[cfg(feature = "std")]
 pub mod ouroboros;

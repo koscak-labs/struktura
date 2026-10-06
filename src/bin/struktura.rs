@@ -413,6 +413,7 @@ fn main() {
         "brain" => cmd_brain(&args),
         "arms" => cmd_arms(&args),
         "twins" => cmd_twins(&args),
+        "oracle" => cmd_oracle(&args),
         "lab" => cmd_lab(&args),
         "ledger-check" => cmd_ledger_check(&args),
         "power" => cmd_power(&args),
@@ -6017,4 +6018,70 @@ fn cmd_twins(args: &[String]) {
             println!("    {} {:<28} {:>3}/{:<3} pass", if s.side == 'a' { a.as_str() } else { b.as_str() }, s.task, s.pass, s.n);
         }
     }
+}
+
+fn cmd_oracle(args: &[String]) {
+    use struktura::oracle::{backtest, forecast_id, pending, resolve, trained};
+    if args.len() < 3 || args[2] == "--help" {
+        println!("struktura oracle --ledger L [--gap 30] [--window 10] [--bins 5] [--json]      prequential backtest");
+        println!("struktura oracle --ledger L --queued [--designed-by-only fuxi]               p_pass forecast rows for queued predictions");
+        println!("struktura oracle --ledger L --resolve FORECASTS.jsonl                         score rows for resolved pass forecasts");
+        println!("  Will a registered lab prediction PASS? Re-measures: Phi(last margin / one-run noise). First measurements:");
+        println!("  Beta-shrunk pass rates of kin predictions (shared words, operator). Else the running base rate.");
+        println!("  The backtest forecasts every scored row from strictly earlier rows (one job's rows together) and");
+        println!("  reports Brier against the base-rate forecaster. VOID/missing verdicts are never learned or scored.");
+        println!("  --queued / --resolve print JSON rows (kind forecast / score, target \"pass\") ready to append to a ledger.");
+        process::exit(if args.len() < 3 { 2 } else { 0 });
+    }
+    let (mut ledger, mut gap, mut window, mut bins, mut json) = (None::<String>, 30.0f64, 10usize, 5usize, false);
+    let (mut queued, mut resolve_path) = (false, None::<String>);
+    let mut i = 2;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--ledger" => { i += 1; ledger = args.get(i).cloned(); }
+            "--gap" => { i += 1; gap = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(gap); }
+            "--window" => { i += 1; window = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(window); }
+            "--bins" => { i += 1; bins = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(bins); }
+            "--queued" => queued = true,
+            "--resolve" => { i += 1; resolve_path = args.get(i).cloned(); }
+            "--json" => json = true,
+            o => { eprintln!("oracle: unknown option {}", o); process::exit(2); }
+        }
+        i += 1;
+    }
+    let Some(lp) = ledger else { eprintln!("oracle: --ledger L is required"); process::exit(2) };
+    let text = std::fs::read_to_string(&lp).unwrap_or_else(|e| { eprintln!("oracle: {}: {}", lp, e); process::exit(2) });
+    let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
+    if let Some(fp) = resolve_path {
+        let f = std::fs::read_to_string(&fp).unwrap_or_default();
+        for (id, outcome, p, brier) in resolve(&f, &text) {
+            println!("{{\"kind\":\"score\",\"id\":\"{}\",\"target\":\"pass\",\"outcome\":\"{}\",\"p_pass\":{:.4},\"brier\":{}}}", esc(&id), esc(&outcome), p,
+                brier.map(|b| format!("{:.6}", b)).unwrap_or_else(|| "null".into()));
+        }
+        return;
+    }
+    if queued {
+        let o = trained(&text);
+        for p in pending(&text) {
+            let (pp, basis) = o.forecast(&format!("{}::{}", p.pred_file, p.name), &p.name, "");
+            println!("{{\"kind\":\"forecast\",\"id\":\"{}\",\"target\":\"pass\",\"job\":\"{}\",\"pred_file\":\"{}\",\"name\":\"{}\",\"p_pass\":{:.4},\"basis\":\"{}\",\"designed_by\":\"{}\",\"queued_ts\":{}}}",
+                forecast_id(&p), esc(&p.job), esc(&p.pred_file), esc(&p.name), pp, basis, esc(&p.designed_by), p.queued_ts as u64);
+        }
+        return;
+    }
+    let b = backtest(&text, gap, window, bins);
+    if json {
+        for (first, last, br, base) in &b.windows { println!("{{\"event\":\"window\",\"first\":{},\"last\":{},\"brier\":{:.4},\"base_brier\":{:.4}}}", first, last, br, base); }
+        for (lo, hi, n, mp, rate) in &b.bins { println!("{{\"event\":\"bin\",\"lo\":{:.2},\"hi\":{:.2},\"n\":{},\"mean_p\":{:.4},\"pass_rate\":{:.4}}}", lo, hi, n, mp, rate); }
+        for (basis, n, br, bb) in &b.by_basis { println!("{{\"event\":\"basis\",\"basis\":\"{}\",\"n\":{},\"brier\":{:.4},\"base_brier\":{:.4}}}", basis, n, br, bb); }
+        println!("{{\"summary\":true,\"n\":{},\"brier\":{:.4},\"base_brier\":{:.4},\"skill\":{:.4},\"beats_base_by\":{:.4}}}", b.n, b.brier, b.base_brier, b.skill, b.base_brier - b.brier);
+        return;
+    }
+    println!("oracle backtest: {} scored predictions, each forecast from strictly earlier rows", b.n);
+    println!("  Brier {:.4} vs base-rate {:.4}: skill {:+.3} (beats base by {:+.4})", b.brier, b.base_brier, b.skill, b.base_brier - b.brier);
+    for (basis, n, br, bb) in &b.by_basis { println!("  source {:<18} n={:<4} Brier {:.4}  base on the same rows {:.4}", basis, n, br, bb); }
+    println!("  windows of {}:", window);
+    for (first, last, br, base) in &b.windows { println!("    rows {:>3}-{:<3} Brier {:.4}  base {:.4}  {}", first, last, br, base, if br < base { "better" } else { "worse" }); }
+    println!("  calibration (forecast p -> realised pass rate):");
+    for (lo, hi, n, mp, rate) in &b.bins { println!("    p in [{:.1},{:.1}) n={:<4} mean p {:.2} -> passed {:.2}", lo, hi, n, mp, rate); }
 }
