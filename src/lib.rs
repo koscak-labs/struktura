@@ -1744,3 +1744,7 @@ pub mod report;
 pub mod pulse;
 #[cfg(feature = "std")]
 pub mod arms;
+#[cfg(feature = "std")]
+pub mod lab;
+#[cfg(feature = "std")]
+pub mod power;
