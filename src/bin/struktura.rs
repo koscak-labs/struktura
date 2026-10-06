@@ -4749,6 +4749,7 @@ fn cmd_pulse(args: &[String]) {
         println!("  --min-effect  smallest believable effect, percent (default 1.16 = 2x lab calibration CV)");
         println!("  --cols seg,ctx,step,busy,tps   0-based columns (default 1,4,11,12,8)");
         println!("  --metric token|step  judge ms per generated token (default; fair across drafter changes) or ms per decode step");
+        println!("  --deploy-lead S  requests starting up to S s before a deploy row belong to it (its verify request; default 15)");
         println!("  --deploys LEDGER  key deploys on the ledger's kind:\"deploy\" rows (a pid changes on every model reload);");
         println!("     without it, segments are server children (pid:port) and no verdicts are issued");
         println!("  --by-child  issue verdicts between server children anyway");
@@ -4766,6 +4767,9 @@ fn cmd_pulse(args: &[String]) {
     // seg, ctx, step_ms, busy, tps, start_ts, mlen (prod-pulse.sh req.csv)
     let mut cols = [1usize, 4, 11, 12, 8, 3, 10];
     let mut deploys_path: Option<String> = None;
+    // A deploy's ledger row is written after its verify request was served, so requests that
+    // start up to this many seconds before the row belong to the new config.
+    let mut deploy_lead = 15u64;
     // model alias and server child port (prod-pulse.sh cols 14, 15), prompt tokens and prompt t/s (cols 6, 7)
     let (model_col, port_col, pn_col, ptps_col) = (13usize, 14usize, 5usize, 6usize);
     let mut by_child = false;
@@ -4784,6 +4788,7 @@ fn cmd_pulse(args: &[String]) {
                 let p: Vec<usize> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
                 if p.len() == 5 || p.len() == 7 { cols[..p.len()].copy_from_slice(&p); } else { eprintln!("--cols needs 5 or 7 indices"); process::exit(2); } } }
             "--deploys" => { i += 1; deploys_path = args.get(i).cloned(); }
+            "--deploy-lead" => { i += 1; deploy_lead = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(deploy_lead); }
             "--model" => { i += 1; want_model = args.get(i).cloned(); }
             "--by-child" => by_child = true,
             "--churn-window" => { i += 1; churn_window = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(churn_window); }
@@ -4839,7 +4844,7 @@ fn cmd_pulse(args: &[String]) {
                     if step <= 0.0 || tps <= 0.0 || busy >= struktura::pulse::BUSY_CUT { continue; }
                     let s = start as u64;
                     let row = (s, ctx / 1000.0, if per_step { step } else { 1000.0 / tps });
-                    if s >= dep_ts { after.push(row) } else if s >= prev_ts { before.push(row) }
+                    if s + deploy_lead >= dep_ts { after.push(row) } else if s + deploy_lead >= prev_ts { before.push(row) }
                 }
             }
             before.sort_by_key(|r| r.0);
@@ -4931,7 +4936,7 @@ fn cmd_pulse(args: &[String]) {
         idx.sort_by_key(|&k| starts[k]);
         rows = idx.iter().map(|&k| {
             let mut r = rows[k];
-            r.seg = deploys.iter().rev().find(|(ts, _)| *ts <= starts[k]).map(|(ts, _)| *ts).unwrap_or(0);
+            r.seg = deploys.iter().rev().find(|(ts, _)| *ts <= starts[k] + deploy_lead).map(|(ts, _)| *ts).unwrap_or(0);
             r
         }).collect();
         labels.push((0, "before first ledger deploy".to_string()));
