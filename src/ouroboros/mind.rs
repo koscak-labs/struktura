@@ -16,7 +16,14 @@
 //!
 //! Reward, known after it was scored: 1 = decisive verdict; 0.5 = an easy pass
 //! (margin > 3 noise floors: it was a safe bet); 0 = fragile (margin inside the
-//! single-run band) or void (instrument bug: the run taught nothing).
+//! single-run band, for a noisy measurement: [`crate::lab::band_applies`], the rule
+//! the lab report, lessons and oracle use) or void (instrument bug: the run taught
+//! nothing). An exact answer (a count, a needle, identical output) at its threshold
+//! cannot flip within throughput noise, so it is decisive, not fragile.
+//!
+//! A yield is the brain's estimate shrunk toward the base rate (mean reward so
+//! far) by [`Mind::trust`], which the mind earns only from its own prequential
+//! record: with no demonstrated skill its yields are the base rate.
 //!
 //! The mind only re-orders challengers among themselves; fragile re-measures,
 //! constraints and missing instruments are decided by the agenda's rules.
@@ -154,14 +161,22 @@ pub struct Mind {
     floor_pct: f64,
     /// Knob history after the whole ledger, by knob name.
     history: Vec<(String, History)>,
+    /// Sum and count of the rewards learned so far: their mean is the base rate.
+    reward_sum: f64,
+    reward_n: usize,
+    /// The mind's own prequential record (see [`Mind::trust`]): over learned predictions, each forecast
+    /// before it was learned, sums of (forecast - base rate) x (reward - base rate) and (forecast - base rate)^2.
+    skill_xy: f64,
+    skill_xx: f64,
 }
 
 /// Reward of one scored verdict: 1 = decisive; 0.5 = easy pass (margin > 3 floors); 0 = fragile
-/// (margin inside the single-run band) or void. `band` and `floor` are percent.
-pub fn reward(verdict: &str, margin_pct: Option<f64>, band: f64, floor: f64) -> f64 {
+/// (margin inside the single-run band, only for a `noisy` measurement: pass
+/// [`crate::lab::band_applies`] of the prediction's name and value) or void. `band` and `floor` are percent.
+pub fn reward(verdict: &str, margin_pct: Option<f64>, band: f64, floor: f64, noisy: bool) -> f64 {
     match (verdict, margin_pct) {
         ("void", _) => 0.0,
-        (_, Some(m)) if m.abs() < band => 0.0,
+        (_, Some(m)) if noisy && m.abs() < band => 0.0,
         ("pass", Some(m)) if m > 3.0 * floor => 0.5,
         _ => 1.0,
     }
@@ -189,8 +204,11 @@ pub fn learning_order(lab: &LabReport) -> Vec<&crate::lab::Prediction> {
 
 #[derive(Clone, Debug)]
 pub struct Yield {
-    /// Expected information yield in [0, 1] (1 = decisive).
+    /// Expected information yield in [0, 1] (1 = decisive): the brain's estimate shrunk toward the
+    /// base rate by the mind's [`Mind::trust`].
     pub expected: f64,
+    /// The brain's own estimate (model + memory), before shrinkage.
+    pub raw: f64,
     pub evidence: f64,
     pub abstained: bool,
     /// Past predictions this estimate rests on, nearest first.
@@ -228,12 +246,13 @@ impl Mind {
         grower.every = 12;
         Mind { brain, grower, grown: Vec::new(), goal_aware: !goal.is_empty(), goal_predictions: 0, labels: vec![String::new(); 256], episodes: 0,
             band_pct: lab.pair_band_pct.max(lab.floor_pct), floor_pct: lab.floor_pct,
-            history: knobs.iter().map(|k| (k.name.clone(), History::default())).collect() }
+            history: knobs.iter().map(|k| (k.name.clone(), History::default())).collect(),
+            reward_sum: 0.0, reward_n: 0, skill_xy: 0.0, skill_xx: 0.0 }
     }
 
     /// The reward this mind learns for a scored prediction (aimed at the goal when `goal` is given).
     pub fn reward_of(&self, p: &crate::lab::Prediction, goal: &[GoalFeature]) -> f64 {
-        goal_reward(goal, &p.pred, &p.name, reward(&p.verdict, p.margin_pct, self.band_pct, self.floor_pct))
+        goal_reward(goal, &p.pred, &p.name, reward(&p.verdict, p.margin_pct, self.band_pct, self.floor_pct, crate::lab::band_applies(&p.name, &p.value)))
     }
 
     /// Situation of a scored prediction as the mind sees it now: its claim plus its knob's history so far.
@@ -245,13 +264,24 @@ impl Mind {
 
     /// One replay step: learn a scored prediction, then update its knob's history. Returns the reward.
     pub fn learn_prediction(&mut self, p: &crate::lab::Prediction, knobs: &[Knob], goal: &[GoalFeature]) -> f64 {
-        let raw = reward(&p.verdict, p.margin_pct, self.band_pct, self.floor_pct);
+        let raw = reward(&p.verdict, p.margin_pct, self.band_pct, self.floor_pct, crate::lab::band_applies(&p.name, &p.value));
         let is_goal = proves_goal(goal, &p.pred, &p.name);
         if is_goal { self.goal_predictions += 1; }
         let reward = goal_reward(goal, &p.pred, &p.name, raw);
         let knob = knob_of(&p.name, knobs).map(|k| k.name.clone());
         let base = self.situation_of_prediction(p, knobs);
         let x: [f32; DG] = self.grower.situation(&base);
+        // The mind's own record: its forecast for this prediction, made before learning it.
+        if let Some(b) = self.base_rate() {
+            let d = self.brain.decide(&x, &[true], 0);
+            if !d.abstained {
+                let dev = (d.expected as f64).clamp(0.0, 1.0) - b;
+                self.skill_xy += dev * (reward - b);
+                self.skill_xx += dev * dev;
+            }
+        }
+        self.reward_sum += reward;
+        self.reward_n += 1;
         let class = if reward == 0.0 { "fragile/void" } else if p.verdict == "pass" && p.margin_pct.map(|m| m > 3.0 * self.floor_pct).unwrap_or(false) { "easy" } else { "decisive" };
         if let Some(s) = self.brain.learn(&x, 0, reward as f32) { self.labels[s] = format!("{}::{} ({}{})", p.pred, p.name, class, if is_goal { ", proves a feature" } else { "" }); }
         self.episodes += 1;
@@ -288,6 +318,25 @@ impl Mind {
         self.estimate(&self.situation_for(knob, threshold_pct, observed_effect_pct))
     }
 
+    /// Mean reward learned so far (what `track` calls the running-mean baseline); None before any.
+    pub fn base_rate(&self) -> Option<f64> {
+        if self.reward_n > 0 { Some(self.reward_sum / self.reward_n as f64) } else { None }
+    }
+
+    /// How much of its own deviation from the base rate the mind's yields keep, in [0, 1].
+    ///
+    /// Earned from its prequential record only: over the predictions it learned, its forecast
+    /// before learning each one versus the reward it then learned. Regressing (reward - base) on
+    /// (forecast - base) through the origin, with a N(0, 1) prior on the slope and the largest
+    /// variance a reward in [0, 1] can have (1/4) as noise: trust = Sxy / (Sxx + 1/4), clamped to
+    /// [0, 1]. No record or no demonstrated skill gives 0: its yields are then the base rate, the
+    /// best forecast it can justify. Deviations that turned out right raise trust; deviations
+    /// that turned out wrong (stale or noisy memories) lower it.
+    pub fn trust(&self) -> f64 {
+        let t = self.skill_xy / (self.skill_xx + 0.25);
+        if t.is_finite() { t.clamp(0.0, 1.0) } else { 0.0 }
+    }
+
     pub fn estimate(&self, x: &Situation) -> Yield {
         let xx: [f32; DG] = self.grower.situation(x);
         let d = self.brain.decide(&xx, &[true], 0);
@@ -295,7 +344,9 @@ impl Mind {
             let s = d.cited[k] as usize;
             self.brain.episode(s).map(|_| self.labels[s].clone())
         }).collect();
-        Yield { expected: (d.expected as f64).clamp(0.0, 1.0), evidence: d.evidence as f64, abstained: d.abstained, cites }
+        let raw = (d.expected as f64).clamp(0.0, 1.0);
+        let expected = match self.base_rate() { Some(b) => b + self.trust() * (raw - b), None => raw };
+        Yield { expected, raw, evidence: d.evidence as f64, abstained: d.abstained, cites }
     }
 }
 
@@ -359,6 +410,67 @@ mod tests {
         let lab = crate::lab::analyze(&ledger(&[]));
         let m = Mind::from_lab(&lab);
         assert!(m.estimate(&situation_planned("code_tps", 1.6, 1.6)).abstained);
+    }
+
+    #[test]
+    fn exact_answers_at_their_threshold_are_decisive_not_fragile() {
+        // The single-run band is throughput noise: it makes a timing claim inside it fragile, but an
+        // exact answer (a count of correct answers) at its threshold cannot flip within it.
+        assert_eq!(reward("pass", Some(0.0), 2.0, 1.5, true), 0.0);
+        assert_eq!(reward("pass", Some(0.0), 2.0, 1.5, false), 1.0);
+        assert_eq!(reward("void", None, 2.0, 1.5, false), 0.0);
+        assert_eq!(reward("pass", Some(11.0), 2.0, 1.5, false), 0.5, "an easy pass stays easy");
+        let mut l = ledger(&[("tps-near", ">%", "102 vs 100 (1.00%, need >% 1%)", "pass")]);
+        l += "{\"kind\":\"prediction\",\"ts\":9,\"pred\":\"9.tsv\",\"name\":\"cand-short-quality\",\"value\":\"10\",\"op\":\">=\",\"threshold\":\"10\",\"verdict\":\"pass\"}\n";
+        let lab = crate::lab::analyze(&l);
+        let m = Mind::from_lab(&lab);
+        let r: Vec<(String, f64)> = learning_order(&lab).iter().map(|p| (p.name.clone(), m.reward_of(p, &[]))).collect();
+        assert_eq!(r, vec![("tps-near".to_string(), 0.0), ("cand-short-quality".to_string(), 1.0)]);
+        assert_eq!(lab.fragile, 1, "the lab counts the same one fragile");
+    }
+
+    /// A world where the claim shape says nothing about the reward (fair coin per prediction).
+    fn coin_world(n: usize, seed: u64) -> String {
+        let mut s = seed;
+        let mut rows: Vec<(String, &str, &str, &str)> = Vec::new();
+        for i in 0..n {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let verdict = if (s >> 33) & 1 == 1 { "pass" } else { "void" };
+            let (name, op, value) = match i % 3 {
+                0 => (format!("needle-found-{}", i), "~", "FOUND"),
+                1 => (format!("tps-gain-{}", i), ">%", "103 vs 100 (3.00%, need >% 0%)"),
+                _ => (format!("restore-{}", i), "<", "3"),
+            };
+            rows.push((name, op, value, verdict));
+        }
+        let r: Vec<(&str, &str, &str, &str)> = rows.iter().map(|(a, b, c, d)| (a.as_str(), *b, *c, *d)).collect();
+        ledger(&r)
+    }
+
+    #[test]
+    fn falls_back_to_the_base_rate_when_its_record_shows_no_skill() {
+        // Raw, the brain chases the coin (its memory trusts 8 noisy neighbours) and loses to the base
+        // rate; its own record earns it little trust, so its yields stay near the base rate.
+        for seed in 1..=4u64 {
+            let lab = crate::lab::analyze(&coin_world(240, seed));
+            let order = learning_order(&lab);
+            let mut m = Mind::blank(&lab, &[], &[]);
+            let (mut e_raw, mut e_yield, mut e_base, mut n) = (0.0, 0.0, 0.0, 0usize);
+            for p in &order {
+                let (y, b) = (m.estimate(&m.situation_of_prediction(p, &[])), m.base_rate());
+                let r = m.learn_prediction(p, &[], &[]);
+                if let (Some(b), false) = (b, y.abstained) {
+                    e_raw += (y.raw - r) * (y.raw - r); e_yield += (y.expected - r) * (y.expected - r); e_base += (b - r) * (b - r); n += 1;
+                }
+            }
+            let (e_raw, e_yield, e_base) = (e_raw / n as f64, e_yield / n as f64, e_base / n as f64);
+            std::println!("coin world {}: brain {:.4} yield {:.4} base rate {:.4}; trust {:.3}", seed, e_raw, e_yield, e_base, m.trust());
+            assert!(e_raw > 1.05 * e_base, "the raw brain chases the coin: {} vs {}", e_raw, e_base);
+            assert!(m.trust() < 0.25, "no demonstrated skill, little trust: {}", m.trust());
+            assert!(e_yield < e_raw && e_yield < 1.03 * e_base, "shrunk yields are about the base rate: {} vs {}", e_yield, e_base);
+            let (y, b) = (m.estimate(&m.situation_of_prediction(order[0], &[])), m.base_rate().unwrap());
+            assert!((y.expected - b).abs() <= m.trust() * (y.raw - b).abs() + 1e-12, "{:?}", y);
+        }
     }
 
     #[test]
