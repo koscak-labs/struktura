@@ -22,6 +22,11 @@ fn mask_numbers(s: &str) -> String {
     for c in s.chars() {
         if c.is_ascii_digit() { if !in_num { out.push('N'); in_num = true; } } else { in_num = false; out.push(c); }
     }
+    // a LIST of numbers is one value: "line(s) [3, 7, 12]" and "line(s) [5]" are the same mistake
+    for sep in [", N", ",N", " N"] {
+        let pair = std::format!("N{}", sep);
+        while out.contains(&pair) { out = out.replace(&pair, "N"); }
+    }
     out
 }
 
@@ -119,6 +124,10 @@ mod tests {
         assert_eq!(signature(a), "hxc: frameshift — TTT closes a block that was never opened");
         assert_eq!(signature("hxc check: line 4: 'ACA # brain_gpu <result_var>' needs 1 arg, got 4"), "hxc: 'ACA' needs N arg, got N");
         assert_eq!(signature("hxc check: line 12: 'CAC # else' with no open Plain block"), "hxc: 'CAC' with no open Plain block");
+        // a variable-length list of line numbers is one class
+        let a = signature("hxc check: NON-ASCII on line(s) [3, 7, 12] -- break rustc+shells");
+        assert_eq!(a, signature("hxc check: NON-ASCII on line(s) [5] -- break rustc+shells"));
+        assert_eq!(a, "hxc: NON-ASCII on line(s) [N] -- break rustc+shells");
         assert_eq!(signature("hxc check: frameshift: 2 block(s) opened but never closed — add 2 'TTT' line(s)"), "hxc: frameshift: N block(s) opened but never closed — add N 'TTT' line(s)");
         // hxc build wraps rustc: the rustc line wins over the generic hxc wrapper
         assert_eq!(signature("hxc: compile failed — check .hlx lines marked [hlx:7] above\nerror: expected one of `;` or `}`, found `x`\nerror: aborting due to 1 previous error"), "rustc error: expected one of `…` or `…`, found `…`");
