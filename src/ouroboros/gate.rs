@@ -29,6 +29,7 @@ pub fn gate(req_csv: &str, deploys: &[(f64, String)], model: &str, min_effect_pc
     let mut dep: Vec<u64> = deploys.iter().map(|(t, _)| *t as u64).collect();
     dep.sort();
     let mut rows: Vec<(u64, Row)> = Vec::new();
+    let mut keys: Vec<(u64, u64, u64, f64)> = Vec::new();
     for line in req_csv.lines() {
         let f: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
         if !model.is_empty() && f.get(13).copied().unwrap_or("") != model { continue; }
@@ -37,9 +38,13 @@ pub fn gate(req_csv: &str, deploys: &[(f64, String)], model: &str, min_effect_pc
             if tps <= 0.0 { continue; }
             let s = start as u64;
             let seg = dep.iter().rev().find(|t| **t <= s + DEPLOY_LEAD_S).copied().unwrap_or(0);
-            rows.push((s, Row { seg, ctx_k: ctx / 1000.0, busy, ms: 1000.0 / tps, tps, mlen: g(10).unwrap_or(f64::NAN) }));
+            rows.push((s, Row { seg, ctx_k: ctx / 1000.0, busy, ms: 1000.0 / tps, tps, mlen: g(10).unwrap_or(f64::NAN), session: 0 }));
+            // Requests of one conversation are not independent: session = child (pid:port) + slot + growing context.
+            let child = (g(1).unwrap_or(0.0) as u64) << 16 | (g(14).unwrap_or(0.0) as u64 & 0xFFFF);
+            keys.push((child, g(2).unwrap_or(0.0) as u64, s, ctx / 1000.0));
         }
     }
+    for ((_, r), sid) in rows.iter_mut().zip(crate::pulse::assign_sessions(&keys)) { r.session = sid; }
     rows.sort_by_key(|r| r.0);
     let rows: Vec<Row> = rows.into_iter().map(|r| r.1).collect();
     if rows.len() < 2 { return Gate::NoEvidence("fewer than 2 prod requests".into()); }
@@ -61,7 +66,8 @@ mod tests {
         for i in 0..80u64 {
             let start = dep_ts - 4000 + i * 100;
             let ms = if start + DEPLOY_LEAD_S >= dep_ts { level_after } else { level_before } + (i % 5) as f64 * 0.05;
-            s += &format!("{},1,0,{},{},0,0,100,{},1,3,{},0,qwen38,5000\n", start + 50, start, 20000 + (i % 7) * 1000, 1000.0 / ms, ms * 3.0);
+            // one conversation per request (its own server child port): 40 sessions on each side
+            s += &format!("{},1,0,{},{},0,0,100,{},1,3,{},0,qwen38,{}\n", start + 50, start, 20000 + (i % 7) * 1000, 1000.0 / ms, ms * 3.0, 5000 + i);
         }
         s
     }
