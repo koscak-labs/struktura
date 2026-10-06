@@ -5036,13 +5036,13 @@ fn cmd_lab(args: &[String]) {
                 esc(&f.pred), f.status, f.pass, f.fail, f.void, f.missing);
         }
         for p in &r.predictions {
-            println!("{{\"event\":\"prediction\",\"pred\":\"{}\",\"name\":\"{}\",\"verdict\":\"{}\",\"margin_pct\":{},\"fragile\":{},\"flips\":{}}}",
+            println!("{{\"event\":\"prediction\",\"pred\":\"{}\",\"name\":\"{}\",\"verdict\":\"{}\",\"margin_pct\":{},\"fragile\":{},\"flips\":{},\"measurements\":{},\"agreeing\":{}}}",
                 esc(&p.pred), esc(&p.name), esc(&p.verdict), p.margin_pct.map(num).unwrap_or("null".into()),
-                p.margin_pct.map(|m| m.abs() < r.pair_band_pct.max(r.floor_pct) && (p.verdict == "pass" || p.verdict == "fail")).unwrap_or(false), p.flips);
+                p.margin_pct.map(|m| m.abs() < r.pair_band_pct.max(r.floor_pct) && (p.verdict == "pass" || p.verdict == "fail")).unwrap_or(false), p.flips, p.measurements, p.agreeing);
         }
-        println!("{{\"summary\":true,\"rows\":{},\"bad_rows\":{},\"cal_n\":{},\"cal_mean_tps\":{},\"cal_cv_pct\":{},\"floor_pct\":{},\"pair_band_pct\":{},\"predictions\":{},\"scored\":{},\"passed\":{},\"fragile\":{},\"flipped\":{},\"easy\":{},\"median_pass_margin_pct\":{},\"jobs\":{},\"jobs_failed\":{},\"window_min\":{},\"job_min_in_windows\":{},\"utilisation_pct\":{},\"cal_min\":{},\"deploys\":{},\"constraints\":{}}}",
+        println!("{{\"summary\":true,\"rows\":{},\"bad_rows\":{},\"cal_n\":{},\"cal_mean_tps\":{},\"cal_cv_pct\":{},\"floor_pct\":{},\"pair_band_pct\":{},\"predictions\":{},\"scored\":{},\"passed\":{},\"fragile\":{},\"flipped\":{},\"easy\":{},\"replicated\":{},\"contested\":{},\"median_pass_margin_pct\":{},\"jobs\":{},\"jobs_failed\":{},\"window_min\":{},\"job_min_in_windows\":{},\"utilisation_pct\":{},\"cal_min\":{},\"deploys\":{},\"constraints\":{}}}",
             r.rows, r.bad_rows, r.cal_n, num(r.cal_mean_tps), num(r.cal_cv_pct), num(r.floor_pct), num(r.pair_band_pct), r.predictions.len(), scored, passed,
-            r.fragile, r.flipped, r.easy, num(r.median_pass_margin), r.jobs, r.jobs_failed, num(r.window_min), num(r.job_min_in_windows), num(util), num(r.cal_min),
+            r.fragile, r.flipped, r.easy, r.replicated, r.contested, num(r.median_pass_margin), r.jobs, r.jobs_failed, num(r.window_min), num(r.job_min_in_windows), num(util), num(r.cal_min),
             r.deploys.len(), r.constraints.len());
         return;
     }
@@ -5054,6 +5054,7 @@ fn cmd_lab(args: &[String]) {
     println!("{}noise floor: calibration code t/s n={} mean {:.1}, CV {:.3}% -> floor 2xCV {:.2}%; 95% band of a single-run difference 1.96*sqrt2*CV = {:.2}% (2xCV alone lets ~{:.0}% of no-effect single-run comparisons through)", b, r.cal_n, r.cal_mean_tps, r.cal_cv_pct, r.floor_pct, r.pair_band_pct, 100.0 * struktura::lab::two_sided_tail(r.floor_pct / (std::f64::consts::SQRT_2 * r.cal_cv_pct)));
     println!("{}predictions: {} (latest verdict each), {} scored, {} pass ({:.0}%), median pass margin {:+.1}%", b, r.predictions.len(), scored, passed,
         if scored > 0 { 100.0 * passed as f64 / scored as f64 } else { f64::NAN }, r.median_pass_margin);
+    println!("{}replication: {} prediction(s) measured independently 2+ times and all agree, {} contested (independent measurements disagree); re-scoring the same log does not count", b, r.replicated, r.contested);
     println!("{}self-calibration: {} fragile (|margin| inside the single-run band: a re-run could flip them), {} flipped on re-scoring, {} easy passes (margin > 3 floors: thresholds set below the expected effect teach little)", b, r.fragile, r.flipped, r.easy);
     println!("{}lab windows: {:.0} min open, {:.0} min of jobs inside -> {:.0}% utilisation; calibration {:.0} min; jobs {} ({} failed)",
         b, r.window_min, r.job_min_in_windows, util, r.cal_min, r.jobs, r.jobs_failed);
@@ -5070,7 +5071,13 @@ fn cmd_lab(args: &[String]) {
             && p.margin_pct.map(|m| m.abs() < r.pair_band_pct.max(r.floor_pct)).unwrap_or(false)).collect();
         let flipped: Vec<_> = r.predictions.iter().filter(|p| p.flips > 0).collect();
         if !fragile.is_empty() || !flipped.is_empty() { println!("{}", if md { "\n**Fragile / flipped (re-measure before relying on them):**" } else { "  fragile / flipped:" }); }
-        for p in fragile { println!("{}[{}] {} :: {} margin {:+.2}% (single-run band {:.2}%) value {}", b, p.verdict, p.pred, p.name, p.margin_pct.unwrap(), r.pair_band_pct.max(r.floor_pct), p.value); }
+        for p in fragile {
+            let rep = if p.measurements >= 2 { format!("{}/{} independent measurements agree", p.agreeing, p.measurements) } else { "awaiting replication".to_string() };
+            println!("{}[{}] {} :: {} margin {:+.2}% (single-run band {:.2}%) value {} -- {}", b, p.verdict, p.pred, p.name, p.margin_pct.unwrap(), r.pair_band_pct.max(r.floor_pct), p.value, rep);
+        }
+        for p in r.predictions.iter().filter(|p| p.measurements >= 2 && p.agreeing < p.measurements) {
+            println!("{}[CONTESTED] {} :: {} latest {} but only {}/{} independent measurements agree", b, p.pred, p.name, p.verdict, p.agreeing, p.measurements);
+        }
         for p in flipped { println!("{}[{}] {} :: {} flipped {}x on re-scoring", b, p.verdict, p.pred, p.name, p.flips); }
     }
 }

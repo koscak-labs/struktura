@@ -123,6 +123,11 @@ pub struct Prediction {
     pub margin_pct: Option<f64>,
     /// Earlier scored verdicts for the same (pred, name) that differ from this one.
     pub flips: usize,
+    /// Independent measurements: scored (pass/fail) rows with distinct measured values.
+    /// Re-scoring the same log repeats the value and is not counted twice.
+    pub measurements: usize,
+    /// Of those, how many agree with the latest verdict.
+    pub agreeing: usize,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -155,6 +160,10 @@ pub struct LabReport {
     /// Passes that cleared their threshold by more than 3 noise floors: the
     /// prediction was a safe bet, so its verdict carried little information.
     pub easy: usize,
+    /// Predictions measured independently at least twice, all agreeing.
+    pub replicated: usize,
+    /// Predictions whose independent measurements disagree.
+    pub contested: usize,
     pub median_pass_margin: f64,
     pub jobs: usize,
     pub jobs_failed: usize,
@@ -219,7 +228,7 @@ pub fn analyze(ledger: &str) -> LabReport {
                     pred: j.str("pred").unwrap_or("").to_string(), name: j.str("name").unwrap_or("").to_string(),
                     ts: j.num("ts").unwrap_or(0.0), verdict: j.str("verdict").unwrap_or("").to_string(),
                     value: j.str("value").unwrap_or("").to_string(), op: j.str("op").unwrap_or("").to_string(),
-                    threshold: j.str("threshold").unwrap_or("").to_string(), margin_pct: None, flips: 0,
+                    threshold: j.str("threshold").unwrap_or("").to_string(), margin_pct: None, flips: 0, measurements: 0, agreeing: 0,
                 };
                 history.entry((p.pred.clone(), p.name.clone())).or_default().push(p);
             }
@@ -271,6 +280,13 @@ pub fn analyze(ledger: &str) -> LabReport {
         let mut latest = match scored.last() { Some(p) => (*p).clone(), None => rows.last().unwrap().clone() };
         latest.flips = scored.iter().filter(|p| p.verdict != latest.verdict && p.verdict != "void" && latest.verdict != "void").count();
         latest.margin_pct = margin(&latest.op, &latest.value, &latest.threshold);
+        let mut seen: Vec<(&str, &str)> = Vec::new();
+        for p in scored.iter().filter(|p| p.verdict == "pass" || p.verdict == "fail") {
+            if !seen.iter().any(|(v, _)| *v == p.value.as_str()) { seen.push((p.value.as_str(), p.verdict.as_str())); }
+        }
+        latest.measurements = seen.len();
+        latest.agreeing = seen.iter().filter(|(_, v)| *v == latest.verdict).count();
+        if latest.measurements >= 2 { if latest.agreeing == latest.measurements { r.replicated += 1 } else { r.contested += 1 } }
         let f = files.entry(pred.clone()).or_insert_with(|| PredFile { pred: pred.clone(), ..Default::default() });
         match latest.verdict.as_str() { "pass" => f.pass += 1, "fail" => f.fail += 1, "void" => f.void += 1, _ => f.missing += 1 }
         if latest.flips > 0 { r.flipped += 1; }
@@ -334,6 +350,9 @@ mod tests {
 {"kind":"prediction","ts":1900,"pred":"2.tsv","name":"x","value":"","op":">=","threshold":"1","verdict":"void"}
 {"kind":"prediction","ts":1702,"pred":"3.tsv","name":"y","value":"3","op":">=","threshold":"5","verdict":"pass"}
 {"kind":"prediction","ts":1800,"pred":"3.tsv","name":"y","value":"3","op":">=","threshold":"5","verdict":"fail"}
+{"kind":"prediction","ts":1703,"pred":"4.tsv","name":"r","value":"12","op":">=","threshold":"9","verdict":"pass"}
+{"kind":"prediction","ts":1704,"pred":"4.tsv","name":"r","value":"12","op":">=","threshold":"9","verdict":"pass"}
+{"kind":"prediction","ts":1905,"pred":"4.tsv","name":"r","value":"11","op":">=","threshold":"9","verdict":"pass"}
 {"kind":"window","ts":2000,"event":"stop"}
 not json
 {"kind":"deploy","ts":1950,"binary":"alien2","chunk":64}
@@ -352,7 +371,13 @@ not json
         assert_eq!(f["2.tsv"].status, "VOID", "void supersedes the earlier fail");
         assert_eq!(f["3.tsv"].status, "FALSIFIED", "latest verdict wins");
         assert_eq!(r.flipped, 1, "3.tsv::y flipped pass -> fail");
-        assert_eq!(r.easy, 1, "1.tsv::a passed by 11% > 3 floors");
+        assert_eq!(r.easy, 2, "1.tsv::a (+11.1%) and 4.tsv::r (+22.2%) clear 3 floors (4.22%)");
+        // 4.tsv::r: value 12 scored twice (one measurement, re-scored) + value 11 = 2 independent, both pass.
+        let p = r.predictions.iter().find(|p| p.pred == "4.tsv").unwrap();
+        assert_eq!((p.measurements, p.agreeing), (2, 2));
+        assert_eq!((r.replicated, r.contested), (1, 0));
+        // 3.tsv::y: the same value re-scored pass then fail is one measurement, not a replication.
+        assert_eq!(r.predictions.iter().find(|p| p.pred == "3.tsv").unwrap().measurements, 1);
         // 1.tsv::b passed by 0.5 points: inside the 1.41% floor -> fragile; 3.tsv::y missed by 40% -> not fragile.
         assert_eq!(r.fragile, 1);
         assert_eq!((r.jobs, r.jobs_failed), (2, 1));
