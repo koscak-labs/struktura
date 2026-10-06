@@ -4749,6 +4749,7 @@ fn cmd_pulse(args: &[String]) {
         println!("  --min-effect  smallest believable effect, percent (default 1.16 = 2x lab calibration CV)");
         println!("  --cols seg,ctx,step,busy,tps   0-based columns (default 1,4,11,12,8)");
         println!("  --metric token|step  judge ms per generated token (default; fair across drafter changes) or ms per decode step");
+        println!("  --archive FILE  merge the (rolling) input into an append-only, deduplicated FILE and analyze FILE");
         println!("  --ref-state FILE  freeze the --watch reference (per-session first solo requests) in FILE across --watch-once runs");
         println!("  --deploy-lead S  requests starting up to S s before a deploy row belong to it (its verify request; default 15)");
         println!("  --deploys LEDGER  key deploys on the ledger's kind:\"deploy\" rows (a pid changes on every model reload);");
@@ -4772,6 +4773,7 @@ fn cmd_pulse(args: &[String]) {
     // start up to this many seconds before the row belong to the new config.
     let mut deploy_lead = 15u64;
     let mut ref_state: Option<String> = None;
+    let mut archive: Option<String> = None;
     // model alias and server child port (prod-pulse.sh cols 14, 15), prompt tokens and prompt t/s (cols 6, 7)
     let (model_col, port_col, pn_col, ptps_col) = (13usize, 14usize, 5usize, 6usize);
     let mut by_child = false;
@@ -4792,6 +4794,7 @@ fn cmd_pulse(args: &[String]) {
             "--deploys" => { i += 1; deploys_path = args.get(i).cloned(); }
             "--deploy-lead" => { i += 1; deploy_lead = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(deploy_lead); }
             "--ref-state" => { i += 1; ref_state = args.get(i).cloned(); }
+            "--archive" => { i += 1; archive = args.get(i).cloned(); }
             "--model" => { i += 1; want_model = args.get(i).cloned(); }
             "--by-child" => by_child = true,
             "--churn-window" => { i += 1; churn_window = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(churn_window); }
@@ -4808,7 +4811,7 @@ fn cmd_pulse(args: &[String]) {
         }
         i += 1;
     }
-    let text = match std::fs::read_to_string(&args[2]) { Ok(t) => t, Err(e) => { eprintln!("pulse: {}: {}", args[2], e); process::exit(2); } };
+    let text = pulse_load(&args[2], archive.as_deref());
     // Deploy boundaries from a lab ledger: JSON lines with "kind":"deploy" and a unix "ts".
     // A server process id changes on every model reload, so it is not a deploy; the ledger is.
     let mut deploys: Vec<(u64, String)> = Vec::new();
@@ -4872,7 +4875,7 @@ fn cmd_pulse(args: &[String]) {
             .filter_map(|l| { let (a, b) = l.split_once(',')?; Some((a.trim().parse().ok()?, b.trim().parse().ok()?)) }).collect());
         let t0 = std::time::Instant::now();
         loop {
-            let text = match std::fs::read_to_string(&args[2]) { Ok(t) => t, Err(e) => { eprintln!("pulse: {}: {}", args[2], e); process::exit(2); } };
+            let text = pulse_load(&args[2], archive.as_deref());
             let (reference_now, stream) = session_firsts(&text);
             if frozen.is_none() && reference_now.len() >= struktura::pulse::MIN_SEG_ROWS {
                 if let Some(p) = &ref_state {
@@ -5303,4 +5306,31 @@ fn cmd_power(args: &[String]) {
             println!("  thresholds far below it pass easily and teach little (see `struktura lab`).");
         }
     }
+}
+
+/// Read pulse's request rows. With an archive, first merge the (rolling) input into an
+/// append-only archive file — one row per request, deduplicated on end_ts, pid, slot,
+/// start_ts and port — and return the archive, so references and past verdicts survive
+/// the input's window. The archive is rewritten atomically (temp file + rename).
+fn pulse_load(path: &str, archive: Option<&str>) -> String {
+    let text = match std::fs::read_to_string(path) { Ok(t) => t, Err(e) => { eprintln!("pulse: {}: {}", path, e); process::exit(2); } };
+    let Some(a) = archive else { return text };
+    let old = std::fs::read_to_string(a).unwrap_or_default();
+    let key = |l: &str| -> String {
+        let f: Vec<&str> = l.split(',').map(|s| s.trim()).collect();
+        format!("{}|{}|{}|{}|{}", f.first().unwrap_or(&""), f.get(1).unwrap_or(&""), f.get(2).unwrap_or(&""), f.get(3).unwrap_or(&""), f.get(14).unwrap_or(&""))
+    };
+    let mut seen: std::collections::HashSet<String> = old.lines().filter(|l| !l.trim().is_empty()).map(key).collect();
+    let mut merged = old.clone();
+    if !merged.is_empty() && !merged.ends_with('\n') { merged.push('\n'); }
+    let mut added = 0usize;
+    for l in text.lines().filter(|l| !l.trim().is_empty()) {
+        if seen.insert(key(l)) { merged.push_str(l); merged.push('\n'); added += 1; }
+    }
+    if added > 0 {
+        let tmp = format!("{}.tmp", a);
+        if std::fs::write(&tmp, &merged).and_then(|_| std::fs::rename(&tmp, a)).is_err() { eprintln!("pulse: cannot write archive {}", a); process::exit(2); }
+    }
+    eprintln!("pulse: archive {}: +{} new rows, {} total", a, added, merged.lines().count());
+    merged
 }
