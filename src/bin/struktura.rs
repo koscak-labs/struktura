@@ -5458,6 +5458,7 @@ fn pulse_load(path: &str, archive: Option<&str>) -> String {
 
 fn cmd_brain(args: &[String]) {
     use struktura::brain::Brain;
+    if args.get(2).map(|s| s.as_str()) == Some("grow") { cmd_brain_grow(); return; }
     if args.get(2).map(|s| s.as_str()) != Some("demo") {
         println!("struktura brain demo   native decision brain (no heap, no model weights to ship): memory + linear model,");
         println!("                       learning a rover fault-response policy online from its own outcomes, with an ablation");
@@ -5516,4 +5517,45 @@ fn cmd_brain(args: &[String]) {
     }
     let blocked = br.decide(&x, &[true, true, false, true], 3);
     println!("  same situation, quarantine not allowed -> {} (abstained {})", names[blocked.action as usize], blocked.abstained);
+}
+
+fn cmd_brain_grow() {
+    use struktura::brain::Brain;
+    use struktura::brain_grow::{Feat, Grower};
+    let names = ["drift", "spike", "temp", "1"];
+    let truth = |x: &[f32; 4]| -> u8 { if x[2] > 0.6 && x[0] > 0.6 { 3 } else if x[1] > 0.6 && x[2] < 0.4 { 2 } else if (x[0] > 0.5) != (x[1] > 0.5) { 1 } else { 0 } };
+    let mut s = 0x2545F4914F6CDD1Du64;
+    let mut rnd = move || { s ^= s << 13; s ^= s >> 7; s ^= s << 17; ((s >> 40) as f32) / (1u64 << 24) as f32 };
+    let mut br: Brain<256, 8, 4> = Brain::new(0.3, 0.5);
+    let mut plain: Brain<256, 8, 4> = Brain::new(0.3, 0.5);
+    let mut gr: Grower<4, 4> = Grower::new(7);
+    gr.constant[3] = true;
+    println!("struktura brain grow: rover world with interactions; the brain may grow up to 4 new senses,");
+    println!("each adopted only if it explains its mistakes on HELD-OUT memories (random half-splits)");
+    let (mut ok_g, mut ok_p) = (0usize, 0usize);
+    for t in 0..4000usize {
+        let base = [rnd(), rnd(), rnd(), 1.0];
+        let x: [f32; 8] = gr.situation(&base);
+        let xp: [f32; 8] = { let mut v = [0.0; 8]; v[..4].copy_from_slice(&base); v };
+        let d = br.decide(&x, &[true; 4], 3);
+        let dp = plain.decide(&xp, &[true; 4], 3);
+        let a = if d.abstained && t < 400 { (t % 4) as u8 } else { d.action };
+        let ap = if dp.abstained && t < 400 { (t % 4) as u8 } else { dp.action };
+        let rw = |a: u8| if a == truth(&base) { 1.0 } else if a == 3 { 0.2 } else { 0.0 };
+        if t >= 3000 { ok_g += (a == truth(&base)) as usize; ok_p += (ap == truth(&base)) as usize; }
+        br.learn(&x, a, rw(a));
+        plain.learn(&xp, ap, rw(ap));
+        if let Some(g) = gr.after_learn(&mut br) {
+            if let Some(f) = g.adopted {
+                let what = match f {
+                    Feat::Prod(i, j) => format!("{} x {}", names[i as usize], names[j as usize]),
+                    Feat::Step(i, th) => format!("{} > {:.2}", names[i as usize], th),
+                    Feat::Gt(i, j) => format!("{} > {}", names[i as usize], names[j as usize]),
+                    Feat::Off => "-".into(),
+                };
+                println!("  decision {:>4}: grew sense #{} = {:<16} (held-out error -{:.0}%, best of {} candidates)", t + 1, g.slot + 1, what, 100.0 * g.gain, g.candidates);
+            }
+        }
+    }
+    println!("  right-action rate, last 1000 decisions: growing brain {:.1}%  vs same brain without growth {:.1}%", ok_g as f32 / 10.0, ok_p as f32 / 10.0);
 }

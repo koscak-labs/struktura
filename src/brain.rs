@@ -221,6 +221,12 @@ impl<const N: usize, const D: usize, const A: usize> Brain<N, D, A> {
         self.pulls[a] = self.pulls[a].saturating_add(1);
     }
 
+    /// Re-compute every stored situation (e.g. after the situation gained a new feature),
+    /// keeping actions, rewards and surprise. Bounded: one pass over memory.
+    pub fn rekey(&mut self, f: impl Fn(&[f32; D]) -> [f32; D]) {
+        for e in self.mem.iter_mut() { if e.used { e.key = f(&e.key); } }
+    }
+
     /// The model's prediction alone (no memory correction); 0 when `use_model` is off.
     pub fn predict(&self, action: u8, x: &[f32; D]) -> f32 {
         let a = action as usize;
