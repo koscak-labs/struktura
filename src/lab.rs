@@ -144,6 +144,10 @@ pub struct LabReport {
     pub cal_mean_tps: f64,
     pub cal_cv_pct: f64,
     pub floor_pct: f64,
+    /// 95% band of the difference of two single runs: 1.96 x sqrt(2) x CV. A margin
+    /// inside it is fragile (2 x CV alone is ~1.4 sd of a single-run difference,
+    /// so ~16% of no-effect comparisons cross it).
+    pub pair_band_pct: f64,
     pub predictions: Vec<Prediction>,
     pub files: Vec<PredFile>,
     pub fragile: usize,
@@ -253,8 +257,9 @@ pub fn analyze(ledger: &str) -> LabReport {
         r.cal_mean_tps = m;
         r.cal_cv_pct = 100.0 * sd / m;
         r.floor_pct = (2.0 * r.cal_cv_pct).max(1.0);
+        r.pair_band_pct = 1.959964 * std::f64::consts::SQRT_2 * r.cal_cv_pct;
     } else {
-        r.cal_mean_tps = f64::NAN; r.cal_cv_pct = f64::NAN; r.floor_pct = 5.0;
+        r.cal_mean_tps = f64::NAN; r.cal_cv_pct = f64::NAN; r.floor_pct = 5.0; r.pair_band_pct = 5.0;
     }
 
     // Latest authoritative verdict per (pred, name).
@@ -271,7 +276,7 @@ pub fn analyze(ledger: &str) -> LabReport {
         if latest.flips > 0 { r.flipped += 1; }
         if let Some(m) = latest.margin_pct {
             if latest.verdict == "pass" || latest.verdict == "fail" {
-                if m.abs() < r.floor_pct { r.fragile += 1; }
+                if m.abs() < r.pair_band_pct.max(r.floor_pct) { r.fragile += 1; }
                 if latest.verdict == "pass" { pass_margins.push(m); if m > 3.0 * r.floor_pct { r.easy += 1; } }
             }
         }
@@ -341,6 +346,7 @@ not json
         assert_eq!(r.cal_n, 2, "failed calibration excluded");
         assert!((r.cal_cv_pct - 0.7036).abs() < 1e-3, "cv={}", r.cal_cv_pct);
         assert!((r.floor_pct - 1.4072).abs() < 1e-3);
+        assert!((r.pair_band_pct - 1.95 ).abs() < 0.01, "band={}", r.pair_band_pct);
         let f: BTreeMap<&str, &PredFile> = r.files.iter().map(|f| (f.pred.as_str(), f)).collect();
         assert_eq!(f["1.tsv"].status, "CONFIRMED");
         assert_eq!(f["2.tsv"].status, "VOID", "void supersedes the earlier fail");
@@ -354,4 +360,12 @@ not json
         assert!((r.job_min_in_windows - 700.0 / 60.0).abs() < 1e-9);
         assert_eq!(r.deploys.len(), 1);
     }
+}
+
+/// Two-sided standard-normal tail P(|Z| > z) (Abramowitz-Stegun 7.1.26 erfc, |error| < 1.5e-7).
+pub fn two_sided_tail(z: f64) -> f64 {
+    let x = z.abs() / std::f64::consts::SQRT_2;
+    let t = 1.0 / (1.0 + 0.3275911 * x);
+    let erfc = t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429)))) * (-x * x).exp();
+    erfc
 }
