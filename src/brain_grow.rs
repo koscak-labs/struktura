@@ -192,8 +192,9 @@ impl<const B: usize, const G: usize> Grower<B, G> {
     }
 }
 
-#[cfg(test)]
-mod tests {
+/// The falsifier's worlds and runs, shared by the tests and the brain gym (`crate::brain_gym`).
+#[cfg(feature = "std")]
+pub mod falsify {
     use super::*;
 
     struct Rng(u64);
@@ -210,7 +211,7 @@ mod tests {
     }
 
     /// Returns (right-action rate over the last 1000, features grown).
-    fn run_b(seed: u64, grow: bool) -> (f32, usize) {
+    pub fn run_b(seed: u64, grow: bool) -> (f32, usize) {
         let mut r = Rng(seed);
         let mut br: Brain<256, 8, 4> = Brain::new(0.3, 0.5);
         let mut gr: Grower<4, 4> = Grower::new(seed ^ 0xBEEF);
@@ -230,7 +231,7 @@ mod tests {
         (ok as f32 / 1000.0, gr.grown().len())
     }
 
-    fn run_linear(seed: u64) -> usize {
+    pub fn run_linear(seed: u64) -> usize {
         let mut r = Rng(seed);
         let mut br: Brain<256, 8, 4> = Brain::new(0.3, 0.5);
         let mut gr: Grower<4, 4> = Grower::new(seed ^ 0xBEEF);
@@ -247,6 +248,36 @@ mod tests {
         gr.grown().len()
     }
 
+    /// The falsifier's accumulators over a seed set (sums, as the test asserts on them);
+    /// `k` = number of seeds.
+    #[derive(Clone, Copy, Debug)]
+    pub struct Report { pub k: f32, pub plain: f32, pub grow: f32, pub grown_b: usize, pub grown_lin: usize }
+
+    impl Report {
+        /// The pre-registered verdict, the test's asserts: (1) growth beats no growth by
+        /// >= 3 points; (2) < 1 feature grown per run in the linear world.
+        pub fn holds(&self) -> bool {
+            let k = self.k;
+            self.grow / k >= self.plain / k + 0.03 && (self.grown_lin as f32 / k) < 1.0
+        }
+    }
+
+    pub fn falsifier(seeds: &[u64]) -> Report {
+        let (mut plain, mut grow, mut grown_b, mut grown_lin) = (0.0f32, 0.0f32, 0usize, 0usize);
+        for &s in seeds {
+            plain += run_b(s, false).0;
+            let (g, n) = run_b(s, true); grow += g; grown_b += n;
+            grown_lin += run_linear(s);
+        }
+        Report { k: seeds.len() as f32, plain, grow, grown_b, grown_lin }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::falsify::{falsifier, Report};
+
     /// Pre-registered falsifiers (set before the run), 8 seeds and 8 fresh seeds:
     /// (1) interaction world: the growing brain's right-action rate (last 1000) beats the
     ///     same brain without growth by at least 3 points on average;
@@ -255,17 +286,13 @@ mod tests {
     #[test]
     fn falsifier_grows_what_generalizes_and_nothing_else() {
         for seeds in [[11u64, 23, 37, 41, 59, 61, 73, 89], [101, 103, 107, 109, 113, 127, 131, 137]] {
-            let (mut plain, mut grow, mut grown_b, mut grown_lin) = (0.0f32, 0.0f32, 0usize, 0usize);
-            for &s in &seeds {
-                plain += run_b(s, false).0;
-                let (g, n) = run_b(s, true); grow += g; grown_b += n;
-                grown_lin += run_linear(s);
-            }
-            let k = seeds.len() as f32;
+            let rep = falsifier(&seeds);
+            let Report { k, plain, grow, grown_b, grown_lin } = rep;
             std::println!("growth falsifier: interaction world right-action (last 1000) plain {:.3} vs growing {:.3} ({:.1} features grown/run); linear world: {:.2} features grown/run",
                 plain / k, grow / k, grown_b as f32 / k, grown_lin as f32 / k);
             assert!(grow / k >= plain / k + 0.03, "growth {} vs plain {}", grow / k, plain / k);
             assert!((grown_lin as f32 / k) < 1.0, "grew {} features/run in a world the base senses explain", grown_lin as f32 / k);
+            assert!(rep.holds(), "the gym verdict agrees with the asserts");
         }
     }
 

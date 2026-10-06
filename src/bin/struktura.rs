@@ -5687,11 +5687,15 @@ fn cmd_brain(args: &[String]) {
     if args.get(2).map(|s| s.as_str()) == Some("grow") { cmd_brain_grow(); return; }
     if args.get(2).map(|s| s.as_str()) == Some("grok") { cmd_brain_grok(args); return; }
     if matches!(args.get(2).map(|s| s.as_str()), Some("init" | "decide" | "learn" | "stats")) { cmd_brain_state(args); return; }
+    if args.get(2).map(|s| s.as_str()) == Some("gym") { cmd_brain_gym(&args[3..]); return; }
     if args.get(2).map(|s| s.as_str()) != Some("demo") {
         println!("struktura brain demo   native decision brain (no heap, no model weights to ship): memory + linear model,");
         println!("                       learning a rover fault-response policy online from its own outcomes, with an ablation");
         println!("struktura brain grok   grokking falsifier: (a + b) mod 7 from a fixed training set, brain + compression vs without");
         println!("                       [--seed N] [--fourier] [--json] [--every K] [--all = the 5 pre-registered seeds, summary]");
+        println!("struktura brain gym [--seed N] [--only NAME[,NAME..]] [--json] [--list]");
+        println!("                       re-run the brain modules' pre-registered falsifiers on fresh seeds (default seed: days");
+        println!("                       since the UNIX epoch); exit 3 only if an expected-pass trial failed (a flip)");
         println!("  Library: struktura::brain::Brain<N, D, A>: decide(situation, allowed, safe_default) / learn(situation, action, reward)");
         process::exit(if args.len() < 3 { 2 } else { 0 });
     }
@@ -5820,6 +5824,52 @@ fn cmd_brain_grok(args: &[String]) {
     println!("    B: {}", feats(&r.grown_b));
     println!("  (A model / B model = held-out accuracy of the linear model alone, memory not consulted: a diagnostic, not part of the verdict)");
     println!("  seed {}: {}", seed, if t.pass { "PASS" } else { "FAIL" });
+}
+
+/// `struktura brain gym [--seed N] [--only NAME[,NAME..]] [--json]`: one line per trial, then a
+/// summary. Exit 0 even when trials fail; 3 only if an expected-pass trial flipped to failing;
+/// 2 on a usage error.
+fn cmd_brain_gym(args: &[String]) {
+    use struktura::brain_gym;
+    let (mut seed, mut only, mut json) = (brain_gym::today(), None::<String>, false);
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--seed" => match args.get(i + 1).and_then(|v| v.parse::<u64>().ok()) {
+                Some(v) => { seed = v; i += 1; }
+                None => { eprintln!("brain gym: --seed needs an unsigned integer"); process::exit(2) }
+            },
+            "--only" => match args.get(i + 1) {
+                Some(v) => { only = Some(v.clone()); i += 1; }
+                None => { eprintln!("brain gym: --only needs a trial name"); process::exit(2) }
+            },
+            "--json" => json = true,
+            "--list" => { for (n, _) in brain_gym::TRIALS { println!("{}", n); } return; }
+            other => { eprintln!("brain gym: unknown argument {} (usage: struktura brain gym [--seed N] [--only NAME[,NAME..]] [--json] [--list])", other); process::exit(2) }
+        }
+        i += 1;
+    }
+    let names: Option<Vec<&str>> = only.as_deref().map(|o| o.split(',').map(str::trim).filter(|s| !s.is_empty()).collect());
+    let t0 = std::time::Instant::now();
+    let trials = match brain_gym::run(seed, names.as_deref()) {
+        Ok(t) => t,
+        Err(bad) => {
+            let known: Vec<&str> = brain_gym::TRIALS.iter().map(|(n, _)| *n).collect();
+            eprintln!("brain gym: no trial named {} (trials: {})", bad, known.join(", "));
+            process::exit(2)
+        }
+    };
+    let summary = brain_gym::Summary::new(seed, &trials);
+    if json {
+        for t in &trials { println!("{}", t.json()); }
+        println!("{}", summary.json());
+    } else {
+        println!("struktura brain gym: seed {}, {} trial(s); pre-registered falsifiers on fresh seeds", seed, trials.len());
+        for t in &trials { println!("{}", t.line()); }
+        println!("{}", summary.line());
+    }
+    eprintln!("brain gym: {} trial(s) in {:.1} s", trials.len(), t0.elapsed().as_secs_f64());
+    if summary.regression() { process::exit(3); }
 }
 
 fn cmd_brain_grow() {

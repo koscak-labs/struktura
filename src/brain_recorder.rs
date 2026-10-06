@@ -212,8 +212,9 @@ impl Verification {
     pub fn all_match(&self) -> bool { self.checked > 0 && self.matched == self.checked }
 }
 
-#[cfg(test)]
-mod tests {
+/// The falsifiers' flight and ground replay, shared by the tests and the brain gym (`crate::brain_gym`).
+#[cfg(feature = "std")]
+pub mod falsify {
     use super::*;
 
     struct Lcg(u64);
@@ -224,12 +225,13 @@ mod tests {
         if a == best { 1.0 } else if a == 3 { 0.2 } else { 0.0 }
     }
 
-    const STEPS: usize = 2000;
+    pub const STEPS: usize = 2000;
 
     /// The flight run: decide, record, act (rotating while abstaining early), learn.
-    fn flight<const M: usize>(rec: &mut Recorder<M>) {
+    /// `seed` = the situation stream.
+    pub fn flight<const M: usize>(rec: &mut Recorder<M>, seed: u64) {
         let mut br: Brain<256, 4, 4> = Brain::new(0.3, 0.5);
-        let mut r = Lcg(42);
+        let mut r = Lcg(seed);
         for t in 0..STEPS {
             let x = [r.f(), r.f(), r.f(), 1.0];
             let d = br.decide(&x, &[true; 4], 3);
@@ -240,11 +242,11 @@ mod tests {
     }
 
     /// The ground replay from a downlink stream; `flip` toggles one bit of one situation.
-    fn ground(stream: &[u8], flip: Option<(usize, usize, u32)>) -> Verification {
+    pub fn ground(stream: &[u8], flip: Option<(usize, usize, u32)>, seed: u64) -> Verification {
         let (n, total) = read_header(stream).unwrap();
         let first = total - n;
         let mut br: Brain<256, 4, 4> = Brain::new(0.3, 0.5);
-        let mut r = Lcg(42);
+        let mut r = Lcg(seed);
         let mut v = Verification::default();
         for t in 0..STEPS {
             let mut x = [r.f(), r.f(), r.f(), 1.0];
@@ -261,6 +263,38 @@ mod tests {
         }
         v
     }
+
+    /// Both falsifiers on one flight: the honest replay and the replay with `flip` applied.
+    pub struct Report { pub used: usize, pub exact: Verification, pub flipped: Verification, pub flip_step: usize }
+
+    impl Report {
+        /// The pre-registered verdict (the tests' asserts): every record reproduced bit-exact, and
+        /// the flipped bit detected at its decision and only there.
+        pub fn holds(&self) -> bool {
+            self.used == HEADER_BYTES + STEPS * RECORD_BYTES && self.exact.checked as usize == STEPS && self.exact.all_match()
+                && self.flipped.first_mismatch == Some(self.flip_step as u32) && self.flipped.matched == self.flipped.checked - 1
+        }
+    }
+
+    pub fn falsifier(seed: u64, flip: (usize, usize, u32)) -> Report {
+        let mut rec: Box<Recorder<2048>> = Box::default();
+        flight(&mut rec, seed);
+        let mut buf = vec![0u8; HEADER_BYTES + 2048 * RECORD_BYTES];
+        let used = rec.downlink(&mut buf);
+        Report { used, exact: ground(&buf[..used], None, seed), flipped: ground(&buf[..used], Some(flip), seed), flip_step: flip.0 }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::falsify::STEPS;
+
+    /// The tests' flight (situation stream seed 42).
+    fn flight<const M: usize>(rec: &mut Recorder<M>) { falsify::flight(rec, 42) }
+
+    /// The ground replay of the seed-42 flight; `flip` toggles one bit of one situation.
+    fn ground(stream: &[u8], flip: Option<(usize, usize, u32)>) -> Verification { falsify::ground(stream, flip, 42) }
 
     #[test]
     fn record_is_32_bytes() {
@@ -293,6 +327,7 @@ mod tests {
         println!("flipped-bit check: {}/{} matched, first mismatch at decision {:?}", v.matched, v.checked, v.first_mismatch);
         assert_eq!(v.first_mismatch, Some(1234));
         assert_eq!(v.matched, v.checked - 1, "only the corrupted decision differs");
+        assert!(falsify::falsifier(42, (1234, 0, 0)).holds(), "the gym verdict agrees with the asserts");
     }
 
     #[test]

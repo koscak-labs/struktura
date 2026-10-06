@@ -183,9 +183,11 @@ impl<const N: usize> Default for Regime<N> {
     fn default() -> Self { Self::new() }
 }
 
-#[cfg(test)]
-mod tests {
+/// The falsifier's rover world and runs, shared by the tests and the brain gym (`crate::brain_gym`).
+#[cfg(feature = "std")]
+pub mod falsify {
     use super::*;
+    use std::vec::Vec;
 
     struct Xs(u64);
     impl Xs { fn f(&mut self) -> f32 { self.0 ^= self.0 << 13; self.0 ^= self.0 >> 7; self.0 ^= self.0 << 17; ((self.0 >> 40) as f32) / (1u64 << 24) as f32 } }
@@ -199,12 +201,12 @@ mod tests {
     }
     fn reward(x: &[f32; 4], a: u8, night: bool) -> f32 { if a == truth(x, night) { 1.0 } else if a == 3 { 0.2 } else { 0.0 } }
 
-    const STEPS: usize = 6000;
-    const FLIP: usize = 2000;
-    const WIN: usize = 200;
+    pub const STEPS: usize = 6000;
+    pub const FLIP: usize = 2000;
+    pub const WIN: usize = 200;
 
     /// Run one rover; returns (per-step correctness, changes declared, first change step).
-    fn run(seed: u64, flip: bool, regime: bool) -> (Vec<bool>, u32, Option<usize>) {
+    pub fn run(seed: u64, flip: bool, regime: bool) -> (Vec<bool>, u32, Option<usize>) {
         let mut br: Brain<256, 4, 4> = Brain::new(0.3, 0.5);
         let mut rg: Regime<256> = Regime::new();
         let mut r = Xs(seed);
@@ -222,11 +224,11 @@ mod tests {
         (ok, rg.changes, first)
     }
 
-    fn rate(ok: &[bool]) -> f32 { ok.iter().filter(|b| **b).count() as f32 / ok.len() as f32 }
+    pub fn rate(ok: &[bool]) -> f32 { ok.iter().filter(|b| **b).count() as f32 / ok.len() as f32 }
 
     /// Steps after the flip until the rolling right-action rate is back to 90% of
     /// the pre-flip steady rate (None = never within the run).
-    fn recovery(ok: &[bool]) -> (f32, Option<usize>) {
+    pub fn recovery(ok: &[bool]) -> (f32, Option<usize>) {
         let steady = rate(&ok[FLIP - 500..FLIP]);
         let target = 0.9 * steady;
         for t in FLIP + WIN..ok.len() {
@@ -234,6 +236,51 @@ mod tests {
         }
         (steady, None)
     }
+
+    /// The falsifier's per-seed quantities: recovery steps (plain, regime; never = the rest of
+    /// the run), false changes in stationary runs, detection delays.
+    #[derive(Clone, Debug, Default)]
+    pub struct Report { pub plain_t: Vec<usize>, pub regime_t: Vec<usize>, pub false_changes: u32, pub detect_delay: Vec<i64> }
+
+    pub fn mean(v: &[usize]) -> f32 { v.iter().sum::<usize>() as f32 / v.len() as f32 }
+
+    impl Report {
+        /// The pre-registered verdict (the test's asserts, for 5 seeds): no false change,
+        /// faster mean recovery, faster on at least 4 of 5 seeds.
+        pub fn holds(&self) -> bool {
+            self.false_changes == 0 && mean(&self.regime_t) < mean(&self.plain_t)
+                && self.regime_t.iter().zip(&self.plain_t).filter(|(r, p)| r < p).count() >= 4
+        }
+    }
+
+    /// `verbose` prints the per-seed line.
+    pub fn falsifier(seeds: &[u64], verbose: bool) -> Report {
+        let mut rep = Report::default();
+        for &s in seeds {
+            let (okp, _, _) = run(s, true, false);
+            let (okr, _, first) = run(s, true, true);
+            let (sp, rp) = recovery(&okp);
+            let (sr, rr) = recovery(&okr);
+            if verbose {
+                let post_p = rate(&okp[FLIP..FLIP + 1000]);
+                let post_r = rate(&okr[FLIP..FLIP + 1000]);
+                std::println!("seed {}: steady plain {:.3} regime {:.3}; recovery (steps to 90% of steady) plain {:?} regime {:?}; first 1000 after flip plain {:.3} regime {:.3}; change declared at {:?}",
+                    s, sp, sr, rp, rr, post_p, post_r, first);
+            }
+            rep.plain_t.push(rp.unwrap_or(STEPS - FLIP));
+            rep.regime_t.push(rr.unwrap_or(STEPS - FLIP));
+            if let Some(f) = first { rep.detect_delay.push(f as i64 - FLIP as i64); }
+            let (_, changes, _) = run(s, false, true);
+            rep.false_changes += changes;
+        }
+        rep
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::falsify::{falsifier, rate, run, Report, STEPS};
 
     #[test]
     fn detector_fires_on_a_jump_and_not_on_learning() {
@@ -264,30 +311,15 @@ mod tests {
     fn falsifier_recovers_faster_after_lunar_night_and_no_false_changes() {
         // Fresh seeds: the detector defaults were tuned on 11..88.
         let seeds = [101u64, 102, 103, 104, 105];
-        let (mut plain_t, mut regime_t) = (Vec::new(), Vec::new());
-        let mut false_changes = 0u32;
-        let mut detect_delay = Vec::new();
-        for &s in &seeds {
-            let (okp, _, _) = run(s, true, false);
-            let (okr, _, first) = run(s, true, true);
-            let (sp, rp) = recovery(&okp);
-            let (sr, rr) = recovery(&okr);
-            let post_p = rate(&okp[FLIP..FLIP + 1000]);
-            let post_r = rate(&okr[FLIP..FLIP + 1000]);
-            std::println!("seed {}: steady plain {:.3} regime {:.3}; recovery (steps to 90% of steady) plain {:?} regime {:?}; first 1000 after flip plain {:.3} regime {:.3}; change declared at {:?}",
-                s, sp, sr, rp, rr, post_p, post_r, first);
-            plain_t.push(rp.unwrap_or(STEPS - FLIP));
-            regime_t.push(rr.unwrap_or(STEPS - FLIP));
-            if let Some(f) = first { detect_delay.push(f as i64 - FLIP as i64); }
-            let (_, changes, _) = run(s, false, true);
-            false_changes += changes;
-        }
+        let rep = falsifier(&seeds, true);
+        let Report { plain_t, regime_t, false_changes, detect_delay } = rep.clone();
         let mean = |v: &[usize]| v.iter().sum::<usize>() as f32 / v.len() as f32;
         std::println!("FALSIFIER: mean recovery plain {:.0} steps, regime {:.0} steps; detection delay {:?}; false changes in {} stationary runs of {} steps: {}",
             mean(&plain_t), mean(&regime_t), detect_delay, seeds.len(), STEPS, false_changes);
         assert_eq!(false_changes, 0, "no false regime change in stationary runs");
         assert!(mean(&regime_t) < mean(&plain_t), "regime awareness must recover faster");
         assert!(regime_t.iter().zip(&plain_t).filter(|(r, p)| r < p).count() >= 4, "faster on at least 4 of 5 seeds");
+        assert!(rep.holds(), "the gym verdict agrees with the asserts");
     }
 
     #[test]

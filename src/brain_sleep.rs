@@ -137,25 +137,26 @@ impl Sleep {
     }
 }
 
-#[cfg(test)]
-mod tests {
+/// The falsifier's rover worlds and runs, shared by the tests and the brain gym (`crate::brain_gym`).
+#[cfg(feature = "std")]
+pub mod falsify {
     use super::*;
 
     struct Rng(u64);
     impl Rng { fn f(&mut self) -> f32 { self.0 ^= self.0 << 13; self.0 ^= self.0 >> 7; self.0 ^= self.0 << 17; ((self.0 >> 40) as f32) / (1u64 << 24) as f32 } }
 
     // The two rover worlds from `struktura brain demo`. Situation: [drift, spike, temp, 1].
-    fn truth_a(x: &[f32; 4]) -> u8 { if x[2] > 0.8 { 3 } else if x[1] > 0.6 { 2 } else if x[0] > 0.6 { 1 } else { 0 } }
-    fn truth_b(x: &[f32; 4]) -> u8 {
+    pub fn truth_a(x: &[f32; 4]) -> u8 { if x[2] > 0.8 { 3 } else if x[1] > 0.6 { 2 } else if x[0] > 0.6 { 1 } else { 0 } }
+    pub fn truth_b(x: &[f32; 4]) -> u8 {
         if x[2] > 0.6 && x[0] > 0.6 { 3 } else if x[1] > 0.6 && x[2] < 0.4 { 2 } else if (x[0] > 0.5) != (x[1] > 0.5) { 1 } else { 0 }
     }
     fn reward(right: bool, a: u8) -> f32 { if right { 1.0 } else if a == 3 { 0.2 } else { 0.0 } }
 
     /// Long stream into a SMALL memory (N = 32). Returns (held-out right-action rate,
     /// memory in use at the end, sleeps, freed).
-    fn run(world: fn(&[f32; 4]) -> u8, seed: u64, with_sleep: bool) -> (f32, usize, u32, u32) { run_with(world, seed, with_sleep, Sleep::new()) }
+    pub fn run(world: fn(&[f32; 4]) -> u8, seed: u64, with_sleep: bool) -> (f32, usize, u32, u32) { run_with(world, seed, with_sleep, Sleep::new()) }
 
-    fn run_with(world: fn(&[f32; 4]) -> u8, seed: u64, with_sleep: bool, cfg: Sleep) -> (f32, usize, u32, u32) {
+    pub fn run_with(world: fn(&[f32; 4]) -> u8, seed: u64, with_sleep: bool, cfg: Sleep) -> (f32, usize, u32, u32) {
         let mut r = Rng(seed);
         let mut br: Brain<32, 4, 4> = Brain::new(0.3, 0.5);
         let mut sl = cfg;
@@ -176,6 +177,34 @@ mod tests {
         (ok as f32 / 1000.0, br.in_use(), sl.sleeps, sl.freed)
     }
 
+    /// One world over a seed set (sums, as the tests assert on them): held-out rate without and
+    /// with sleep, sleeps, episodes freed, memory in use at the end; `k` = number of seeds.
+    #[derive(Clone, Copy, Debug)]
+    pub struct Report { pub k: f32, pub plain: f32, pub slept: f32, pub sleeps: u32, pub freed: u32, pub used: usize }
+
+    impl Report {
+        /// The pre-registered falsifier's verdict: sleep raises held-out accuracy and frees memory.
+        pub fn holds(&self) -> bool { self.slept > self.plain && self.freed > 0 }
+        /// The post-hoc weaker claim's verdict: frees memory, change >= -0.01.
+        pub fn frees_without_loss(&self) -> bool { self.freed > 0 && (self.slept - self.plain) / self.k >= -0.01 }
+    }
+
+    pub fn falsifier(world: fn(&[f32; 4]) -> u8, seeds: &[u64]) -> Report {
+        let (mut plain, mut slept, mut freed, mut sleeps, mut used) = (0.0f32, 0.0f32, 0u32, 0u32, 0usize);
+        for &s in seeds {
+            plain += run(world, s, false).0;
+            let (acc, u, n, f) = run(world, s, true);
+            slept += acc; used += u; sleeps += n; freed += f;
+        }
+        Report { k: seeds.len() as f32, plain, slept, sleeps, freed, used }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::falsify::{falsifier, run, run_with, truth_a, truth_b, Report};
+
     /// Pre-registered falsifier (set before the run), 8 seeds and 8 fresh seeds, both worlds,
     /// memory N = 32 under a 6000-outcome stream:
     /// (1) held-out right-action rate with sleep > without sleep (average per world and seed set);
@@ -187,17 +216,13 @@ mod tests {
         let worlds: [(&str, fn(&[f32; 4]) -> u8); 2] = [("A thresholds", truth_a), ("B interactions", truth_b)];
         for seeds in [[11u64, 23, 37, 41, 59, 61, 73, 89], [101, 103, 107, 109, 113, 127, 131, 137]] {
             for (name, w) in worlds {
-                let (mut plain, mut slept, mut freed, mut sleeps, mut used) = (0.0f32, 0.0f32, 0u32, 0u32, 0usize);
-                for &s in &seeds {
-                    plain += run(w, s, false).0;
-                    let (acc, u, n, f) = run(w, s, true);
-                    slept += acc; used += u; sleeps += n; freed += f;
-                }
-                let k = seeds.len() as f32;
+                let rep = falsifier(w, &seeds);
+                let Report { k, plain, slept, sleeps, freed, used } = rep;
                 std::println!("sleep falsifier, world {} (seeds {}..): held-out right-action no sleep {:.3} vs sleep {:.3}; {:.0} sleeps, {:.0} episodes freed, {:.1}/32 memory in use at end",
                     name, seeds[0], plain / k, slept / k, sleeps as f32 / k, freed as f32 / k, used as f32 / k);
                 assert!(slept > plain, "world {}: sleep {} vs no sleep {}", name, slept / k, plain / k);
                 assert!(freed > 0, "sleep freed nothing");
+                assert!(rep.holds(), "the gym verdict agrees with the asserts");
             }
         }
     }
@@ -226,10 +251,11 @@ mod tests {
         let worlds: [fn(&[f32; 4]) -> u8; 2] = [truth_a, truth_b];
         for seeds in [[11u64, 23, 37, 41, 59, 61, 73, 89], [101, 103, 107, 109, 113, 127, 131, 137]] {
             for w in worlds {
-                let (mut plain, mut slept, mut freed) = (0.0f32, 0.0f32, 0u32);
-                for &s in &seeds { plain += run(w, s, false).0; let (a, _, _, f) = run(w, s, true); slept += a; freed += f; }
+                let rep = falsifier(w, &seeds);
+                let Report { plain, slept, freed, .. } = rep;
                 let d = (slept - plain) / seeds.len() as f32;
                 assert!(freed > 0 && d >= -0.01, "freed {} change {}", freed, d);
+                assert!(rep.frees_without_loss(), "the gym verdict agrees with the asserts");
             }
         }
     }

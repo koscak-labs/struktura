@@ -224,8 +224,10 @@ impl<const B: usize, const G: usize> Cycle<B, G> {
     pub fn compressed_once(&self) -> bool { self.compressed_once }
 }
 
-#[cfg(test)]
-mod tests {
+/// The falsifier's layered rover world and runs, shared by the tests and the brain gym
+/// (`crate::brain_gym`).
+#[cfg(feature = "std")]
+pub mod falsify {
     use super::*;
 
     struct Rng(u64);
@@ -237,39 +239,22 @@ mod tests {
     fn truth(x: &[f32; 4]) -> u8 {
         if x[0] > 0.6 && x[2] > 0.6 { if x[1] > 0.7 { 2 } else { 3 } } else if x[0] > 0.5 { 1 } else { 0 }
     }
-    fn reward(x: &[f32; 4], a: u8) -> f32 { if a == truth(x) { 1.0 } else if a == 3 { 0.2 } else { 0.0 } }
+    pub fn reward(x: &[f32; 4], a: u8) -> f32 { if a == truth(x) { 1.0 } else if a == 3 { 0.2 } else { 0.0 } }
 
-    const STEPS: usize = 6000;
+    pub const STEPS: usize = 6000;
 
-    /// Dev-only knob overrides (env CY_*), used to tune on dev seeds 1000..1007; unset in the falsifier run.
-    fn tune(cy: &mut Cycle<4, 4>) {
-        let g = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<f32>().ok());
-        if let Some(v) = g("CY_EPS") { cy.absorb_eps = v; }
-        if let Some(v) = g("CY_PRUNE") { cy.prune_range = v; }
-        if let Some(v) = g("CY_CSTEPS") { cy.compress_steps = v as u32; }
-        if let Some(v) = g("CY_CEVERY") { cy.compress_every = v as u32; }
-        if let Some(v) = g("CY_GMAX") { cy.grow_max = v as u32; }
-        if let Some(v) = g("CY_PAT") { cy.grow_patience = v as u8; }
-        if let Some(v) = g("CY_LAMBDA") { cy.detector.lambda = v; }
-        if let Some(v) = g("CY_DELTA") { cy.detector.delta = v; }
-    }
+    /// No knob overrides (the falsifier's and the gym's setting).
+    pub fn defaults(_: &mut Cycle<4, 4>) {}
 
-    #[test]
-    #[ignore]
-    fn dev_seeds() {
-        let (mut rc, mut rg, mut pc, mut pg, mut ev) = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0usize);
-        for s in 1000u64..1008 { let (a, b, c, _) = run(s, true); let (d, e, _, _) = run(s, false); rc += a; pc += b; rg += d; pg += e; if c >= 1 { ev += 1; } }
-        std::println!("DEV cycle {:.3} vs grow {:.3}; params {:.1} vs {:.1}; grok runs {}/8", rc / 8.0, rg / 8.0, pc / 8.0, pg / 8.0, ev);
-    }
-
-    /// (right-action rate last 1000, mean active params last 1000, grokking events, senses active at end)
-    fn run(seed: u64, cycle: bool) -> (f32, f32, usize, usize) {
+    /// (right-action rate last 1000, mean active params last 1000, grokking events, senses active at end).
+    /// `knobs` may override the cycle's settings (dev tuning); `log` prints the grokking events.
+    pub fn run(seed: u64, cycle: bool, knobs: fn(&mut Cycle<4, 4>), log: bool) -> (f32, f32, usize, usize) {
         let mut r = Rng(seed);
         let mut br: Brain<256, 8, 4> = Brain::new(0.3, 0.5);
         let mut cy: Cycle<4, 4> = Cycle::new(seed ^ 0xC1C1);
         cy.grower.constant[3] = true;
         if !cycle { cy.grower.set_limit(4); }
-        tune(&mut cy);
+        knobs(&mut cy);
         let (mut ok, mut params) = (0usize, 0.0f32);
         for t in 0..STEPS {
             let base = [r.f(), r.f(), r.f(), 1.0];
@@ -288,8 +273,66 @@ mod tests {
                 params += cy.active_params(&br) as f32;
             }
         }
-        if cycle { for e in cy.events() { std::println!("    grok t={} tier={} err {:.3} -> {:.3} active {}", e.t, e.tier, e.before, e.after, e.active); } }
+        if cycle && log { for e in cy.events() { std::println!("    grok t={} tier={} err {:.3} -> {:.3} active {}", e.t, e.tier, e.before, e.after, e.active); } }
         (ok as f32 / 1000.0, params / 1000.0, cy.events().len(), cy.grower.active())
+    }
+
+    /// The falsifier's accumulators over a seed set (sums, as the test asserts on them):
+    /// right-action rate (`rc` cycle, `rg` grow-only), active params, senses, runs with a
+    /// grokking event; `k` = number of seeds.
+    #[derive(Clone, Copy, Debug)]
+    pub struct Report { pub k: f32, pub rc: f32, pub rg: f32, pub pc: f32, pub pg: f32, pub with_event: usize, pub sc: usize, pub sg: usize }
+
+    impl Report {
+        /// The pre-registered verdict (the test's asserts): accuracy within 1 point of grow-only,
+        /// strictly fewer active params, a grokking event in >= 5 of 8 runs (5/8 of the seeds).
+        pub fn holds(&self) -> bool {
+            let k = self.k;
+            self.rc / k >= self.rg / k - 0.01 && self.pc / k < self.pg / k && 8.0 * self.with_event as f32 >= 5.0 * k
+        }
+    }
+
+    /// `knobs` as in [`run`]; `log` prints the per-seed line and grokking events.
+    pub fn falsifier(seeds: &[u64], knobs: fn(&mut Cycle<4, 4>), log: bool) -> Report {
+        let (mut rc, mut rg, mut pc, mut pg, mut with_event, mut sc, mut sg) = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0usize, 0usize, 0usize);
+        for &s in seeds {
+            let (r1, p1, e1, s1) = run(s, true, knobs, log);
+            let (r2, p2, _, s2) = run(s, false, knobs, log);
+            if log { std::println!("  seed {:>3}: cycle {:.3} ({:.0} params, {} grok events, {} senses) | grow-only {:.3} ({:.0} params, {} senses)", s, r1, p1, e1, s1, r2, p2, s2); }
+            rc += r1; rg += r2; pc += p1; pg += p2; sc += s1; sg += s2;
+            if e1 >= 1 { with_event += 1; }
+        }
+        Report { k: seeds.len() as f32, rc, rg, pc, pg, with_event, sc, sg }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::falsify::{falsifier, reward, run, Report};
+
+    struct Rng(u64);
+    impl Rng { fn f(&mut self) -> f32 { self.0 ^= self.0 << 13; self.0 ^= self.0 >> 7; self.0 ^= self.0 << 17; ((self.0 >> 40) as f32) / (1u64 << 24) as f32 } }
+
+    /// Dev-only knob overrides (env CY_*), used to tune on dev seeds 1000..1007; unset in the falsifier run.
+    fn tune(cy: &mut Cycle<4, 4>) {
+        let g = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<f32>().ok());
+        if let Some(v) = g("CY_EPS") { cy.absorb_eps = v; }
+        if let Some(v) = g("CY_PRUNE") { cy.prune_range = v; }
+        if let Some(v) = g("CY_CSTEPS") { cy.compress_steps = v as u32; }
+        if let Some(v) = g("CY_CEVERY") { cy.compress_every = v as u32; }
+        if let Some(v) = g("CY_GMAX") { cy.grow_max = v as u32; }
+        if let Some(v) = g("CY_PAT") { cy.grow_patience = v as u8; }
+        if let Some(v) = g("CY_LAMBDA") { cy.detector.lambda = v; }
+        if let Some(v) = g("CY_DELTA") { cy.detector.delta = v; }
+    }
+
+    #[test]
+    #[ignore]
+    fn dev_seeds() {
+        let (mut rc, mut rg, mut pc, mut pg, mut ev) = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0usize);
+        for s in 1000u64..1008 { let (a, b, c, _) = run(s, true, tune, true); let (d, e, _, _) = run(s, false, tune, true); rc += a; pc += b; rg += d; pg += e; if c >= 1 { ev += 1; } }
+        std::println!("DEV cycle {:.3} vs grow {:.3}; params {:.1} vs {:.1}; grok runs {}/8", rc / 8.0, rg / 8.0, pc / 8.0, pg / 8.0, ev);
     }
 
     #[test]
@@ -332,17 +375,11 @@ mod tests {
     #[ignore]
     fn falsifier_cycle_matches_grow_only_with_fewer_parameters_and_groks() {
         for seeds in [[11u64, 23, 37, 41, 59, 61, 73, 89], [101, 103, 107, 109, 113, 127, 131, 137]] {
-            let (mut rc, mut rg, mut pc, mut pg, mut with_event, mut sc, mut sg) = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0usize, 0usize, 0usize);
-            for &s in &seeds {
-                let (r1, p1, e1, s1) = run(s, true);
-                let (r2, p2, _, s2) = run(s, false);
-                std::println!("  seed {:>3}: cycle {:.3} ({:.0} params, {} grok events, {} senses) | grow-only {:.3} ({:.0} params, {} senses)", s, r1, p1, e1, s1, r2, p2, s2);
-                rc += r1; rg += r2; pc += p1; pg += p2; sc += s1; sg += s2;
-                if e1 >= 1 { with_event += 1; }
-            }
-            let k = seeds.len() as f32;
+            let rep = falsifier(&seeds, tune, true);
+            let Report { k, rc, rg, pc, pg, with_event, sc, sg } = rep;
             std::println!("cycle falsifier: right-action cycle {:.3} vs grow-only {:.3}; active params {:.1} vs {:.1}; senses {:.2} vs {:.2}; runs with a grokking event {}/{}",
                 rc / k, rg / k, pc / k, pg / k, sc as f32 / k, sg as f32 / k, with_event, seeds.len());
+            assert_eq!(rep.holds(), rc / k >= rg / k - 0.01 && pc / k < pg / k && with_event >= 5, "the gym verdict agrees with the asserts");
             assert!(rc / k >= rg / k - 0.01, "accuracy: cycle {} vs grow-only {}", rc / k, rg / k);
             assert!(pc / k < pg / k, "params: cycle {} vs grow-only {}", pc / k, pg / k);
             assert!(with_event >= 5, "grokking events in {}/8 runs", with_event);
