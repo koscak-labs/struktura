@@ -186,7 +186,10 @@ impl<const N: usize, const D: usize, const A: usize> Brain<N, D, A> {
         self.update_model(x, action, reward);
         self.clock = self.clock.wrapping_add(1);
         let ep = Episode { key: *x, action, reward, surprise: absf(reward - expected), t: self.clock, used: true };
-        if self.len < N {
+        if let Some(free) = (0..self.len).find(|&s| !self.mem[s].used) {
+            self.mem[free] = ep;
+            Some(free)
+        } else if self.len < N {
             self.mem[self.len] = ep;
             self.len += 1;
             Some(self.len - 1)
@@ -279,6 +282,16 @@ impl<const N: usize, const D: usize, const A: usize> Brain<N, D, A> {
         for a in 0..A { br.pulls[a] = u32_(&mut p); }
         Some(br)
     }
+
+    /// Forget one stored episode (compression: its knowledge already lives in the model).
+    /// The slot becomes free; `len` counts slots ever filled, so new episodes reuse freed ones first.
+    pub fn forget_slot(&mut self, slot: usize) -> bool {
+        if let Some(e) = self.mem.get_mut(slot) { if e.used { e.used = false; e.surprise = 0.0; return true; } }
+        false
+    }
+
+    /// Stored episodes currently in use.
+    pub fn in_use(&self) -> usize { self.mem.iter().filter(|e| e.used).count() }
 
     /// Re-compute every stored situation (e.g. after the situation gained a new feature),
     /// keeping actions, rewards and surprise. Bounded: one pass over memory.

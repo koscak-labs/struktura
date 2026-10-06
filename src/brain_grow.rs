@@ -50,6 +50,7 @@ pub const STEPS: [f32; 3] = [0.25, 0.5, 0.75];
 pub struct Grower<const B: usize, const G: usize> {
     feats: [Feat; G],
     grown: usize,
+    limit: usize,
     /// Base features that are constants (bias terms) are never used in candidates.
     pub constant: [bool; B],
     /// Decisions between growth checks.
@@ -74,10 +75,25 @@ pub struct Growth {
 
 impl<const B: usize, const G: usize> Grower<B, G> {
     pub const fn new(seed: u64) -> Self {
-        Grower { feats: [Feat::Off; G], grown: 0, constant: [false; B], every: 250, splits: 4, min_gain: 0.05, since: 0, rng: seed | 1 }
+        Grower { feats: [Feat::Off; G], grown: 0, limit: G, constant: [false; B], every: 250, splits: 4, min_gain: 0.05, since: 0, rng: seed | 1 }
     }
 
     pub fn grown(&self) -> &[Feat] { &self.feats[..self.grown] }
+
+    /// Grown senses currently active (pruned slots are `Off`).
+    pub fn active(&self) -> usize { self.feats[..self.grown].iter().filter(|f| **f != Feat::Off).count() }
+
+    /// Slots usable now (a capacity tier); growth never fills past it. Default: all G.
+    pub fn set_limit(&mut self, limit: usize) { self.limit = limit.min(G); }
+    pub fn limit(&self) -> usize { self.limit }
+
+    /// Prune grown sense `slot` (it stops contributing; memory is re-keyed so the sense reads 0).
+    pub fn prune<const N: usize, const D: usize, const A: usize>(&mut self, slot: usize, brain: &mut Brain<N, D, A>) -> bool {
+        if slot >= self.grown || self.feats[slot] == Feat::Off || B + G != D { return false; }
+        self.feats[slot] = Feat::Off;
+        brain.rekey(|k| { let mut y = *k; y[B + slot] = 0.0; y });
+        true
+    }
 
     /// Base features followed by the grown features (unfilled slots are 0). `D` must be `B + G`.
     pub fn situation<const D: usize>(&self, base: &[f32; B]) -> [f32; D] {
@@ -105,13 +121,14 @@ impl<const B: usize, const G: usize> Grower<B, G> {
     /// when a candidate generalizes, adopts it into the next free slot and re-keys memory.
     pub fn after_learn<const N: usize, const D: usize, const A: usize>(&mut self, brain: &mut Brain<N, D, A>) -> Option<Growth> {
         self.since += 1;
-        if self.since < self.every || self.grown >= G || B + G != D { return None; }
+        let free = (0..self.limit).find(|&s| s >= self.grown || self.feats[s] == Feat::Off);
+        if self.since < self.every || free.is_none() || B + G != D { return None; }
         self.since = 0;
         let g = self.check(brain);
         if let Some(f) = g.adopted {
-            let slot = self.grown;
+            let slot = free.unwrap();
             self.feats[slot] = f;
-            self.grown += 1;
+            if slot >= self.grown { self.grown = slot + 1; }
             brain.rekey(|k| { let mut base = [0.0f32; B]; for i in 0..B { base[i] = k[i]; } let mut y = *k; y[B + slot] = f.eval(&base); y });
         }
         Some(g)
