@@ -29,6 +29,8 @@ pub mod agenda;
 pub mod design;
 pub mod memory;
 pub mod backtest;
+pub mod gate;
+pub mod step;
 
 use crate::arms::{rank, ArmData, ArmsReport, Direction};
 use crate::lab::{analyze, LabReport};
