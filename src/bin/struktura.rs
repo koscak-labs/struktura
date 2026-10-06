@@ -5123,6 +5123,9 @@ fn cmd_arms(args: &[String]) {
         println!("    fewer: the difference must clear --min-effect (noise floor), else TIE");
         println!("  --min-effect  noise floor in % (default 1.16 = 2x lab calibration CV)");
         println!("  --tasks LO-HI restrict workbench tasks by number (t01-t23 in-sample, t31- held-out)   --arms a,b  only these arms");
+        println!("  --split NAME=LO-HI (repeatable, e.g. --split heldout=t31-t58 --split live=L01-L11) one verdict table per split;");
+        println!("     pass-rate tests in a split form one family with Holm-adjusted p (decisive only if p_holm < 0.05)");
+        println!("  --pairs a:b,c:d  report (and correct for) only these pre-registered comparisons");
         println!("  --cv PCT      per-run noise CV: single-run differences must clear 1.96*sqrt(2)*CV (5% false-win rate)");
         println!("  direction: per metric by default (time/latency/tokens keys lower is better, else higher); --lower-is-better / --higher-is-better force one");
         println!("  Workbench verdicts (config<TAB>task<TAB>sample<TAB>pass|fail<TAB>ttd_s=.. gen=..) are compared PAIRED by task:");
@@ -5133,6 +5136,7 @@ fn cmd_arms(args: &[String]) {
     let mut cv: Option<f64> = None;
     let mut only: Option<String> = None;
     let (mut task_range, mut arm_list): (Option<String>, Option<String>) = (None, None);
+    let (mut splits, mut pairs): (Vec<(String, String)>, Vec<(String, String)>) = (Vec::new(), Vec::new());
     let mut files = Vec::new();
     let mut i = 2;
     while i < args.len() {
@@ -5145,6 +5149,8 @@ fn cmd_arms(args: &[String]) {
             "--seed" => { i += 1; seed = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(seed); }
             "--metric" => { i += 1; only = args.get(i).cloned(); }
             "--tasks" => { i += 1; task_range = args.get(i).cloned(); }
+            "--split" => { i += 1; match args.get(i).and_then(|v| v.split_once('=')) { Some((n, s)) if !n.is_empty() && !s.is_empty() => splits.push((n.to_string(), s.to_string())), _ => { eprintln!("arms: --split NAME=LO-HI (e.g. heldout=t31-t58)"); process::exit(2); } } }
+            "--pairs" => { i += 1; for p in args.get(i).map(|v| v.as_str()).unwrap_or("").split(',').filter(|p| !p.is_empty()) { match p.split_once(':') { Some((a, b)) => pairs.push((a.to_string(), b.to_string())), None => { eprintln!("arms: --pairs a:b,c:d"); process::exit(2); } } } }
             "--arms" => { i += 1; arm_list = args.get(i).cloned(); }
             "--json" => json = true,
             f if f.starts_with("--") => { eprintln!("arms: unknown option {}", f); process::exit(2); }
@@ -5157,24 +5163,7 @@ fn cmd_arms(args: &[String]) {
         match std::fs::read_to_string(f) { Ok(t) => data.ingest(&t), Err(e) => { eprintln!("arms: {}: {}", f, e); process::exit(2); } }
     }
     if let Some(m) = &only { for v in data.values.values_mut() { v.retain(|k, _| k == m); } }
-    // --tasks LO-HI (e.g. t01-t23, t31-, -t23, L01-L11): keep workbench tasks whose number is in range
-    // (a task's number is the digits after its leading letters: t31-foo -> 31). A letter prefix in the spec
-    // must match the task's (L01-L11 is the live lane, never t01-t11: numbers alone collide across lanes).
-    if let Some(spec) = &task_range {
-        let num = |t: &str| -> Option<u32> { let s = t.trim_start_matches(|c: char| c.is_ascii_alphabetic()); s.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().ok() };
-        let pre = |t: &str| -> String { t.chars().take_while(|c| c.is_ascii_alphabetic()).collect() };
-        let (lo, hi) = match spec.split_once('-') { Some((a, b)) => (num(a).unwrap_or(0), num(b).unwrap_or(u32::MAX)), None => { let n = num(spec).unwrap_or(0); (n, n) } };
-        let want = match spec.split_once('-') { Some((a, b)) => if !pre(a).is_empty() { pre(a) } else { pre(b) }, None => pre(spec) };
-        let keep = |t: &str| (want.is_empty() || pre(t) == want) && num(t).map(|n| n >= lo && n <= hi).unwrap_or(false);
-        let binary = data.binary.clone();
-        for v in data.values.values_mut() {
-            v.retain(|k, _| {
-                let task = match k.split_once('@') { Some((_, t)) => t, None if binary.contains(k) => k.as_str(), None => return true };
-                keep(task)
-            });
-        }
-        data.binary.retain(|k| keep(k));
-    }
+    if let Some(spec) = &task_range { arms_keep_tasks(&mut data, spec); }
     if let Some(list) = &arm_list {
         let keep: Vec<&str> = list.split(',').map(|s| s.trim()).collect();
         data.order.retain(|(_, a)| keep.contains(&a.as_str()));
@@ -5183,6 +5172,7 @@ fn cmd_arms(args: &[String]) {
     if data.order.len() < 2 { eprintln!("arms: need at least 2 labelled arms ({} labelled lines found)", data.lines); process::exit(2); }
     // Two single runs differ by noise with sd sqrt(2) x CV; a 5% two-sided band is 1.96 x sqrt(2) x CV.
     if let Some(c) = cv { let band = 1.959964 * std::f64::consts::SQRT_2 * c; if band > min_effect { min_effect = band; } }
+    if !splits.is_empty() { arms_splits(&data, &splits, &pairs, min_effect, dir, boot, seed, json); return; }
     let r = rank(&data, min_effect, dir, boot, seed);
     let name = |g: &str, a: &str| if g.is_empty() { a.to_string() } else { format!("{}/{}", g, a) };
     let out = |o: &Outcome| match o { Outcome::AWins => "a_wins", Outcome::BWins => "b_wins", Outcome::Tie => "tie", Outcome::Inconclusive => "inconclusive" };
@@ -6219,4 +6209,65 @@ fn cmd_oracle(args: &[String]) {
     for (first, last, br, base) in &b.windows { println!("    rows {:>3}-{:<3} Brier {:.4}  base {:.4}  {}", first, last, br, base, if br < base { "better" } else { "worse" }); }
     println!("  calibration (forecast p -> realised pass rate):");
     for (lo, hi, n, mp, rate) in &b.bins { println!("    p in [{:.1},{:.1}) n={:<4} mean p {:.2} -> passed {:.2}", lo, hi, n, mp, rate); }
+}
+
+/// `arms --tasks LO-HI` (t01-t23, t31-, -t23, L01-L11): keep workbench tasks whose number is in range
+/// (a task's number is the digits after its leading letters: t31-foo -> 31). A letter prefix in the spec
+/// must match the task's (L01-L11 is the live lane, never t01-t11: numbers alone collide across lanes).
+fn arms_keep_tasks(data: &mut struktura::arms::ArmData, spec: &str) {
+    let num = |t: &str| -> Option<u32> { let s = t.trim_start_matches(|c: char| c.is_ascii_alphabetic()); s.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().ok() };
+    let pre = |t: &str| -> String { t.chars().take_while(|c| c.is_ascii_alphabetic()).collect() };
+    let (lo, hi) = match spec.split_once('-') { Some((a, b)) => (num(a).unwrap_or(0), num(b).unwrap_or(u32::MAX)), None => { let n = num(spec).unwrap_or(0); (n, n) } };
+    let want = match spec.split_once('-') { Some((a, b)) => if !pre(a).is_empty() { pre(a) } else { pre(b) }, None => pre(spec) };
+    let keep = |t: &str| (want.is_empty() || pre(t) == want) && num(t).map(|n| n >= lo && n <= hi).unwrap_or(false);
+    let binary = data.binary.clone();
+    for v in data.values.values_mut() {
+        v.retain(|k, _| {
+            let task = match k.split_once('@') { Some((_, t)) => t, None if binary.contains(k) => k.as_str(), None => return true };
+            keep(task)
+        });
+    }
+    data.binary.retain(|k| keep(k));
+}
+
+/// `arms --split NAME=LO-HI ... [--pairs a:b,..]`: the same paired ranking inside each split of the
+/// workbench tasks. Pass-rate comparisons form one family per split (the pre-registered `--pairs`, else
+/// every pair) and get a Holm-adjusted p; a pass-rate result is decisive only when that adjusted p < 0.05.
+/// Paired time/attempt comparisons are reported with their raw p (secondary, outside the family).
+#[allow(clippy::too_many_arguments)]
+fn arms_splits(data: &struktura::arms::ArmData, splits: &[(String, String)], pairs: &[(String, String)],
+               min_effect: f64, dir: struktura::arms::Direction, boot: usize, seed: u64, json: bool) {
+    use struktura::arms::{holm, rank, Evidence, Outcome};
+    let wanted = |a: &str, b: &str| pairs.is_empty() || pairs.iter().any(|(x, y)| (x == a && y == b) || (x == b && y == a));
+    let num = |x: f64| if x.is_finite() { format!("{:.4}", x) } else { "null".to_string() };
+    for (name, spec) in splits {
+        let mut d = data.clone();
+        arms_keep_tasks(&mut d, spec);
+        let tasks = d.binary.len();
+        let r = rank(&d, min_effect, dir, boot, seed);
+        let sel: Vec<&struktura::arms::Pair> = r.pairs.iter().filter(|p| p.evidence == Evidence::Paired && wanted(&p.a, &p.b)).collect();
+        let fam: Vec<usize> = (0..sel.len()).filter(|&i| sel[i].metric.starts_with("pass_rate")).collect();
+        let adj = holm(&fam.iter().map(|&i| sel[i].p_value).collect::<Vec<_>>());
+        let p_holm = |i: usize| fam.iter().position(|&k| k == i).map(|j| adj[j]);
+        if json {
+            println!("{{\"event\":\"split\",\"split\":\"{}\",\"spec\":\"{}\",\"tasks\":{},\"family\":{}}}", name, spec, tasks, fam.len());
+        } else {
+            println!("split {} ({}): {} task(s); {} pass-rate test(s) in the Holm family", name, spec, tasks, fam.len());
+        }
+        for (i, p) in sel.iter().enumerate() {
+            let h = p_holm(i);
+            let decisive = h.map(|h| h < 0.05).unwrap_or(p.p_value < 0.05) && matches!(p.outcome, Outcome::AWins | Outcome::BWins);
+            let winner = match p.outcome { Outcome::AWins => p.a.as_str(), Outcome::BWins => p.b.as_str(), _ => "" };
+            if json {
+                println!("{{\"event\":\"split_pair\",\"split\":\"{}\",\"metric\":\"{}\",\"a\":\"{}\",\"b\":\"{}\",\"a_median\":{},\"b_median\":{},\"delta_pct\":{},\"n_discordant\":{},\"p_value\":{},\"p_holm\":{},\"decisive\":{},\"winner\":\"{}\"}}",
+                    name, p.metric, p.a, p.b, num(p.a_median), num(p.b_median), num(p.delta_pct), p.n_discordant, num(p.p_value),
+                    h.map(num).unwrap_or_else(|| "null".into()), decisive, if decisive { winner } else { "" });
+            } else {
+                let what = if p.metric.starts_with("pass_rate") { format!("{:.0}% vs {:.0}%", 100.0 * p.a_median, 100.0 * p.b_median) } else { format!("{:+.1}% (b vs a)", p.delta_pct) };
+                let verdict = if decisive { format!("DECISIVE: {}", winner) } else if p.n_discordant > 0 && p.n_discordant < 6 && p.metric.starts_with("pass_rate") { "underpowered (< 6 discordant)".to_string() } else { "not decided".to_string() };
+                println!("  {:<28} {:>10} vs {:<10} {:<16} disc {:>2}  p={:.4}{}  {}", p.metric, p.a, p.b, what, p.n_discordant, p.p_value,
+                    h.map(|h| format!(" p_holm={:.4}", h)).unwrap_or_default(), verdict);
+            }
+        }
+    }
 }

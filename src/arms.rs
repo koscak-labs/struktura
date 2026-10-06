@@ -184,6 +184,22 @@ impl Rng {
     }
 }
 
+/// Holm-Bonferroni adjusted p-values for one family of tests (same order as `p`).
+/// Uniformly more powerful than Bonferroni and still controls the family-wise error rate:
+/// sort ascending, multiply the k-th smallest by (m - k), take the running maximum, cap at 1.
+pub fn holm(p: &[f64]) -> Vec<f64> {
+    let m = p.len();
+    let mut idx: Vec<usize> = (0..m).collect();
+    idx.sort_by(|&a, &b| p[a].partial_cmp(&p[b]).unwrap_or(std::cmp::Ordering::Equal));
+    let mut out = vec![1.0; m];
+    let mut run = 0.0f64;
+    for (k, &i) in idx.iter().enumerate() {
+        run = run.max(((m - k) as f64 * p[i]).min(1.0));
+        out[i] = run;
+    }
+    out
+}
+
 /// Exact two-sided sign test: P(at most `k` of `n` discordant tasks favour the
 /// less successful arm | no difference), doubled, capped at 1.
 pub fn sign_test_p(k: usize, n: usize) -> f64 {
@@ -412,5 +428,19 @@ some free text = not a metric line\n";
         for i in 0..6 { d.ingest(&format!("a\tx={}\nb\tx={}\n", 10 + i, 11 + i)); }
         let (r1, r2) = (rank(&d, 1.0, Direction::Auto, 500, 9), rank(&d, 1.0, Direction::Auto, 500, 9));
         assert_eq!(r1.pairs[0].ci_low, r2.pairs[0].ci_low);
+    }
+
+    #[test]
+    fn holm_matches_hand_computation() {
+        // p = [0.01, 0.04, 0.03, 0.002] -> sorted 0.002 0.01 0.03 0.04 -> x4 x3 x2 x1 = 0.008 0.03 0.06 0.04
+        // running max -> 0.008 0.03 0.06 0.06 -> back in input order
+        let h = holm(&[0.01, 0.04, 0.03, 0.002]);
+        let want = [0.03, 0.06, 0.06, 0.008];
+        for (a, b) in h.iter().zip(want) { assert!((a - b).abs() < 1e-12, "{h:?}"); }
+        assert_eq!(holm(&[0.9, 0.8]), vec![1.0, 1.0], "capped at 1");
+        assert!(holm(&[]).is_empty());
+        // never below the raw p, never above Bonferroni
+        let p = [0.002, 0.0063, 0.25, 1.0, 0.34];
+        for (h, p) in holm(&p).iter().zip(p) { assert!(*h >= p && *h <= (5.0 * p).min(1.0)); }
     }
 }
