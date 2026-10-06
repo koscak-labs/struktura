@@ -412,6 +412,7 @@ fn main() {
         "pulse" => cmd_pulse(&args),
         "brain" => cmd_brain(&args),
         "arms" => cmd_arms(&args),
+        "twins" => cmd_twins(&args),
         "lab" => cmd_lab(&args),
         "ledger-check" => cmd_ledger_check(&args),
         "power" => cmd_power(&args),
@@ -5759,5 +5760,81 @@ fn cmd_brain_state(args: &[String]) {
                 f, a, br.len(), B::CAPACITY, br.clock(), pulls.join(","), br.explore, br.min_evidence);
         }
         _ => { eprintln!("brain: init | decide | learn | stats (with --state FILE)"); process::exit(2); }
+    }
+}
+
+fn cmd_twins(args: &[String]) {
+    use struktura::twins::{judge, parse, MIN_FAMILIES};
+    if args.len() < 3 || args[2] == "--help" {
+        println!("struktura twins <verdicts.tsv>... [--a helix] [--b rust] [--alpha 0.05] [--json]");
+        println!("  Is variant A as good as variant B, judged ONLY on twin tasks: the same problem asked both ways,");
+        println!("  named alike but for one token (t11-helix-gcd / t12-rust-gcd -> family gcd). Workbench rows:");
+        println!("  arm<TAB>task<TAB>sample<TAB>pass|fail<TAB>ttd_s=... ; each file is one run (never paired across runs).");
+        println!("  The unit is the FAMILY: samples and arms of one family are pooled into one vote, and families get an");
+        println!("  exact two-sided sign test. Fewer than {} one-sided families can never reach p<0.05 -> 'underpowered'.", MIN_FAMILIES);
+        println!("  Tasks without a twin are listed as solos: informative, but confounded by task difficulty.");
+        println!("  Exit: 0 = judged (any verdict), 2 = usage/IO error");
+        process::exit(if args.len() < 3 { 2 } else { 0 });
+    }
+    let (mut a, mut b, mut alpha, mut json) = ("helix".to_string(), "rust".to_string(), 0.05f64, false);
+    let mut files: Vec<String> = Vec::new();
+    let mut i = 2;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--a" => { i += 1; if let Some(v) = args.get(i) { a = v.clone(); } }
+            "--b" => { i += 1; if let Some(v) = args.get(i) { b = v.clone(); } }
+            "--alpha" => { i += 1; alpha = args.get(i).and_then(|v| v.parse().ok()).filter(|x: &f64| *x > 0.0 && *x < 1.0).unwrap_or_else(|| { eprintln!("twins: --alpha needs 0<A<1"); process::exit(2) }); }
+            "--json" => json = true,
+            o if o.starts_with("--") => { eprintln!("twins: unknown option {}", o); process::exit(2); }
+            f => files.push(f.to_string()),
+        }
+        i += 1;
+    }
+    if files.is_empty() { eprintln!("twins: no verdict files"); process::exit(2); }
+    if a.eq_ignore_ascii_case(&b) { eprintln!("twins: --a and --b must differ"); process::exit(2); }
+    let texts: Vec<String> = files.iter().map(|p| std::fs::read_to_string(p).unwrap_or_else(|e| { eprintln!("twins: {}: {}", p, e); process::exit(2) })).collect();
+    let refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+    let (obs, solos, names) = parse(&refs, &a, &b);
+    let r = judge(&obs, solos, &names, &a, &b, alpha);
+    let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
+    let num = |x: Option<f64>| x.filter(|v| v.is_finite()).map(|v| format!("{:.3}", v)).unwrap_or_else(|| "null".to_string());
+    if json {
+        for f in &r.families {
+            println!("{{\"event\":\"family\",\"family\":\"{}\",\"task_a\":\"{}\",\"task_b\":\"{}\",\"n\":{},\"pass_a\":{},\"pass_b\":{},\"favours\":{}}}",
+                esc(&f.family), esc(&f.task_a), esc(&f.task_b), f.n, f.pass_a, f.pass_b, f.favours());
+        }
+        for (arm, n, pa, pb) in &r.per_arm {
+            println!("{{\"event\":\"arm\",\"arm\":\"{}\",\"n\":{},\"pass_a\":{},\"pass_b\":{}}}", esc(arm), n, pa, pb);
+        }
+        for s in &r.solos {
+            println!("{{\"event\":\"solo\",\"task\":\"{}\",\"side\":\"{}\",\"n\":{},\"pass\":{}}}", esc(&s.task), s.side, s.n, s.pass);
+        }
+        println!("{{\"summary\":true,\"a\":\"{}\",\"b\":\"{}\",\"families\":{},\"paired_obs\":{},\"favour_a\":{},\"favour_b\":{},\"ties\":{},\"p_value\":{:.4},\"min_families\":{},\"ttd_ratio_b_over_a\":{},\"ttd_pairs\":{},\"solos\":{},\"verdict\":\"{}\"}}",
+            esc(&a), esc(&b), r.families.len(), obs.len(), r.favour_a, r.favour_b, r.ties, r.p_value, MIN_FAMILIES, num(r.ttd_ratio), r.ttd_pairs, r.solos.len(), r.verdict);
+        return;
+    }
+    println!("twins {} vs {}: {} families, {} paired observations ({} run file(s))", a, b, r.families.len(), obs.len(), files.len());
+    println!("  {:<22} {:>4} {:>9} {:>9}  leans", "family", "n", a, b);
+    for f in &r.families {
+        let lean = match f.favours() { 1 => a.as_str(), -1 => b.as_str(), _ => "tie" };
+        println!("  {:<22} {:>4} {:>8.0}% {:>8.0}%  {}", f.family, f.n, 100.0 * f.pass_a as f64 / f.n as f64, 100.0 * f.pass_b as f64 / f.n as f64, lean);
+    }
+    for (arm, n, pa, pb) in &r.per_arm {
+        println!("  arm {:<18} {:>4} {:>8.0}% {:>8.0}%", arm, n, 100.0 * *pa as f64 / *n as f64, 100.0 * *pb as f64 / *n as f64);
+    }
+    println!("  families leaning {}: {} · leaning {}: {} · ties: {} · exact sign test p = {:.4}", a, r.favour_a, b, r.favour_b, r.ties, r.p_value);
+    if let Some(t) = r.ttd_ratio { println!("  time-to-done {}/{} (both passed, median of {} pairs): x{:.2}", b, a, r.ttd_pairs, t); }
+    let verdict = match r.verdict {
+        "underpowered" => format!("UNDERPOWERED: {} one-sided famil{} < {} needed for p<0.05 whatever the outcome; add twin tasks", r.favour_a + r.favour_b, if r.favour_a + r.favour_b == 1 { "y" } else { "ies" }, MIN_FAMILIES),
+        "a_better" => format!("{} BETTER on twins (p = {:.4})", a, r.p_value),
+        "b_better" => format!("{} BETTER on twins (p = {:.4})", b, r.p_value),
+        _ => format!("no difference detected on twins (p = {:.4})", r.p_value),
+    };
+    println!("  verdict: {}", verdict);
+    if !r.solos.is_empty() {
+        println!("  solos (no twin; confounded by task difficulty, not used in the verdict):");
+        for s in &r.solos {
+            println!("    {} {:<28} {:>3}/{:<3} pass", if s.side == 'a' { a.as_str() } else { b.as_str() }, s.task, s.pass, s.n);
+        }
     }
 }

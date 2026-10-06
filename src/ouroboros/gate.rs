@@ -5,12 +5,12 @@
 //! writes the row after the deploy's verify request was served) and judged by
 //! `pulse::analyze`. Three states:
 //! - **open**: the latest judged deploy is not slower (solo and contention);
-//! - **closed**: the latest judged deploy is slower;
+//! - **closed**: the latest judged deploy is slower in solo OR contention;
 //! - **no evidence**: no deploy rows, or too few requests to judge.
 //! Server processes are reloads, not deploys, so without ledger deploy rows
 //! the gate never closes.
 
-use crate::pulse::{analyze, Row, Verdict};
+use crate::pulse::{analyze, Comparison, Row, Verdict};
 
 pub const DEPLOY_LEAD_S: u64 = 15;
 
@@ -49,12 +49,21 @@ pub fn gate(req_csv: &str, deploys: &[(f64, String)], model: &str, min_effect_pc
     let rows: Vec<Row> = rows.into_iter().map(|r| r.1).collect();
     if rows.len() < 2 { return Gate::NoEvidence("fewer than 2 prod requests".into()); }
     let r = analyze(&rows, min_effect_pct, 2000, 42);
-    let latest = r.comparisons.iter().rev().find(|c| c.verdict != Verdict::Insufficient && c.verdict != Verdict::Inconclusive);
-    match latest {
-        None => Gate::NoEvidence(format!("{} requests over {} deploy segment(s): no deploy has enough requests to judge", r.rows, r.segments.len())),
-        Some(c) if c.verdict == Verdict::Slower => Gate::Closed(format!("{} {} -> {}: {:+.1} [{:+.1}, {:+.1}] SLOWER", c.kind, c.from, c.to, c.delta, c.ci_low, c.ci_high)),
-        Some(c) => Gate::Open(format!("{} {} -> {}: {:+.1} [{:+.1}, {:+.1}] {}", c.kind, c.from, c.to, c.delta, c.ci_low, c.ci_high, c.verdict.as_str().to_uppercase())),
-    }
+    decide(&r.comparisons).unwrap_or_else(|| Gate::NoEvidence(format!("{} requests over {} deploy segment(s): no deploy has enough requests to judge", r.rows, r.segments.len())))
+}
+
+/// The newest JUDGED deploy decides, on ALL of its decided comparisons: closed if either solo or
+/// contention is slower. (Taking only the last comparison in the list let a "same" contention row
+/// hide a "slower" solo row of the same deploy: pulse said rollback while this gate said open.)
+pub fn decide(comparisons: &[Comparison]) -> Option<Gate> {
+    let judged = |c: &&Comparison| c.verdict != Verdict::Insufficient && c.verdict != Verdict::Inconclusive;
+    let to = comparisons.iter().filter(judged).map(|c| c.to).max()?;
+    let show = |c: &Comparison| format!("{} {} -> {}: {:+.1} [{:+.1}, {:+.1}] {}", c.kind, c.from, c.to, c.delta, c.ci_low, c.ci_high, c.verdict.as_str().to_uppercase());
+    let latest: Vec<&Comparison> = comparisons.iter().filter(judged).filter(|c| c.to == to).collect();
+    Some(match latest.iter().find(|c| c.verdict == Verdict::Slower) {
+        Some(c) => Gate::Closed(show(c)),
+        None => Gate::Open(latest.iter().map(|c| show(c)).collect::<Vec<_>>().join("; ")),
+    })
 }
 
 #[cfg(test)]
@@ -80,5 +89,34 @@ mod tests {
         assert_eq!(gate(&csv(7.0, 10.0, d), &dep, "qwen38", 1.6).as_str(), "closed");
         assert_eq!(gate(&csv(7.0, 10.0, d), &[], "qwen38", 1.6).as_str(), "no-evidence");
         assert_eq!(gate(&csv(7.0, 10.0, d), &dep, "qwen36", 1.6).as_str(), "no-evidence", "other model filtered out");
+    }
+}
+
+#[cfg(test)]
+mod decide_tests {
+    use super::*;
+
+    fn c(kind: &'static str, from: u64, to: u64, v: Verdict) -> Comparison {
+        Comparison { kind, from, to, delta: 0.0, ci_low: 0.0, ci_high: 0.0, verdict: v }
+    }
+
+    #[test]
+    fn solo_slower_is_not_hidden_by_a_later_contention_row() {
+        // pulse lists solo then contention for the same deploy; the old gate read only the last row
+        let cs = [c("solo", 1, 2, Verdict::Slower), c("contention", 1, 2, Verdict::Same)];
+        assert_eq!(decide(&cs).map(|g| g.as_str()), Some("closed"));
+        let cs = [c("solo", 1, 2, Verdict::Same), c("contention", 1, 2, Verdict::Slower)];
+        assert_eq!(decide(&cs).map(|g| g.as_str()), Some("closed"));
+    }
+
+    #[test]
+    fn only_the_newest_judged_deploy_counts() {
+        // an older slower deploy was rolled past; the newest is judged faster -> open
+        let cs = [c("solo", 1, 2, Verdict::Slower), c("solo", 2, 3, Verdict::Faster), c("contention", 2, 3, Verdict::Inconclusive)];
+        assert_eq!(decide(&cs).map(|g| g.as_str()), Some("open"));
+        // the newest deploy is not judged yet: the newest JUDGED one decides
+        let cs = [c("solo", 1, 2, Verdict::Slower), c("solo", 2, 3, Verdict::Insufficient)];
+        assert_eq!(decide(&cs).map(|g| g.as_str()), Some("closed"));
+        assert!(decide(&[c("solo", 1, 2, Verdict::Inconclusive)]).is_none());
     }
 }

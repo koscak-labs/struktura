@@ -75,6 +75,9 @@ pub fn agenda(obs: &Observation, lessons: &Lessons, knobs: &[Knob], cons: &[Cons
             } else if falsified(obs, k, v) {
                 it.kind = Kind::Settled; it.score = 0.05;
                 it.why = "a prediction naming it was FALSIFIED; not re-proposed".into();
+            } else if let Some((m, n)) = proven(obs, k, v, band) {
+                it.kind = Kind::Settled; it.score = 0.05;
+                it.why = format!("PROVEN: its prediction against {} passed on {} agreeing measurements, {:+.2}% past threshold (band {:.2}%): a ship candidate, not re-measured", k.current, n, m, band);
             } else {
                 match e {
                     None => { it.score = 0.5; it.why = format!("never measured on {}", k.metric); }
@@ -93,6 +96,21 @@ pub fn agenda(obs: &Observation, lessons: &Lessons, knobs: &[Knob], cons: &[Cons
     items.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
         .then(a.knob.cmp(&b.knob)).then(a.value.cmp(&b.value)).then(a.pred.cmp(&b.pred)));
     items
+}
+
+/// R5 (a decided knob gets no challenger): a prediction that compares this arm with the CURRENT one
+/// (its name carries both labels, e.g. "draft5-beats-draft7-code_tps") PASSED, never flipped, was
+/// replicated (>= 2 independent agreeing measurements) and cleared its threshold by at least the
+/// single-run band. Re-measuring a proven winner teaches nothing; promoting it is the gate's job.
+/// Returns (margin %, agreeing measurements).
+fn proven(obs: &Observation, k: &Knob, v: &str, band: f64) -> Option<(f64, usize)> {
+    let (_, label) = k.arm_of(v);
+    let (_, incumbent) = k.arm_of(&k.current);
+    obs.lab.predictions.iter()
+        .filter(|p| p.verdict == "pass" && p.flips == 0 && p.agreeing >= 2)
+        .filter(|p| { let t: Vec<&str> = p.name.split(|c: char| !c.is_ascii_alphanumeric()).collect(); t.contains(&label.as_str()) && t.contains(&incumbent.as_str()) })
+        .filter_map(|p| p.margin_pct.filter(|m| *m >= band).map(|m| (m, p.agreeing)))
+        .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
 }
 
 /// A failed prediction whose name mentions the arm label (e.g. "ub512-...").
@@ -141,5 +159,22 @@ mod tests {
         let (o, k) = setup("{\"kind\":\"prediction\",\"ts\":1,\"pred\":\"9.tsv\",\"name\":\"draft9-faster\",\"value\":\"90 vs 100 (-10.00%, need >% 2%)\",\"op\":\">%\",\"threshold\":\"arm B\",\"verdict\":\"fail\"}\n");
         let a = agenda(&o, &learn(&o), &k, &constraints(&[], &[]));
         assert_eq!(a.iter().find(|i| i.knob == "draft" && i.value == "9").unwrap().kind, Kind::Settled);
+    }
+
+    #[test]
+    fn r5_proven_winner_is_settled_but_one_pass_is_not() {
+        let p = |ts: u32, v: &str| format!("{{\"kind\":\"prediction\",\"ts\":{ts},\"pred\":\"210.tsv\",\"name\":\"draft5-beats-draft7-code_tps\",\"value\":\"{v}\",\"op\":\">%\",\"threshold\":\"arm B\",\"verdict\":\"pass\"}}\n");
+        let once = p(1, "212.0 vs 200.0 (6.00%, need >% 3.5%)");
+        let (o, k) = setup(&once);
+        let a = agenda(&o, &learn(&o), &k, &constraints(&[], &[]));
+        assert_eq!(a.iter().find(|i| i.knob == "draft" && i.value == "5").unwrap().kind, Kind::Challenger, "one pass: confirm, not settled");
+        let twice = once + &p(2, "211.4 vs 199.6 (5.91%, need >% 3.5%)");
+        let (o, k) = setup(&twice);
+        let a = agenda(&o, &learn(&o), &k, &constraints(&[], &[]));
+        let it = a.iter().find(|i| i.knob == "draft" && i.value == "5").unwrap();
+        assert_eq!(it.kind, Kind::Settled, "replicated decisive pass: {}", it.why);
+        assert!(it.why.starts_with("PROVEN"), "{}", it.why);
+        // the other draft values are untouched by draft5's proof
+        assert_eq!(a.iter().find(|i| i.knob == "draft" && i.value == "3").unwrap().kind, Kind::Challenger);
     }
 }
