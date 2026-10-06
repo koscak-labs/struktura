@@ -294,7 +294,7 @@ pub fn resolve(fuxi: &str, ledger: &str, goal: &[GoalFeature]) -> Resolution {
         let band = lab.pair_band_pct.max(lab.floor_pct);
         let (pred, name, verdict) = (j.str("pred").unwrap_or(""), j.str("name").unwrap_or(""), j.str("verdict").unwrap_or(""));
         let margin = crate::lab::margin(j.str("op").unwrap_or(""), j.str("value").unwrap_or(""), j.str("threshold").unwrap_or(""));
-        let outcome = super::mind::goal_reward(goal, pred, name, super::mind::reward(verdict, margin, band, lab.floor_pct));
+        let outcome = super::mind::goal_reward(goal, pred, name, super::mind::reward(verdict, margin, band, lab.floor_pct, crate::lab::band_applies(name, j.str("value").unwrap_or(""))));
         let num = job_tag(pred).map(|(n, _)| n);
         let job = jobs.iter().find(|(n, _, _)| Some(n) == num.as_ref()).map(|(_, name, _)| name.clone());
         let sq = (f.yield_ - outcome) * (f.yield_ - outcome);
@@ -376,6 +376,10 @@ mod tests {
         assert_eq!(t.windows.iter().map(|w| w.n).sum::<usize>(), t.scored);
         assert_eq!(t.bins.iter().map(|b| b.n).sum::<usize>(), t.scored);
         assert!(t.windows.last().unwrap().mind < t.windows[0].mind, "it gets better: {:?}", t.windows);
+        // Its record earned it trust: it keeps (nearly) all of its own deviation from the base rate.
+        let m = Mind::from_lab_goal(&crate::lab::analyze(LEARNABLE), &parse_knobs(BUILTIN).unwrap(), &[]);
+        std::println!("synthetic learnable: trust {:.3}, base rate {:.3}", m.trust(), m.base_rate().unwrap());
+        assert!(m.trust() > 0.8, "trust {}", m.trust());
     }
 
     fn row(batch: usize, forecast: f64, baseline: f64, reward: f64) -> Row {

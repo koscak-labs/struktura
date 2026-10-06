@@ -5525,7 +5525,7 @@ fn cmd_loop(args: &[String]) {
             for (n, s, g) in &t.brain_grown { println!("    grew sense \"{}\" after {} predictions (held-out error -{:.0}%)", s, n, 100.0 * g); }
             for (what, y) in t.brain.iter().take(4) {
                 if y.abstained { println!("    {:<14} abstained (evidence {:.1} too thin)", what, y.evidence); continue; }
-                println!("    {:<14} yield {:.2} (evidence {:.1}); like {}", what, y.expected, y.evidence, y.cites.join(", "));
+                println!("    {:<14} yield {:.2} (brain {:.2}, shrunk toward the base rate by its track record; evidence {:.1}); like {}", what, y.expected, y.raw, y.evidence, y.cites.join(", "));
             }
         }
         for s in &t.skipped { println!("  not designed: {}", s); }

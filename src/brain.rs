@@ -116,17 +116,23 @@ impl<const N: usize, const D: usize, const A: usize> Brain<N, D, A> {
     }
 
     /// The K nearest stored episodes to `x` (slots and squared distances), nearest first.
+    /// Equally near episodes are taken newest first: with discrete situations many episodes
+    /// tie, and recalling the oldest of them (memory slot order) would freeze the estimate
+    /// at the first outcomes ever seen there.
     fn nearest(&self, x: &[f32; D]) -> ([u16; K], [f32; K], usize) {
         let mut slots = [0u16; K];
         let mut d2 = [f32::INFINITY; K];
+        let mut age = [u32::MAX; K];
         let mut n = 0usize;
         for (s, e) in self.mem.iter().enumerate() {
             if !e.used { continue; }
             let d = Self::dist2(x, &e.key);
-            if n < K || d < d2[n - 1] {
+            let a = self.clock.wrapping_sub(e.t);
+            let before = |dp: f32, ap: u32| d < dp || (d == dp && a < ap);
+            if n < K || before(d2[n - 1], age[n - 1]) {
                 let mut p = if n < K { n } else { K - 1 };
-                while p > 0 && d2[p - 1] > d { d2[p] = d2[p - 1]; slots[p] = slots[p - 1]; p -= 1; }
-                d2[p] = d; slots[p] = s as u16;
+                while p > 0 && before(d2[p - 1], age[p - 1]) { d2[p] = d2[p - 1]; slots[p] = slots[p - 1]; age[p] = age[p - 1]; p -= 1; }
+                d2[p] = d; slots[p] = s as u16; age[p] = a;
                 if n < K { n += 1; }
             }
         }
@@ -414,6 +420,21 @@ mod tests {
         let d = br.decide(&x, &[true; 2], 0);
         let slot = d.cited[0] as usize;
         assert_eq!(br.episode(slot).unwrap().key, x, "nearest citation is the identical past situation");
+    }
+
+    #[test]
+    fn equally_near_memories_are_recalled_newest_first() {
+        // One situation seen 2K times: the first K outcomes were 1, the last K are 0. The K
+        // neighbours consulted must be the newest K (all at distance 0), not the first K stored.
+        let mut br: Brain<64, 2, 1> = Brain::new(0.0, 0.0);
+        br.use_model = false;
+        let x = [1.0, 0.0];
+        for i in 0..2 * K { br.learn(&x, 0, if i < K { 1.0 } else { 0.0 }); }
+        let d = br.decide(&x, &[true], 0);
+        assert_eq!(d.n_cited as usize, K);
+        let ts: Vec<u32> = (0..K).map(|k| br.episode(d.cited[k] as usize).unwrap().t).collect();
+        assert!(ts.windows(2).all(|w| w[0] > w[1]) && ts[K - 1] as usize == K + 1, "newest first: {:?}", ts);
+        assert!(d.expected.abs() < 1e-6, "recalls the recent outcomes, not the first ones: {}", d.expected);
     }
 
     #[test]
