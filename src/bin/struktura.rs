@@ -426,6 +426,7 @@ fn main() {
         "arms" => cmd_arms(&args),
         "twins" => cmd_twins(&args),
         "oracle" => cmd_oracle(&args),
+        "errclass" => cmd_errclass(&args),
         "lab" => cmd_lab(&args),
         "ledger-check" => cmd_ledger_check(&args),
         "power" => cmd_power(&args),
@@ -6270,4 +6271,41 @@ fn arms_splits(data: &struktura::arms::ArmData, splits: &[(String, String)], pai
             }
         }
     }
+}
+
+fn cmd_errclass(args: &[String]) {
+    use struktura::errclass::Classes;
+    if args.len() < 3 || args[2] == "--help" {
+        println!("struktura errclass <rows.jsonl|-> [--json]");
+        println!("  Group raw compiler/checker errors into stable signatures and count them per group.");
+        println!("  Rows: {{\"group\":\"helix/p1\",\"key\":\"t55-helix-roman-1\",\"error\":\"hxc check: line 4: ...\"}}");
+        println!("  rustc error[E0308] -> 'rustc E0308 mismatched types'; hxc 'line N: msg' -> 'hxc: msg' (codon kept,");
+        println!("  payload, numbers, paths and hints masked); else the first error/panic/fail line, masked. Zero LLM.");
+        process::exit(if args.len() < 3 { 2 } else { 0 });
+    }
+    let json = args.iter().any(|a| a == "--json");
+    let path = &args[2];
+    let text = if path == "-" { let mut s = String::new(); std::io::Read::read_to_string(&mut std::io::stdin(), &mut s).ok(); s }
+        else { std::fs::read_to_string(path).unwrap_or_else(|e| { eprintln!("errclass: {}: {}", path, e); process::exit(2) }) };
+    let mut c = Classes::default();
+    let mut bad = 0usize;
+    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        let Some(j) = struktura::lab::parse_json(line) else { bad += 1; continue };
+        let (Some(g), Some(e)) = (j.str("group"), j.str("error")) else { bad += 1; continue };
+        c.add(g, j.str("key").unwrap_or(""), e);
+    }
+    let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
+    for g in c.by_group.keys() {
+        let total = c.total(g);
+        if json {
+            for (class, n, ex) in c.ranked(g) {
+                println!("{{\"event\":\"class\",\"group\":\"{}\",\"class\":\"{}\",\"n\":{},\"share\":{:.4},\"example\":\"{}\"}}", esc(g), esc(&class), n, n as f64 / total as f64, esc(&ex));
+            }
+        } else {
+            println!("{} ({} error(s)):", g, total);
+            for (class, n, ex) in c.ranked(g) { println!("  {:>4}  {:>4.0}%  {}   e.g. {}", n, 100.0 * n as f64 / total as f64, class, ex); }
+        }
+    }
+    if json { println!("{{\"summary\":true,\"groups\":{},\"rows\":{},\"bad_rows\":{}}}", c.by_group.len(), c.by_group.keys().map(|g| c.total(g)).sum::<usize>(), bad); }
+    else if bad > 0 { eprintln!("errclass: {} unreadable row(s) skipped", bad); }
 }
