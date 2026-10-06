@@ -1,0 +1,11 @@
+{"kind":"forecast","id":"a1","challenger":"ub=128","yield":0.6,"ts":1000}
+{"kind":"forecast","id":"b2","challenger":"draft=5","yield":0.25,"ts":1000}
+{"kind":"forecast","id":"c3","challenger":"draft=3","yield":0.3,"ts":1000}
+{"kind":"score","id":"c3","challenger":"draft=3","yield":0.3,"outcome":0.0,"sq_err":0.09,"resolved_by":"lab-303-draft3.tsv::draft3-beats-draft7-code_tps"}
+{"kind":"forecast","id":"d4","challenger":"draft=9","yield":0.3,"ts":1000}
+{"kind":"forecast","id":"a1","challenger":"ub=128","yield":0.6,"ts":1005}
+{"kind":"forecast","id":"f6","challenger":"ub=128","yield":0.5,"ts":1300}
+{"kind":"forecast","id":"g7","challenger":"draft=3","yield":0.4,"ts":1000,"ledger_rows":9}
+{"kind":"forecast","id":"h8","challenger":"ub128","yield":0.4,"ts":1000}
+{"kind":"forecast","id":"i9","challenger":"draft=5","yield":0.25,"ts":1350}
+{"kind":"forecast","id":"j10","challenger":"ub=512","yield":0.5,"ts":1000}

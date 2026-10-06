@@ -417,6 +417,7 @@ fn main() {
         "ledger-check" => cmd_ledger_check(&args),
         "power" => cmd_power(&args),
         "loop" => cmd_loop(&args),
+        "track" => cmd_track(&args),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -5473,8 +5474,13 @@ fn cmd_loop(args: &[String]) {
                 r + 1, it.kind.as_str(), it.knob, it.value, it.pred.as_ref().map(|(p, n)| format!("{}::{}", p, n)).unwrap_or_default(), it.score,
                 it.observed_effect_pct.map(num).unwrap_or("null".into()), it.samples, it.why.replace('"', "'"));
         }
+        // Each estimate is a forecast the brain can be scored on later (`struktura track --forecasts`):
+        // its id is stable for (challenger, metric, ledger rows), so a re-run on the same ledger repeats it.
+        let rows = struktura::ouroboros::track::ledger_rows(&ledger_text);
         for (what, y) in &t.brain {
-            println!("{{\"event\":\"brain\",\"challenger\":\"{}\",\"yield\":{},\"evidence\":{},\"abstained\":{},\"cites\":[{}]}}", what, num(y.expected), num(y.evidence), y.abstained,
+            let metric = what.split_once('=').and_then(|(k, _)| cfg.knobs.iter().find(|x| x.name == k)).map(|k| k.metric.clone()).unwrap_or_default();
+            println!("{{\"event\":\"brain\",\"challenger\":\"{}\",\"yield\":{},\"evidence\":{},\"abstained\":{},\"metric\":\"{}\",\"ledger_rows\":{},\"forecast\":\"{}\",\"cites\":[{}]}}",
+                what, num(y.expected), num(y.evidence), y.abstained, metric, rows, struktura::ouroboros::track::forecast_id(what, &metric, rows),
                 y.cites.iter().map(|c| format!("\"{}\"", c.replace('"', "'"))).collect::<Vec<_>>().join(","));
         }
         if let Some(d) = &t.design { println!("{{\"event\":\"design\",\"manifest\":{}}}", d.manifest); }
@@ -5525,6 +5531,96 @@ fn cmd_loop(args: &[String]) {
             Err(e) => { eprintln!("loop: submit failed: {}", e.trim()); process::exit(1); }
         }
     }
+}
+
+fn cmd_track(args: &[String]) {
+    use struktura::ouroboros::{knobs, memory::esc, mind, track};
+    if args.iter().any(|a| a == "--help") || args.len() < 3 {
+        println!("struktura track --ledger lab-ledger.jsonl [--features features.tsv] [--knobs FILE] [--window K] [--bins B] [--gap S] [--json]");
+        println!("struktura track --forecasts FUXI.jsonl --ledger lab-ledger.jsonl [--features features.tsv] [--json]");
+        println!("  The brain's track record, no model in the loop.");
+        println!("  replay     the ledger is replayed exactly as loop's mind learns it. Before each scoring burst (rows < S s apart,");
+        println!("             default 30: one job's predictions) is learned, the mind forecasts each row's reward (its yield) and a");
+        println!("             baseline forecasts the running mean of past rewards; both see only earlier bursts. Reports squared error");
+        println!("             (Brier on 0/1 rewards), skill = 1 - mind/baseline with a burst-level z, a learning curve in windows of K");
+        println!("             scored rows (default 10), and calibration bins (default 5). If the mind does not beat the baseline, it says so.");
+        println!("  --forecasts  score loop's brain forecasts ({{\"kind\":\"forecast\",\"id\",\"challenger\",\"yield\",\"ts\"}} rows) by the first later");
+        println!("             scored prediction of that challenger's experiment (job NNN-<knob><value>, pred file lab-NNN-<knob><value>.tsv);");
+        println!("             prints {{\"kind\":\"score\",...}} rows (with --json: only those, ready to append to FUXI.jsonl). Ids that already have");
+        println!("             a score row in FUXI.jsonl are never scored again; unresolved forecasts stay pending.");
+        println!("  --features the lab's feature registry: the reward aimed at the main goal, as loop --features");
+        process::exit(if args.len() < 3 { 2 } else { 0 });
+    }
+    let (mut ledger, mut forecasts, mut goal_file, mut knobs_file) = (None::<String>, None::<String>, None::<String>, None::<String>);
+    let (mut window, mut bins, mut gap, mut json) = (10usize, 5usize, track::BATCH_GAP_S, false);
+    let mut i = 2;
+    while i < args.len() {
+        let v = args.get(i + 1).cloned();
+        match args[i].as_str() {
+            "--ledger" => { ledger = v; i += 1; }
+            "--forecasts" => { forecasts = v; i += 1; }
+            "--features" => { goal_file = v; i += 1; }
+            "--knobs" => { knobs_file = v; i += 1; }
+            "--window" => { window = v.and_then(|x| x.parse().ok()).filter(|k| *k > 0).unwrap_or_else(|| { eprintln!("track: --window needs a positive integer"); process::exit(2) }); i += 1; }
+            "--bins" => { bins = v.and_then(|x| x.parse().ok()).filter(|k| *k > 0).unwrap_or_else(|| { eprintln!("track: --bins needs a positive integer"); process::exit(2) }); i += 1; }
+            "--gap" => { gap = v.and_then(|x| x.parse().ok()).filter(|g: &f64| *g >= 0.0).unwrap_or_else(|| { eprintln!("track: --gap needs seconds >= 0"); process::exit(2) }); i += 1; }
+            "--json" => json = true,
+            o => { eprintln!("track: unknown option {}", o); process::exit(2); }
+        }
+        i += 1;
+    }
+    let read = |p: &str| std::fs::read_to_string(p).unwrap_or_else(|e| { eprintln!("track: {}: {}", p, e); process::exit(2) });
+    let Some(lp) = ledger else { eprintln!("track: --ledger is required"); process::exit(2) };
+    let ledger_text = read(&lp);
+    let goal = goal_file.as_ref().map(|p| mind::parse_goal_features(&read(p))).unwrap_or_default();
+    let num = |x: f64| if x.is_finite() { format!("{:.4}", x) } else { "null".into() };
+    if let Some(fp) = forecasts {
+        let r = track::resolve(&read(&fp), &ledger_text, &goal);
+        let mse = if r.all_sq_err.is_empty() { f64::NAN } else { r.all_sq_err.iter().sum::<f64>() / r.all_sq_err.len() as f64 };
+        if json {
+            for s in &r.scores { println!("{}", s.to_json()); }
+            eprintln!("{{\"event\":\"track-forecasts\",\"scored\":{},\"pending\":{},\"already_scored\":{},\"duplicates\":{},\"invalid\":{},\"all_scores\":{},\"mean_sq_err\":{}}}",
+                r.scores.len(), r.pending.len(), r.already_scored, r.duplicates, r.invalid, r.all_sq_err.len(), num(mse));
+        } else {
+            println!("struktura track --forecasts: {} new score(s), {} pending, {} already scored, {} duplicate id(s), {} invalid row(s)",
+                r.scores.len(), r.pending.len(), r.already_scored, r.duplicates, r.invalid);
+            for s in &r.scores {
+                println!("  scored {} {:<10} yield {:.3} -> outcome {:.3} (sq err {:.4}) by {} [{}]{}", s.id, s.challenger, s.yield_, s.outcome, s.sq_err,
+                    s.resolved_by, s.verdict, s.job.as_ref().map(|j| format!(" job {}", j)).unwrap_or_default());
+            }
+            for f in &r.pending { println!("  pending {} {:<10} yield {:.3} (no scored prediction of its experiment after ts {})", f.id, f.challenger, f.yield_, f.ts); }
+            println!("  all scored forecasts: {}, mean squared error {}", r.all_sq_err.len(), num(mse));
+        }
+        return;
+    }
+    let knobs_text = match &knobs_file { Some(p) => read(p), None => knobs::BUILTIN.to_string() };
+    let knobs = knobs::parse_knobs(&knobs_text).unwrap_or_else(|e| { eprintln!("track: knobs: {}", e); process::exit(2) });
+    let rows = track::replay(&struktura::lab::analyze(&ledger_text), &knobs, &goal, gap);
+    let t = track::summarize(&rows, window, bins);
+    if json {
+        for (k, r) in rows.iter().enumerate() {
+            println!("{{\"event\":\"row\",\"i\":{},\"batch\":{},\"pred\":\"{}\",\"name\":\"{}\",\"ts\":{},\"forecast\":{},\"abstained\":{},\"baseline\":{},\"reward\":{},\"scored\":{}}}",
+                k + 1, r.batch, esc(&r.pred), esc(&r.name), r.ts, num(r.forecast), r.abstained, num(r.baseline), num(r.reward), r.batch > 0);
+        }
+        for w in &t.windows { println!("{{\"event\":\"window\",\"first\":{},\"last\":{},\"n\":{},\"mind\":{},\"baseline\":{},\"skill\":{}}}", w.first, w.last, w.n, num(w.mind), num(w.base), num(w.skill)); }
+        for b in &t.bins { println!("{{\"event\":\"bin\",\"lo\":{:.2},\"hi\":{:.2},\"n\":{},\"forecast\":{},\"realised\":{}}}", b.lo, b.hi, b.n, num(b.forecast), num(b.realised)); }
+        println!("{{\"event\":\"track\",\"rows\":{},\"bursts\":{},\"scored\":{},\"mind\":{},\"baseline\":{},\"skill\":{},\"z\":{},\"seq_mind\":{},\"seq_baseline\":{},\"seq_skill\":{},\"goal_aware\":{},\"verdict\":\"{}\"}}",
+            t.rows, t.batches, t.scored, num(t.mind), num(t.base), num(t.skill), num(t.z), num(t.seq_mind), num(t.seq_base), num(t.seq_skill), !goal.is_empty(), esc(&t.verdict));
+        return;
+    }
+    println!("struktura track: prequential replay of {} ({} scored prediction(s) the mind learns from, {} scoring burst(s){})",
+        lp, t.rows, t.batches, if goal.is_empty() { "" } else { "; reward aimed at the feature registry" });
+    println!("  each row is forecast before its burst is learned; both arms see only earlier bursts; first burst = warm-up");
+    println!("  scored rows      {}", t.scored);
+    println!("  mind             squared error {}", num(t.mind));
+    println!("  baseline         squared error {}  (running mean of past rewards)", num(t.base));
+    println!("  skill            {}  (1 - mind/baseline); burst-level z {}", num(t.skill), num(t.z));
+    println!("  verdict: {}", t.verdict);
+    println!("  sequential order (same-burst rows already learned; optimistic, for comparison): mind {} baseline {} skill {}", num(t.seq_mind), num(t.seq_base), num(t.seq_skill));
+    println!("  learning curve (windows of {} scored rows):", window);
+    for w in &t.windows { println!("    rows {:>3}-{:<3} mind {:.4}  baseline {:.4}  skill {:>7}", w.first, w.last, w.mind, w.base, num(w.skill)); }
+    println!("  calibration of the mind's forecasts:");
+    for b in &t.bins { println!("    [{:.1}, {:.1}{} n={:<3} mean forecast {:.3}  realised reward {:.3}", b.lo, b.hi, if b.hi >= 1.0 { "]" } else { ")" }, b.n, b.forecast, b.realised); }
 }
 
 /// Read pulse's request rows. With an archive, first merge the (rolling) input into an

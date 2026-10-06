@@ -150,8 +150,41 @@ pub struct Mind {
     labels: Vec<String>,
     pub episodes: usize,
     band_pct: f64,
+    /// Noise floor (percent): a pass by more than 3 floors is an easy pass.
+    floor_pct: f64,
     /// Knob history after the whole ledger, by knob name.
     history: Vec<(String, History)>,
+}
+
+/// Reward of one scored verdict: 1 = decisive; 0.5 = easy pass (margin > 3 floors); 0 = fragile
+/// (margin inside the single-run band) or void. `band` and `floor` are percent.
+pub fn reward(verdict: &str, margin_pct: Option<f64>, band: f64, floor: f64) -> f64 {
+    match (verdict, margin_pct) {
+        ("void", _) => 0.0,
+        (_, Some(m)) if m.abs() < band => 0.0,
+        ("pass", Some(m)) if m > 3.0 * floor => 0.5,
+        _ => 1.0,
+    }
+}
+
+/// Whether a prediction proves a registered feature of the lab's goal registry.
+pub fn proves_goal(goal: &[GoalFeature], pred: &str, name: &str) -> bool {
+    goal.iter().any(|g| g.pred == pred && (g.required.is_empty() || g.required.iter().any(|r| r == name)))
+}
+
+/// Reward aimed at the main goal: full reward for a prediction that proves a registered feature,
+/// 0.6 of it for any other (no discount when the registry is empty).
+pub fn goal_reward(goal: &[GoalFeature], pred: &str, name: &str, reward: f64) -> f64 {
+    if goal.is_empty() || proves_goal(goal, pred, name) { reward } else { reward * 0.6 }
+}
+
+/// The scored predictions (latest verdict each: pass, fail or void) the mind learns from, in its
+/// learning order: time, then pred file, then name.
+pub fn learning_order(lab: &LabReport) -> Vec<&crate::lab::Prediction> {
+    let mut preds: Vec<&crate::lab::Prediction> = lab.predictions.iter()
+        .filter(|p| matches!(p.verdict.as_str(), "pass" | "fail" | "void")).collect();
+    preds.sort_by(|a, b| a.ts.partial_cmp(&b.ts).unwrap_or(std::cmp::Ordering::Equal).then(a.pred.cmp(&b.pred)).then(a.name.cmp(&b.name)));
+    preds
 }
 
 #[derive(Clone, Debug)]
@@ -181,49 +214,60 @@ impl Mind {
     /// grow up to G new senses from its base features, each only if it explains its mistakes on
     /// held-out predictions (see [`crate::brain_grow`]).
     pub fn from_lab_goal(lab: &LabReport, knobs: &[Knob], goal: &[GoalFeature]) -> Self {
-        let mut brain: Box<Brain<256, DG, 1>> = Box::new(Brain::new(0.0, 1.0));
+        let mut m = Self::blank(lab, knobs, goal);
+        for p in learning_order(lab) { m.learn_prediction(p, knobs, goal); }
+        m
+    }
+
+    /// A mind that has learned nothing yet: the ledger's noise band and floor, empty knob histories.
+    /// [`Mind::from_lab_goal`] is this plus [`Mind::learn_prediction`] over [`learning_order`].
+    pub fn blank(lab: &LabReport, knobs: &[Knob], goal: &[GoalFeature]) -> Self {
+        let brain: Box<Brain<256, DG, 1>> = Box::new(Brain::new(0.0, 1.0));
         let mut grower: crate::brain_grow::Grower<D, G> = crate::brain_grow::Grower::new(0x6D696E64);
         grower.constant[D - 1] = true;
         grower.every = 12;
-        let mut grown = Vec::new();
-        let mut goal_predictions = 0usize;
-        let mut labels = vec![String::new(); 256];
-        let band = lab.pair_band_pct.max(lab.floor_pct);
-        let mut preds: Vec<&crate::lab::Prediction> = lab.predictions.iter()
-            .filter(|p| matches!(p.verdict.as_str(), "pass" | "fail" | "void")).collect();
-        preds.sort_by(|a, b| a.ts.partial_cmp(&b.ts).unwrap_or(std::cmp::Ordering::Equal).then(a.pred.cmp(&b.pred)).then(a.name.cmp(&b.name)));
-        let mut history: Vec<(String, History)> = knobs.iter().map(|k| (k.name.clone(), History::default())).collect();
-        let mut episodes = 0;
-        for p in preds {
-            let reward = match (p.verdict.as_str(), p.margin_pct) {
-                ("void", _) => 0.0,
-                (_, Some(m)) if m.abs() < band => 0.0,
-                ("pass", Some(m)) if m > 3.0 * lab.floor_pct => 0.5,
-                _ => 1.0,
-            };
-            let is_goal = goal.iter().any(|g| g.pred == p.pred && (g.required.is_empty() || g.required.iter().any(|r| r == &p.name)));
-            if is_goal { goal_predictions += 1; }
-            let reward = if goal.is_empty() || is_goal { reward } else { reward * 0.6 };
-            let knob = knob_of(&p.name, knobs).map(|k| k.name.clone());
-            let h = knob.as_ref().and_then(|k| history.iter().find(|(n, _)| n == k)).map(|(_, h)| *h).unwrap_or_default();
-            let base = situation_of(&p.op, &p.value, &p.name, band, &h);
-            let x: [f32; DG] = grower.situation(&base);
-            let class = if reward == 0.0 { "fragile/void" } else if (p.verdict == "pass" && p.margin_pct.map(|m| m > 3.0 * lab.floor_pct).unwrap_or(false)) { "easy" } else { "decisive" };
-            if let Some(s) = brain.learn(&x, 0, reward) { labels[s] = format!("{}::{} ({}{})", p.pred, p.name, class, if is_goal { ", proves a feature" } else { "" }); }
-            episodes += 1;
-            if let Some(g) = grower.after_learn(&mut brain) { if let Some(f) = g.adopted { grown.push((episodes, describe(&f), g.gain)); } }
-            // Update the knob's history only after its situation was taken (no leakage).
-            if let Some(k) = knob {
-                if let Some((_, h)) = history.iter_mut().find(|(n, _)| *n == k) {
-                    h.n += 1;
-                    if reward >= 1.0 { h.decisive += 1; }
-                    if let Some((d, _, _)) = super::learn::parse_relative(&p.value) {
-                        if band > 0.0 { h.effect_bands_sum += d.abs() / band; h.effect_n += 1; }
-                    }
+        Mind { brain, grower, grown: Vec::new(), goal_aware: !goal.is_empty(), goal_predictions: 0, labels: vec![String::new(); 256], episodes: 0,
+            band_pct: lab.pair_band_pct.max(lab.floor_pct), floor_pct: lab.floor_pct,
+            history: knobs.iter().map(|k| (k.name.clone(), History::default())).collect() }
+    }
+
+    /// The reward this mind learns for a scored prediction (aimed at the goal when `goal` is given).
+    pub fn reward_of(&self, p: &crate::lab::Prediction, goal: &[GoalFeature]) -> f64 {
+        goal_reward(goal, &p.pred, &p.name, reward(&p.verdict, p.margin_pct, self.band_pct, self.floor_pct))
+    }
+
+    /// Situation of a scored prediction as the mind sees it now: its claim plus its knob's history so far.
+    /// Before [`Mind::learn_prediction`] of `p`, this is exactly the situation that step learns from.
+    pub fn situation_of_prediction(&self, p: &crate::lab::Prediction, knobs: &[Knob]) -> Situation {
+        let h = knob_of(&p.name, knobs).and_then(|k| self.history.iter().find(|(n, _)| *n == k.name)).map(|(_, h)| *h).unwrap_or_default();
+        situation_of(&p.op, &p.value, &p.name, self.band_pct, &h)
+    }
+
+    /// One replay step: learn a scored prediction, then update its knob's history. Returns the reward.
+    pub fn learn_prediction(&mut self, p: &crate::lab::Prediction, knobs: &[Knob], goal: &[GoalFeature]) -> f64 {
+        let raw = reward(&p.verdict, p.margin_pct, self.band_pct, self.floor_pct);
+        let is_goal = proves_goal(goal, &p.pred, &p.name);
+        if is_goal { self.goal_predictions += 1; }
+        let reward = goal_reward(goal, &p.pred, &p.name, raw);
+        let knob = knob_of(&p.name, knobs).map(|k| k.name.clone());
+        let base = self.situation_of_prediction(p, knobs);
+        let x: [f32; DG] = self.grower.situation(&base);
+        let class = if reward == 0.0 { "fragile/void" } else if p.verdict == "pass" && p.margin_pct.map(|m| m > 3.0 * self.floor_pct).unwrap_or(false) { "easy" } else { "decisive" };
+        if let Some(s) = self.brain.learn(&x, 0, reward as f32) { self.labels[s] = format!("{}::{} ({}{})", p.pred, p.name, class, if is_goal { ", proves a feature" } else { "" }); }
+        self.episodes += 1;
+        if let Some(g) = self.grower.after_learn(&mut self.brain) { if let Some(f) = g.adopted { self.grown.push((self.episodes, describe(&f), g.gain)); } }
+        // Update the knob's history only after its situation was taken (no leakage).
+        let band = self.band_pct;
+        if let Some(k) = knob {
+            if let Some((_, h)) = self.history.iter_mut().find(|(n, _)| *n == k) {
+                h.n += 1;
+                if reward >= 1.0 { h.decisive += 1; }
+                if let Some((d, _, _)) = super::learn::parse_relative(&p.value) {
+                    if band > 0.0 { h.effect_bands_sum += d.abs() / band; h.effect_n += 1; }
                 }
             }
         }
-        Mind { brain, grower, grown, goal_aware: !goal.is_empty(), goal_predictions, labels, episodes, band_pct: band, history }
+        reward
     }
 
     /// History of `knob` over the whole ledger.
