@@ -24,6 +24,7 @@
 use alloc::vec::Vec;
 #[cfg(not(feature = "std"))]
 use alloc::vec;
+use crate::{ln, powf, sqrt};
 
 
 /// Robust z above which a row is excluded from the second fitting pass.
@@ -355,6 +356,251 @@ pub fn churn(rows: &[ChurnRow], window_s: u64) -> Churn {
         cold_median_s: cm, warm_median_s: wm, cold_mean_s: cold_mean, warm_mean_s: warm_mean, cold_total_s: cold_total, excess_s: excess }
 }
 
+// ---------------------------------------------------------------------------
+// Reload churn from the router's spawn stream.
+// ---------------------------------------------------------------------------
+
+/// One model reload: the router spawned a child for `alias` on `port`.
+/// `alias` is an index into a caller-held name table.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Spawn {
+    pub ts: u64,
+    pub pid: u64,
+    pub port: u64,
+    pub alias: usize,
+}
+
+/// One served request, as seen by the spawn-stream churn view.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SpawnReq {
+    pub pid: u64,
+    pub port: u64,
+    pub start: u64,
+    pub prompt_s: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpawnChurn {
+    /// Every reload in the stream (also the ones that never served a request).
+    pub reloads: usize,
+    pub span_h: f64,
+    /// (alias index, reloads), in order of first appearance.
+    pub per_alias: Vec<(usize, usize)>,
+    /// (hour start, reloads) for every hour that had a reload.
+    pub per_hour: Vec<(u64, usize)>,
+    pub worst_hour: Option<(u64, usize)>,
+    /// Requests whose child's spawn is in the stream.
+    pub matched: usize,
+    pub cold_n: usize,
+    pub warm_n: usize,
+    pub cold_mean_s: f64,
+    pub warm_mean_s: f64,
+    pub cold_total_s: f64,
+    pub total_prompt_s: f64,
+    /// cold total - cold_n x warm mean, floored at 0.
+    pub excess_s: f64,
+    /// excess_s as a percent of all prompt-read seconds.
+    pub excess_pct: f64,
+}
+
+/// Seconds since the spawn of the child that served each request: the latest
+/// spawn of the same (pid, port) at or before the request's start. `None`
+/// when that spawn is older than the stream (the child was already warm).
+pub fn spawn_ages(spawns: &[Spawn], reqs: &[SpawnReq]) -> Vec<Option<u64>> {
+    reqs.iter().map(|r| {
+        spawns.iter()
+            .filter(|s| s.pid == r.pid && s.port == r.port && s.ts <= r.start)
+            .map(|s| s.ts).max()
+            .map(|ts| r.start - ts)
+    }).collect()
+}
+
+fn is_cold(age: Option<u64>, window_s: u64) -> bool { matches!(age, Some(a) if a <= window_s) }
+
+pub fn spawn_churn(spawns: &[Spawn], reqs: &[SpawnReq], window_s: u64) -> SpawnChurn {
+    let ages = spawn_ages(spawns, reqs);
+    let mut per_alias: Vec<(usize, usize)> = Vec::new();
+    let mut per_hour: Vec<(u64, usize)> = Vec::new();
+    for s in spawns {
+        match per_alias.iter_mut().find(|(a, _)| *a == s.alias) { Some(e) => e.1 += 1, None => per_alias.push((s.alias, 1)) }
+        let h = s.ts / 3600 * 3600;
+        match per_hour.iter_mut().find(|(t, _)| *t == h) { Some(e) => e.1 += 1, None => per_hour.push((h, 1)) }
+    }
+    per_hour.sort();
+    let worst_hour = per_hour.iter().copied().max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0)));
+    let (mut cold_n, mut warm_n, mut cold_total, mut warm_total) = (0usize, 0usize, 0.0, 0.0);
+    for (r, age) in reqs.iter().zip(ages.iter()) {
+        if is_cold(*age, window_s) { cold_n += 1; cold_total += r.prompt_s } else { warm_n += 1; warm_total += r.prompt_s }
+    }
+    let times = spawns.iter().map(|s| s.ts).chain(reqs.iter().map(|r| r.start));
+    let (lo, hi) = times.fold((u64::MAX, 0u64), |(lo, hi), t| (lo.min(t), hi.max(t)));
+    let warm_mean = if warm_n > 0 { warm_total / warm_n as f64 } else { f64::NAN };
+    let cold_mean = if cold_n > 0 { cold_total / cold_n as f64 } else { f64::NAN };
+    let excess = if warm_mean.is_finite() { (cold_total - cold_n as f64 * warm_mean).max(0.0) } else { f64::NAN };
+    let total = cold_total + warm_total;
+    SpawnChurn {
+        reloads: spawns.len(), span_h: if hi > lo { (hi - lo) as f64 / 3600.0 } else { 0.0 },
+        per_alias, per_hour, worst_hour, matched: ages.iter().filter(|a| a.is_some()).count(),
+        cold_n, warm_n, cold_mean_s: cold_mean, warm_mean_s: warm_mean, cold_total_s: cold_total,
+        total_prompt_s: total, excess_s: excess, excess_pct: if total > 0.0 { 100.0 * excess / total } else { f64::NAN },
+    }
+}
+
+/// Reload tax before vs after a fix (e.g. slot save/restore around reloads).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChurnSplit {
+    pub split_ts: u64,
+    pub before_cold_n: usize,
+    pub after_cold_n: usize,
+    /// Mean extra prompt-read seconds per cold request (cold mean - warm mean).
+    pub before_excess_s: f64,
+    pub after_excess_s: f64,
+    /// (after - before) / before, percent. Negative = the tax shrank.
+    pub delta_pct: f64,
+    pub ci_low: f64,
+    pub ci_high: f64,
+    pub verdict: Verdict,
+}
+
+/// Rows per set (cold/warm, before/after) needed to judge a split.
+pub const MIN_SPLIT_ROWS: usize = 5;
+
+fn mean(v: &[f64]) -> f64 { v.iter().sum::<f64>() / v.len() as f64 }
+
+fn boot_mean(v: &[f64], rng: &mut Rng) -> f64 {
+    let mut s = 0.0;
+    for _ in 0..v.len() { s += v[rng.below(v.len())]; }
+    s / v.len() as f64
+}
+
+pub fn churn_split(spawns: &[Spawn], reqs: &[SpawnReq], window_s: u64, split_ts: u64,
+                   min_effect_pct: f64, n_boot: usize, seed: u64) -> ChurnSplit {
+    let ages = spawn_ages(spawns, reqs);
+    let (mut bc, mut bw, mut ac, mut aw) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for (r, age) in reqs.iter().zip(ages.iter()) {
+        let cold = is_cold(*age, window_s);
+        match (r.start < split_ts, cold) {
+            (true, true) => bc.push(r.prompt_s), (true, false) => bw.push(r.prompt_s),
+            (false, true) => ac.push(r.prompt_s), (false, false) => aw.push(r.prompt_s),
+        }
+    }
+    let nan = f64::NAN;
+    let enough = [&bc, &bw, &ac, &aw].iter().all(|v| v.len() >= MIN_SPLIT_ROWS);
+    let (be, ae) = if enough { (mean(&bc) - mean(&bw), mean(&ac) - mean(&aw)) } else { (nan, nan) };
+    if !enough || be <= 0.0 {
+        return ChurnSplit { split_ts, before_cold_n: bc.len(), after_cold_n: ac.len(), before_excess_s: be,
+            after_excess_s: ae, delta_pct: nan, ci_low: nan, ci_high: nan, verdict: Verdict::Insufficient };
+    }
+    let mut rng = Rng(seed | 1);
+    let (lo, hi) = ci((0..n_boot.max(100)).map(|_| {
+        let b = boot_mean(&bc, &mut rng) - boot_mean(&bw, &mut rng);
+        let a = boot_mean(&ac, &mut rng) - boot_mean(&aw, &mut rng);
+        if b > 0.0 { 100.0 * (a - b) / b } else { f64::INFINITY }
+    }).collect());
+    ChurnSplit { split_ts, before_cold_n: bc.len(), after_cold_n: ac.len(), before_excess_s: be, after_excess_s: ae,
+        delta_pct: 100.0 * (ae - be) / be, ci_low: lo, ci_high: hi, verdict: verdict_of(lo, hi, min_effect_pct) }
+}
+
+// ---------------------------------------------------------------------------
+// Live deploy gate: an anytime-valid sequential test.
+// ---------------------------------------------------------------------------
+
+/// Betting fractions mixed into each e-process. An average of test
+/// martingales is a test martingale, so the mixture needs no tuning and stays
+/// valid; small fractions detect small shifts, large ones detect big shifts fast.
+const LAMBDAS: [f64; 6] = [0.05, 0.1, 0.2, 0.3, 0.4, 0.5];
+/// z for the 99% order-statistic interval of the reference median.
+const REF_Z: f64 = 2.576;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct WatchState {
+    /// Solo requests seen on the new deploy.
+    pub n: usize,
+    /// Faster / Slower / Same once decided, Inconclusive while pending,
+    /// Insufficient when the reference deploy is too short.
+    pub verdict: Verdict,
+    /// Index into the new stream where the verdict was reached.
+    pub decided_at: Option<usize>,
+    /// Rough requests still needed by the leading test (None: no trend yet).
+    pub need_more: Option<usize>,
+    pub ref_median: f64,
+    pub ref_low: f64,
+    pub ref_high: f64,
+    /// ln e-values: [slower, faster, not slower, not faster].
+    pub log_e: [f64; 4],
+    /// The reference interval is wider than ±min effect, so "same" cannot be
+    /// shown however many requests arrive; only faster/slower can be.
+    pub same_reachable: bool,
+}
+
+fn lse(v: &[f64]) -> f64 {
+    let m = v.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    if !m.is_finite() { return m; }
+    m + ln(v.iter().map(|x| powf(core::f64::consts::E, x - m)).sum::<f64>())
+}
+
+/// Decide whether a new deploy's solo timing moved by more than `min_effect_pct`
+/// versus the previous deploy, re-checkable after every request.
+///
+/// `reference` and `stream` are (ctx_k, ms) of solo requests; `stream` in
+/// arrival order. The context cost is fitted on the reference only (so it is
+/// fixed before the stream arrives). Each request becomes four sign bets
+/// against thresholds built from a 99% interval of the reference median,
+/// so reference sampling error cannot manufacture a verdict; by Ville's
+/// inequality each e-process crosses 1/α with probability <= α under its
+/// null, at any stopping time. Faster and slower each use α/2. "Same" needs
+/// both "not slower" and "not faster" to reach 1/α (intersection-union).
+pub fn watch(reference: &[(f64, f64)], stream: &[(f64, f64)], min_effect_pct: f64, alpha: f64) -> WatchState {
+    let nan = f64::NAN;
+    let mut st = WatchState { n: stream.len(), verdict: Verdict::Insufficient, decided_at: None, need_more: None,
+        ref_median: nan, ref_low: nan, ref_high: nan, log_e: [0.0; 4], same_reachable: false };
+    if reference.len() < MIN_SEG_ROWS { return st; }
+    let n = reference.len() as f64;
+    let (mx, my) = (reference.iter().map(|r| r.0).sum::<f64>() / n, reference.iter().map(|r| r.1).sum::<f64>() / n);
+    let (mut sxx, mut sxy) = (0.0, 0.0);
+    for r in reference { sxx += (r.0 - mx) * (r.0 - mx); sxy += (r.0 - mx) * (r.1 - my); }
+    let b = if sxx > 1e-12 { (sxy / sxx).max(0.0) } else { 0.0 };
+    let mut adj: Vec<f64> = reference.iter().map(|r| r.1 - b * r.0).collect();
+    let m0 = median(&mut adj); // sorts adj
+    let k = ((n / 2.0) - REF_Z * sqrt(n) / 2.0).max(0.0) as usize; // truncation = floor for x >= 0
+    let (lo, hi) = (adj[k], adj[adj.len() - 1 - k]);
+    st.ref_median = m0; st.ref_low = lo; st.ref_high = hi;
+    let d = min_effect_pct / 100.0;
+    let (up, dn) = (hi * (1.0 + d), lo * (1.0 - d));
+    let (ns, nf) = (lo * (1.0 + d), hi * (1.0 - d));
+    st.same_reachable = nf < ns;
+    // per-λ log wealth for each of the four bets
+    let mut w = [[0.0f64; LAMBDAS.len()]; 4];
+    let thr_dir = ln(2.0 / alpha);
+    let thr_same = ln(1.0 / alpha);
+    st.verdict = Verdict::Inconclusive;
+    for (i, &(ctx, ms)) in stream.iter().enumerate() {
+        let x = ms - b * ctx;
+        // +1 when the bet's alternative is favoured by this request, -1 otherwise
+        let sign = [
+            if x > up { 1.0 } else { -1.0 },   // slower
+            if x < dn { 1.0 } else { -1.0 },   // faster
+            if x < ns { 1.0 } else { -1.0 },   // not slower: median below lo(1+d)
+            if x > nf { 1.0 } else { -1.0 },   // not faster: median above hi(1-d)
+        ];
+        for t in 0..4 { for (j, l) in LAMBDAS.iter().enumerate() { w[t][j] += ln(1.0 + l * sign[t]); } }
+        for t in 0..4 { st.log_e[t] = lse(&w[t]) - ln(LAMBDAS.len() as f64); }
+        let v = if st.log_e[0] >= thr_dir { Verdict::Slower }
+            else if st.log_e[1] >= thr_dir { Verdict::Faster }
+            else if st.log_e[2] >= thr_same && st.log_e[3] >= thr_same { Verdict::Same }
+            else { Verdict::Inconclusive };
+        if v != Verdict::Inconclusive { st.verdict = v; st.decided_at = Some(i); break; }
+    }
+    if st.verdict == Verdict::Inconclusive && st.n > 0 {
+        let targets = [thr_dir, thr_dir, thr_same, thr_same];
+        st.need_more = (0..4).filter_map(|t| {
+            let g = st.log_e[t] / st.n as f64;
+            if g > 0.0 && (t < 2 || st.same_reachable) { { let q = (targets[t] - st.log_e[t]) / g; let c = q.max(1.0) as usize; Some(if (c as f64) < q { c + 1 } else { c }) } } else { None }
+        }).min();
+    }
+    st
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -473,5 +719,145 @@ mod tests {
         let r = analyze(&rows, 1.16, 100, 5);
         assert_eq!(kind(&r, "solo")[0].verdict, Verdict::Insufficient);
         assert!(r.incidents.iter().all(|x| x.seg == 1), "no incidents judged in a 5-row deploy");
+    }
+
+    fn gauss(rng: &mut Rng) -> f64 {
+        let u1 = (rng.below(1 << 30) as f64 + 0.5) / (1u64 << 30) as f64;
+        let u2 = (rng.below(1 << 30) as f64 + 0.5) / (1u64 << 30) as f64;
+        (-2.0 * u1.ln()).sqrt() * (2.0 * core::f64::consts::PI * u2).cos()
+    }
+
+    #[test]
+    fn spawn_ages_match_the_latest_spawn_of_the_same_child() {
+        let spawns = [
+            Spawn { ts: 100, pid: 1, port: 10, alias: 0 },
+            Spawn { ts: 500, pid: 1, port: 10, alias: 0 },
+            Spawn { ts: 450, pid: 1, port: 11, alias: 1 },
+        ];
+        let reqs = [
+            SpawnReq { pid: 1, port: 10, start: 400, prompt_s: 1.0 }, // after spawn@100
+            SpawnReq { pid: 1, port: 10, start: 520, prompt_s: 1.0 }, // after spawn@500
+            SpawnReq { pid: 1, port: 12, start: 600, prompt_s: 1.0 }, // child never spawned in stream
+            SpawnReq { pid: 2, port: 10, start: 600, prompt_s: 1.0 }, // other router
+            SpawnReq { pid: 1, port: 10, start: 50, prompt_s: 1.0 },  // before any spawn of the child
+        ];
+        assert_eq!(spawn_ages(&spawns, &reqs), vec![Some(300), Some(20), None, None, None]);
+    }
+
+    #[test]
+    fn spawn_churn_counts_every_reload_per_alias_and_hour() {
+        let mut spawns = Vec::new();
+        for k in 0..5u64 { spawns.push(Spawn { ts: 3600 + k * 60, pid: 1, port: 10 + k, alias: 0 }); }
+        for k in 0..2u64 { spawns.push(Spawn { ts: 7200 + k * 60, pid: 1, port: 20 + k, alias: 1 }); }
+        let mut reqs = Vec::new();
+        reqs.push(SpawnReq { pid: 1, port: 10, start: 3600 + 10, prompt_s: 30.0 }); // cold
+        reqs.push(SpawnReq { pid: 1, port: 11, start: 3660 + 100, prompt_s: 20.0 }); // cold
+        for k in 0..8u64 { reqs.push(SpawnReq { pid: 1, port: 10, start: 3600 + 1000 + k, prompt_s: 2.0 }); }
+        let c = spawn_churn(&spawns, &reqs, 300);
+        assert_eq!(c.reloads, 7);
+        assert_eq!(c.per_alias, vec![(0, 5), (1, 2)]);
+        assert_eq!(c.per_hour, vec![(3600, 5), (7200, 2)]);
+        assert_eq!(c.worst_hour, Some((3600, 5)));
+        assert_eq!((c.cold_n, c.warm_n, c.matched), (2, 8, 10));
+        assert!((c.excess_s - (50.0 - 2.0 * 2.0)).abs() < 1e-9, "{:?}", c);
+        assert!((c.excess_pct - 100.0 * 46.0 / 66.0).abs() < 1e-9);
+    }
+
+    fn split_data(after_cold_scale: f64, seed: u64) -> (Vec<Spawn>, Vec<SpawnReq>) {
+        let mut rng = Rng(seed);
+        let (mut spawns, mut reqs) = (Vec::new(), Vec::new());
+        for k in 0..40u64 {
+            let ts = k * 3600;
+            let port = 1000 + k;
+            spawns.push(Spawn { ts, pid: 1, port, alias: 0 });
+            let scale = if ts >= 20 * 3600 { after_cold_scale } else { 1.0 };
+            for j in 0..3u64 { reqs.push(SpawnReq { pid: 1, port, start: ts + 10 + j * 60, prompt_s: scale * (20.0 + 4.0 * gauss(&mut rng)).max(1.0) }); }
+            for j in 0..10u64 { reqs.push(SpawnReq { pid: 1, port, start: ts + 900 + j * 120, prompt_s: (2.0 + 0.5 * gauss(&mut rng)).max(0.1) }); }
+        }
+        (spawns, reqs)
+    }
+
+    #[test]
+    fn split_judges_a_fix_that_halves_cold_reads_as_faster() {
+        let (s, r) = split_data(0.5, 3);
+        let v = churn_split(&s, &r, 300, 20 * 3600, 1.16, 1000, 7);
+        assert_eq!(v.verdict, Verdict::Faster, "{:?}", v);
+        assert!(v.delta_pct < -40.0 && v.delta_pct > -65.0, "{:?}", v);
+    }
+
+    #[test]
+    fn split_with_identical_halves_is_never_a_directional_verdict() {
+        // Count directional verdicts over many seeds: a 95% interval must keep them rare.
+        let wrong = (1..60).filter(|&seed| {
+            let (s, r) = split_data(1.0, seed);
+            matches!(churn_split(&s, &r, 300, 20 * 3600, 1.16, 400, seed).verdict, Verdict::Faster | Verdict::Slower)
+        }).count();
+        assert!(wrong <= 6, "{} of 59 identical splits got a directional verdict", wrong);
+    }
+
+    #[test]
+    fn split_without_enough_rows_is_insufficient() {
+        let (s, r) = split_data(0.5, 4);
+        let v = churn_split(&s, &r, 300, 10, 1.16, 200, 1); // nothing before the split
+        assert_eq!(v.verdict, Verdict::Insufficient);
+    }
+
+    fn stream(rng: &mut Rng, n: usize, level: f64, sd: f64) -> Vec<(f64, f64)> {
+        (0..n).map(|_| { let ctx = rng.below(100) as f64; (ctx, level * (1.0 + sd * gauss(rng)) + 0.05 * ctx) }).collect()
+    }
+
+    #[test]
+    fn watch_aa_false_verdict_rate_stays_under_five_percent() {
+        // No change: same distribution before and after. Re-checked after every request.
+        let runs = 400;
+        let mut wrong = 0;
+        for seed in 1..=runs {
+            let mut rng = Rng(seed * 7919);
+            let reference = stream(&mut rng, 200, 10.0, 0.2);
+            let new = stream(&mut rng, 600, 10.0, 0.2);
+            let st = watch(&reference, &new, 1.16, 0.05);
+            if matches!(st.verdict, Verdict::Faster | Verdict::Slower) { wrong += 1; }
+        }
+        let rate = wrong as f64 / runs as f64;
+        eprintln!("A/A false-verdict rate {:.4} ({} of {} runs, 600 requests each, checked after every request)", rate, wrong, runs);
+        assert!(rate <= 0.05, "A/A false-verdict rate {:.3}", rate);
+    }
+
+    #[test]
+    fn watch_detects_a_real_regression_and_a_real_speedup_early() {
+        let (mut slow_hits, mut fast_hits, mut slow_n) = (0, 0, 0usize);
+        for seed in 1..=50u64 {
+            let mut rng = Rng(seed * 104729);
+            let reference = stream(&mut rng, 200, 10.0, 0.2);
+            let slower = stream(&mut rng, 600, 11.5, 0.2);
+            let faster = stream(&mut rng, 600, 8.5, 0.2);
+            let s = watch(&reference, &slower, 1.16, 0.05);
+            if s.verdict == Verdict::Slower { slow_hits += 1; slow_n += s.decided_at.unwrap() + 1; }
+            if watch(&reference, &faster, 1.16, 0.05).verdict == Verdict::Faster { fast_hits += 1; }
+        }
+        eprintln!("power at a 15% shift: slower {}/50, faster {}/50, mean requests to a slower verdict {}", slow_hits, fast_hits, slow_n / slow_hits.max(1));
+        assert!(slow_hits >= 45 && fast_hits >= 45, "slower {} faster {}", slow_hits, fast_hits);
+        assert!(slow_n / slow_hits < 300, "mean requests to a verdict {}", slow_n / slow_hits);
+    }
+
+    #[test]
+    fn watch_can_show_same_only_when_the_reference_is_tight() {
+        let mut rng = Rng(11);
+        let tight_ref = stream(&mut rng, 4000, 10.0, 0.02);
+        let tight_new = stream(&mut rng, 4000, 10.0, 0.02);
+        let st = watch(&tight_ref, &tight_new, 1.16, 0.05);
+        assert!(st.same_reachable);
+        assert_eq!(st.verdict, Verdict::Same, "{:?}", st);
+        let noisy_ref = stream(&mut rng, 200, 10.0, 0.2);
+        let st2 = watch(&noisy_ref, &stream(&mut rng, 300, 10.0, 0.2), 1.16, 0.05);
+        assert!(!st2.same_reachable);
+        assert_ne!(st2.verdict, Verdict::Same);
+    }
+
+    #[test]
+    fn watch_needs_a_reference() {
+        let mut rng = Rng(2);
+        let st = watch(&stream(&mut rng, 5, 10.0, 0.2), &stream(&mut rng, 50, 10.0, 0.2), 1.16, 0.05);
+        assert_eq!(st.verdict, Verdict::Insufficient);
     }
 }

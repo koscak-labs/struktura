@@ -4758,6 +4758,9 @@ fn cmd_pulse(args: &[String]) {
     let mut by_child = false;
     let mut want_model: Option<String> = None;
     let mut churn_window = 300u64;
+    let mut spawns_path: Option<String> = None;
+    let mut split_ts: Option<u64> = None;
+    let (mut watch_mode, mut watch_once, mut interval, mut max_wait, mut alpha) = (false, false, 60u64, 86400u64, 0.05f64);
     let mut i = 3;
     while i < args.len() {
         match args[i].as_str() {
@@ -4771,6 +4774,13 @@ fn cmd_pulse(args: &[String]) {
             "--model" => { i += 1; want_model = args.get(i).cloned(); }
             "--by-child" => by_child = true,
             "--churn-window" => { i += 1; churn_window = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(churn_window); }
+            "--spawns" => { i += 1; spawns_path = args.get(i).cloned(); }
+            "--split" => { i += 1; split_ts = args.get(i).and_then(|v| v.parse::<f64>().ok()).map(|v| v as u64); }
+            "--watch" => watch_mode = true,
+            "--watch-once" => { watch_mode = true; watch_once = true; }
+            "--interval" => { i += 1; interval = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(interval); }
+            "--max-wait" => { i += 1; max_wait = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(max_wait); }
+            "--alpha" => { i += 1; alpha = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(alpha); }
             "--metric" => { i += 1; match args.get(i).map(|s| s.as_str()) { Some("token") => per_step = false, Some("step") => per_step = true, _ => { eprintln!("--metric token|step"); process::exit(2); } } }
             "--json" => json = true,
             other => { eprintln!("pulse: unknown option {}", other); process::exit(2); }
@@ -4800,9 +4810,58 @@ fn cmd_pulse(args: &[String]) {
         deploys.sort();
         if deploys.is_empty() { eprintln!("pulse: no kind:\"deploy\" rows with a ts in {}", p); process::exit(2); }
     }
+    if watch_mode {
+        // Live deploy gate: the newest ledger deploy versus the one before it, re-checked as rows arrive.
+        if deploys.is_empty() { eprintln!("pulse: --watch needs --deploys LEDGER"); process::exit(2); }
+        let (dep_ts, dep_label) = deploys[deploys.len() - 1].clone();
+        let prev_ts = if deploys.len() >= 2 { deploys[deploys.len() - 2].0 } else { 0 };
+        let solo_rows = |text: &str| -> (Vec<(f64, f64)>, Vec<(f64, f64)>) {
+            let mut before: Vec<(u64, f64, f64)> = Vec::new();
+            let mut after: Vec<(u64, f64, f64)> = Vec::new();
+            for line in text.lines() {
+                let f: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
+                let get = |k: usize| f.get(k).and_then(|v| v.parse::<f64>().ok());
+                if let Some(m) = &want_model { if f.get(model_col).copied().unwrap_or("") != m { continue; } }
+                if let (Some(start), Some(ctx), Some(step), Some(busy), Some(tps)) = (get(cols[5]), get(cols[1]), get(cols[2]), get(cols[3]), get(cols[4])) {
+                    if step <= 0.0 || tps <= 0.0 || busy >= struktura::pulse::BUSY_CUT { continue; }
+                    let s = start as u64;
+                    let row = (s, ctx / 1000.0, if per_step { step } else { 1000.0 / tps });
+                    if s >= dep_ts { after.push(row) } else if s >= prev_ts { before.push(row) }
+                }
+            }
+            before.sort_by_key(|r| r.0);
+            after.sort_by_key(|r| r.0);
+            (before.iter().map(|r| (r.1, r.2)).collect(), after.iter().map(|r| (r.1, r.2)).collect())
+        };
+        let t0 = std::time::Instant::now();
+        loop {
+            let text = match std::fs::read_to_string(&args[2]) { Ok(t) => t, Err(e) => { eprintln!("pulse: {}: {}", args[2], e); process::exit(2); } };
+            let (reference, stream) = solo_rows(&text);
+            let st = struktura::pulse::watch(&reference, &stream, min_effect, alpha);
+            let verdict = match st.verdict {
+                struktura::pulse::Verdict::Inconclusive => "pending",
+                v => v.as_str(),
+            };
+            let num = |x: f64| if x.is_finite() { format!("{:.3}", x) } else { "null".to_string() };
+            println!("{{\"event\":\"watch\",\"deploy\":{},\"label\":\"{}\",\"reference_n\":{},\"n_solo\":{},\"verdict\":\"{}\",\"need_more\":{},\"decided_at\":{},\"ref_median_ms\":{},\"ref_low_ms\":{},\"ref_high_ms\":{},\"same_reachable\":{},\"min_effect_pct\":{},\"alpha\":{},\"elapsed_s\":{}}}",
+                dep_ts, dep_label.replace('"', "'"), reference.len(), st.n, verdict,
+                st.need_more.map(|n| n.to_string()).unwrap_or_else(|| "null".to_string()),
+                st.decided_at.map(|n| (n + 1).to_string()).unwrap_or_else(|| "null".to_string()),
+                num(st.ref_median), num(st.ref_low), num(st.ref_high), st.same_reachable, min_effect, alpha, t0.elapsed().as_secs());
+            match verdict {
+                "faster" | "same" => process::exit(0),
+                "slower" => process::exit(1),
+                _ => {}
+            }
+            if watch_once || t0.elapsed().as_secs() + interval > max_wait { process::exit(3); }
+            std::thread::sleep(std::time::Duration::from_secs(interval));
+        }
+    }
+
     let mut rows = Vec::new();
     let mut starts: Vec<u64> = Vec::new();
     let mut churn_rows: Vec<struktura::pulse::ChurnRow> = Vec::new();
+    let mut spawn_reqs: Vec<struktura::pulse::SpawnReq> = Vec::new();
     let mut child_names: Vec<(u64, String)> = Vec::new();
     let (mut skipped, mut other_model) = (0usize, 0usize);
     for line in text.lines() {
@@ -4819,6 +4878,7 @@ fn cmd_pulse(args: &[String]) {
             child_names.push((s, name.trim().to_string())); } }
         if let (Some(s), Some(t0), Some(pn), Some(pt)) = (seg_id, get(cols[5]), get(pn_col), get(ptps_col)) {
             if pt > 0.0 { churn_rows.push(struktura::pulse::ChurnRow { child: s, start: t0 as u64, prompt_s: pn / pt }); }
+            if let (Some(p), Some(q)) = (pid, port) { if pt > 0.0 { spawn_reqs.push(struktura::pulse::SpawnReq { pid: p, port: q, start: t0 as u64, prompt_s: pn / pt }); } }
         }
         match (seg_id, get(cols[1]), get(cols[2]), get(cols[3]), get(cols[4])) {
             (Some(seg), Some(ctx), Some(step), Some(busy), Some(tps)) if step > 0.0 && tps > 0.0 => {
@@ -4832,6 +4892,26 @@ fn cmd_pulse(args: &[String]) {
     if rows.len() < 2 { eprintln!("pulse: need at least 2 timing rows ({} skipped)", skipped); process::exit(2); }
     let mut labels: Vec<(u64, String)> = Vec::new();
     let ch = struktura::pulse::churn(&churn_rows, churn_window);
+    // Reload churn from the router's spawn stream (prod-pulse.sh spawns.csv: ts,router_pid,alias,port).
+    let mut alias_names: Vec<String> = Vec::new();
+    let mut spawn_view: Option<(struktura::pulse::SpawnChurn, Option<struktura::pulse::ChurnSplit>)> = None;
+    if let Some(p) = &spawns_path {
+        let sp = match std::fs::read_to_string(p) { Ok(t) => t, Err(e) => { eprintln!("pulse: {}: {}", p, e); process::exit(2); } };
+        let mut spawns = Vec::new();
+        for line in sp.lines() {
+            let f: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
+            if f.len() < 4 { continue; }
+            if let (Ok(ts), Ok(pid), Ok(port)) = (f[0].parse::<f64>(), f[1].parse::<u64>(), f[3].parse::<u64>()) {
+                if let Some(m) = &want_model { if f[2] != m { continue; } }
+                let a = match alias_names.iter().position(|n| n == f[2]) { Some(k) => k, None => { alias_names.push(f[2].to_string()); alias_names.len() - 1 } };
+                spawns.push(struktura::pulse::Spawn { ts: ts as u64, pid, port, alias: a });
+            }
+        }
+        spawns.sort_by_key(|s| s.ts);
+        let c = struktura::pulse::spawn_churn(&spawns, &spawn_reqs, churn_window);
+        let s = split_ts.map(|t| struktura::pulse::churn_split(&spawns, &spawn_reqs, churn_window, t, min_effect, boot, seed));
+        spawn_view = Some((c, s));
+    } else if split_ts.is_some() { eprintln!("pulse: --split needs --spawns"); process::exit(2); }
     if !deploys.is_empty() {
         // Segment = the last deploy at or before the request's start; 0 = before the first known deploy.
         let mut idx: Vec<usize> = (0..rows.len()).collect();
@@ -4874,6 +4954,18 @@ fn cmd_pulse(args: &[String]) {
         }
         println!("{{\"event\":\"churn\",\"children\":{},\"span_h\":{},\"window_s\":{},\"cold_n\":{},\"warm_n\":{},\"cold_median_s\":{},\"warm_median_s\":{},\"cold_mean_s\":{},\"warm_mean_s\":{},\"cold_total_s\":{},\"excess_s\":{},\"other_model_rows\":{}}}",
             ch.children, num(ch.span_h), churn_window, ch.cold_n, ch.warm_n, num(ch.cold_median_s), num(ch.warm_median_s), num(ch.cold_mean_s), num(ch.warm_mean_s), num(ch.cold_total_s), num(ch.excess_s), other_model);
+        if let Some((c, s)) = &spawn_view {
+            let aliases: Vec<String> = c.per_alias.iter().map(|(a, n)| format!("\"{}\":{}", alias_names[*a].replace('"', "'"), n)).collect();
+            let hours: Vec<String> = c.per_hour.iter().map(|(h, n)| format!("[{},{}]", h, n)).collect();
+            println!("{{\"event\":\"spawn_churn\",\"reloads\":{},\"span_h\":{},\"reloads_per_h\":{},\"per_alias\":{{{}}},\"per_hour\":[{}],\"worst_hour\":{},\"window_s\":{},\"matched\":{},\"cold_n\":{},\"warm_n\":{},\"cold_mean_s\":{},\"warm_mean_s\":{},\"cold_total_s\":{},\"total_prompt_s\":{},\"excess_s\":{},\"excess_pct\":{}}}",
+                c.reloads, num(c.span_h), num(if c.span_h > 0.0 { c.reloads as f64 / c.span_h } else { f64::NAN }), aliases.join(","), hours.join(","),
+                c.worst_hour.map(|(h, n)| format!("[{},{}]", h, n)).unwrap_or_else(|| "null".to_string()), churn_window, c.matched, c.cold_n, c.warm_n,
+                num(c.cold_mean_s), num(c.warm_mean_s), num(c.cold_total_s), num(c.total_prompt_s), num(c.excess_s), num(c.excess_pct));
+            if let Some(s) = s {
+                println!("{{\"event\":\"churn_split\",\"split_ts\":{},\"before_cold_n\":{},\"after_cold_n\":{},\"before_excess_s\":{},\"after_excess_s\":{},\"delta_pct\":{},\"ci_low\":{},\"ci_high\":{},\"verdict\":\"{}\"}}",
+                    s.split_ts, s.before_cold_n, s.after_cold_n, num(s.before_excess_s), num(s.after_excess_s), num(s.delta_pct), num(s.ci_low), num(s.ci_high), s.verdict.as_str());
+            }
+        }
         println!("{{\"summary\":true,\"metric\":\"{}\",\"rows\":{},\"skipped\":{},\"ms_per_kctx\":{},\"slope_clamped\":{},\"verdicts\":{},\"min_effect_pct\":{},\"segments\":{},\"incidents\":{},\"regressed\":{}}}",
             metric, r.rows, skipped, num(r.slope_ms_per_kctx), r.slope_clamped, verdicts_on, num(min_effect), r.segments.len(), r.incidents.len(), regressed);
     } else {
@@ -4881,6 +4973,21 @@ fn cmd_pulse(args: &[String]) {
         if other_model > 0 { println!("  --model {}: {} rows of other models left out", want_model.as_deref().unwrap_or(""), other_model); }
         if ch.children > 0 { println!("  model churn: {} server children served requests over {:.1} h ({:.1}/h); requests within {} s of a child's first request: {} (prompt read mean {:.2} s vs {:.2} s warm, {:.0} s excess)",
             ch.children, ch.span_h, if ch.span_h > 0.0 { ch.children as f64 / ch.span_h } else { 0.0 }, churn_window, ch.cold_n, ch.cold_mean_s, ch.warm_mean_s, ch.excess_s); }
+        if let Some((c, s)) = &spawn_view {
+            println!("  reloads (spawn stream): {} over {:.1} h = {:.1}/h; per alias: {}", c.reloads, c.span_h,
+                if c.span_h > 0.0 { c.reloads as f64 / c.span_h } else { 0.0 },
+                c.per_alias.iter().map(|(a, n)| format!("{} {}", alias_names[*a], n)).collect::<Vec<_>>().join(", "));
+            if let Some((h, n)) = c.worst_hour { println!("    worst hour: {} reloads in the hour starting {} (unix)", n, h); }
+            println!("    requests within {} s after their child's spawn: {} of {} (prompt read mean {:.2} s vs {:.2} s warm); excess {:.0} s = {:.1}% of all prompt-read time",
+                churn_window, c.cold_n, c.cold_n + c.warm_n, c.cold_mean_s, c.warm_mean_s, c.excess_s, c.excess_pct);
+            if let Some(s) = s {
+                if s.verdict == struktura::pulse::Verdict::Insufficient {
+                    println!("    split at {}: INSUFFICIENT (needs >= {} cold and warm requests on each side, and a positive tax before)", s.split_ts, struktura::pulse::MIN_SPLIT_ROWS);
+                } else {
+                    println!("    split at {}: excess per cold request {:.2} s -> {:.2} s: {:+.1}% [{:+.1}, {:+.1}]  {}", s.split_ts, s.before_excess_s, s.after_excess_s, s.delta_pct, s.ci_low, s.ci_high, s.verdict.as_str().to_uppercase());
+                }
+            }
+        }
         println!("  context cost (fitted inside deploys, solo requests): +{:.3} ms per 1K tokens of context", r.slope_ms_per_kctx);
         if r.slope_clamped { println!("    (the fit came out negative: the traffic mix leaks into it, so no context adjustment is applied)"); }
         println!("  {:>10} {:>5} {:>5} {:>5} {:>9} {:>11} {:>5} {:>8} {:>8} {:>6}", "deploy", "row", "solo", "busy", "solo_ms", "contention", "mlen", "raw_ms", "raw_tps", "ctx_K");
