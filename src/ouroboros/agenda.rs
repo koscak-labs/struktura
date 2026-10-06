@@ -53,17 +53,24 @@ pub fn observed_effect(obs: &Observation, k: &Knob, value: &str) -> Option<(f64,
 pub fn agenda(obs: &Observation, lessons: &Lessons, knobs: &[Knob], cons: &[Constraint]) -> Vec<Item> {
     let band = lessons.band_pct;
     let mut items = Vec::new();
-    // a fragile verdict scored before the latest deploy measured a config that is no longer live:
-    // re-running its job now answers a different question, so it is stale, not a re-measure
-    let last_deploy = obs.lab.deploys.iter().map(|(t, _)| *t).fold(f64::NEG_INFINITY, f64::max);
+    // a fragile verdict scored while a different config was live measured something no longer running:
+    // re-running its job now answers a different question, so it is stale, not a re-measure.
+    // Compared by config, not by time: after a rollback the older verdicts are live again.
+    let live = live_config(obs, f64::INFINITY);
     for f in &lessons.fragile {
         let mut it = Item { kind: Kind::Remeasure, knob: String::new(), value: String::new(),
             pred: Some((f.pred.clone(), f.name.clone())), score: 2.0 - (f.margin_pct.abs() / band).min(1.0),
             observed_effect_pct: None, samples: 1,
             why: format!("{} by {:+.2}% inside the {:.2}% single-run band: a re-run could flip it", f.verdict, f.margin_pct, band) };
-        if f.ts < last_deploy {
+        if let Some((bin, r)) = rolled_back_gate(obs, &f.pred, f.ts) {
             it.kind = Kind::Settled; it.score = 0.05;
-            it.why = format!("STALE: {} by {:+.2}% was measured before the deploy at {:.0}; its config is no longer live, so a re-run answers an old question", f.verdict, f.margin_pct, last_deploy);
+            it.why = format!("QUARANTINED: gate for {}, which was rolled back at {:.0}; its verdicts are not shippable until a new gate passes", bin, r);
+        } else if let (Some(now), Some(then)) = (live, live_config(obs, f.ts)) {
+            if !same_config(now, then) {
+                it.kind = Kind::Settled; it.score = 0.05;
+                it.why = format!("STALE: {} by {:+.2}% was measured on {} (deployed {:.0}), not the live {}; a re-run answers an old question",
+                    f.verdict, f.margin_pct, then.1, then.0, now.1);
+            }
         }
         items.push(it);
     }
@@ -126,6 +133,29 @@ pub fn agenda(obs: &Observation, lessons: &Lessons, knobs: &[Knob], cons: &[Cons
     items.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
         .then(a.knob.cmp(&b.knob)).then(a.value.cmp(&b.value)).then(a.pred.cmp(&b.pred)));
     items
+}
+
+type Config = (f64, String, String, Option<String>);
+
+/// The deploy row live at `ts` (the latest one at or before it); None before the first deploy.
+fn live_config(obs: &Observation, ts: f64) -> Option<&Config> {
+    obs.lab.configs.iter().filter(|c| c.0 <= ts).max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+}
+
+/// Same binary and env; flags compared only when both rows record them (older deploy rows do not).
+fn same_config(a: &Config, b: &Config) -> bool {
+    a.1 == b.1 && a.2 == b.2 && match (&a.3, &b.3) { (Some(x), Some(y)) => x == y, _ => true }
+}
+
+/// The gate `pred` tested a candidate binary that was later deployed and rolled back (after `ts`):
+/// (binary, rollback ts). Production refuted the gate, so a re-run of it measures a known-bad candidate.
+fn rolled_back_gate<'a>(obs: &'a Observation, pred: &str, ts: f64) -> Option<(&'a str, f64)> {
+    for &r in &obs.lab.rollbacks {
+        if r <= ts { continue; }
+        let Some(bad) = live_config(obs, r - 1e-6) else { continue };
+        if obs.lab.gates.iter().any(|(g, b)| g == pred && *b == bad.1) { return Some((bad.1.as_str(), r)); }
+    }
+    None
 }
 
 /// Tokens of a prediction name ("draft5-beats-draft7-code_tps" -> draft5 beats draft7 code tps).
@@ -262,20 +292,49 @@ mod tests {
     }
 
     #[test]
-    fn a_deploy_makes_older_fragile_verdicts_stale() {
+    fn fragile_verdicts_are_stale_only_when_measured_on_another_config() {
         let frag = |ts: u32| format!("{{\"kind\":\"prediction\",\"ts\":{},\"pred\":\"130.tsv\",\"name\":\"gqa2-5pct-at-64K\",\"value\":\"1658 vs 1568 (5.74%, need >% 5%)\",\"op\":\">%\",\"threshold\":\"arm B\",\"verdict\":\"pass\"}}\n", ts);
-        let deploy = "{\"kind\":\"deploy\",\"ts\":50,\"binary\":\"llama-new\"}\n";
-        // scored before the deploy: the config it measured is gone
-        let (o, k) = setup(&(frag(1) + deploy));
-        let a = agenda(&o, &learn(&o), &k, &constraints(&[], &[]));
+        let dep = |ts: u32, bin: &str, flags: Option<&str>| format!("{{\"kind\":\"deploy\",\"ts\":{},\"binary\":\"{}\",\"env\":\"X=1\"{}}}\n", ts, bin,
+            flags.map(|f| format!(",\"flags\":\"{}\"", f)).unwrap_or_default());
+        let top = |l: String| { let (o, k) = setup(&l); agenda(&o, &learn(&o), &k, &constraints(&[], &[])) };
+        // measured on old, then new is deployed: stale
+        let a = top(dep(0, "old", None) + &frag(1) + &dep(50, "new", Some("c=393216")));
         let it = a.iter().find(|i| i.pred.is_some()).unwrap();
         assert_eq!(it.kind, Kind::Settled, "{}", it.why);
-        assert!(it.why.starts_with("STALE") && it.score < 0.1);
+        assert!(it.why.starts_with("STALE") && it.why.contains("measured on old") && it.score < 0.1, "{}", it.why);
         assert!(a[0].kind != Kind::Remeasure, "a stale re-measure no longer leads the agenda");
-        // scored after the deploy: still a live re-measure
-        let (o, k) = setup(&(deploy.to_string() + &frag(60)));
-        let a = agenda(&o, &learn(&o), &k, &constraints(&[], &[]));
+        // ... then rolled back to old: the verdict is about the live config again
+        let a = top(dep(0, "old", None) + &frag(1) + &dep(50, "new", Some("c=393216")) + &dep(70, "old", Some("c=262144")));
+        assert_eq!(a[0].kind, Kind::Remeasure, "rollback revives it: {}", a[0].why);
+        // measured on new, then rolled back: stale
+        let a = top(dep(0, "old", None) + &dep(50, "new", Some("c=393216")) + &frag(60) + &dep(70, "old", Some("c=262144")));
+        assert!(a.iter().find(|i| i.pred.is_some()).unwrap().why.contains("measured on new"));
+        // same binary+env, flags changed (both recorded): stale
+        let a = top(dep(0, "old", Some("ub=256")) + &frag(1) + &dep(50, "old", Some("ub=512")));
+        assert_eq!(a.iter().find(|i| i.pred.is_some()).unwrap().kind, Kind::Settled);
+        // no deploy before the verdict: config unknown, never called stale
+        let a = top(frag(1) + &dep(50, "new", None));
         assert_eq!(a[0].kind, Kind::Remeasure);
+    }
+
+    #[test]
+    fn a_gate_for_a_rolled_back_candidate_is_quarantined() {
+        let frag = format!("{{\"kind\":\"prediction\",\"ts\":10,\"pred\":\"452.tsv\",\"name\":\"cand-decode-pooled\",\"value\":\"1658 vs 1568 (5.74%, need >% 5%)\",\"op\":\">%\",\"threshold\":\"arm B\",\"verdict\":\"pass\"}}\n");
+        let base = "{\"kind\":\"deploy\",\"ts\":0,\"binary\":\"llama.cpp-old\",\"env\":\"X=1\"}\n".to_string();
+        let link = "{\"kind\":\"daemon\",\"ts\":11,\"phase\":\"ship\",\"outcome\":\"gate-link\",\"detail\":\"gate=452.tsv | manual deploy of llama.cpp-new\"}\n";
+        let new = "{\"kind\":\"deploy\",\"ts\":50,\"binary\":\"llama.cpp-new\",\"env\":\"X=1\"}\n";
+        let back = "{\"kind\":\"deploy\",\"ts\":70,\"binary\":\"llama.cpp-old\",\"env\":\"X=1\",\"rollback\":true}\n";
+        let top = |l: String| { let (o, k) = setup(&l); agenda(&o, &learn(&o), &k, &constraints(&[], &[])) };
+        let gate_item = |a: &[Item]| a.iter().find(|i| i.pred.is_some()).unwrap().clone();
+        // gate linked to llama.cpp-new, deployed, rolled back: quarantined even though old is live again
+        let it = gate_item(&top(base.clone() + &frag + link + new + back));
+        assert_eq!(it.kind, Kind::Settled);
+        assert!(it.why.starts_with("QUARANTINED: gate for llama.cpp-new"), "{}", it.why);
+        // no rollback yet: an ordinary re-measure
+        assert_eq!(gate_item(&top(base.clone() + &frag + link + new)).kind, Kind::Settled, "stale on the new config");
+        assert_eq!(gate_item(&top(base.clone() + &frag + link)).kind, Kind::Remeasure);
+        // an unlinked gate is not quarantined by a rollback (falls back to the config rule: old is live)
+        assert_eq!(gate_item(&top(base + &frag + new + back)).kind, Kind::Remeasure);
     }
 
     #[test]

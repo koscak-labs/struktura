@@ -172,6 +172,12 @@ pub struct LabReport {
     pub job_min_in_windows: f64,
     pub cal_min: f64,
     pub deploys: Vec<(f64, String)>,
+    /// (ts, binary, env, flags) of every deploy row, rollbacks included: which config was live when.
+    pub configs: Vec<(f64, String, String, Option<String>)>,
+    /// ts of deploy rows marked `rollback: true` (the deploy before each one was rolled back).
+    pub rollbacks: Vec<f64>,
+    /// (gate pred file, candidate binary) from autogate/ship daemon rows and deploy rows with a `gate` field.
+    pub gates: Vec<(String, String)>,
     pub constraints: Vec<String>,
 }
 
@@ -202,6 +208,17 @@ pub fn margin(op: &str, value: &str, threshold: &str) -> Option<f64> {
         "==" => Some(-100.0 * (v - t).abs() / scale),
         _ => None,
     }
+}
+
+/// A gate -> candidate-binary link in a daemon detail: `queued 402 rs2 llama.cpp-…` (autogate) or
+/// `gate=401.tsv | … llama.cpp-… …` (ship / link rows). The binary is the first `llama.cpp-` token.
+pub fn gate_link(detail: &str) -> Option<(String, String)> {
+    let bin = detail.split(|c: char| c.is_whitespace() || c == '/' || c == ',').find(|t| t.starts_with("llama.cpp-"))?;
+    let w: Vec<&str> = detail.split_whitespace().collect();
+    let gate = if let Some(g) = w.iter().find_map(|t| t.strip_prefix("gate=")) { g.to_string() }
+        else if w.first() == Some(&"queued") && w.get(1).map_or(false, |n| n.chars().all(|c| c.is_ascii_digit())) { format!("{}.tsv", w[1]) }
+        else { return None };
+    Some((gate, bin.to_string()))
 }
 
 pub fn analyze(ledger: &str) -> LabReport {
@@ -249,7 +266,11 @@ pub fn analyze(ledger: &str) -> LabReport {
                 let mut label = j.str("binary").unwrap_or("deploy").to_string();
                 if let Some(c) = j.num("chunk") { label.push_str(&format!(" chunk={}", c)); }
                 r.deploys.push((j.num("ts").unwrap_or(0.0), label));
+                r.configs.push((j.num("ts").unwrap_or(0.0), j.str("binary").unwrap_or("").to_string(), j.str("env").unwrap_or("").to_string(), j.str("flags").map(|s| s.to_string())));
+                if matches!(j.get("rollback"), Some(Json::Bool(true))) { r.rollbacks.push(j.num("ts").unwrap_or(0.0)); }
+                if let (Some(g), Some(b)) = (j.str("gate"), j.str("binary")) { r.gates.push((g.to_string(), b.to_string())); }
             }
+            "daemon" => { if let Some(l) = j.str("detail").and_then(gate_link) { r.gates.push(l); } }
             "constraint" => {
                 r.constraints.push(format!("{} {} {}", j.str("knob").unwrap_or("?"), j.str("op").unwrap_or("?"),
                     j.get("value").map(|v| match v { Json::Num(x) => format!("{}", x), Json::Str(s) => s.clone(), _ => "?".into() }).unwrap_or_default()));
@@ -316,6 +337,18 @@ pub fn analyze(ledger: &str) -> LabReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gate_links_from_autogate_ship_and_deploy_rows() {
+        assert_eq!(gate_link("queued 402 rs2 llama.cpp-alien2-92844d8"), Some(("402.tsv".into(), "llama.cpp-alien2-92844d8".into())));
+        assert_eq!(gate_link("gate=401.tsv | ~/.oura/deploy-alien.sh llama.cpp-alien2-5a3cf82 64 A=1 | DEPLOYED: /home/phil/alien-bin/llama.cpp-alien2-5a3cf82"),
+            Some(("401.tsv".into(), "llama.cpp-alien2-5a3cf82".into())));
+        assert_eq!(gate_link("595s queue=2 shippable=0"), None);
+        assert_eq!(gate_link("queued draft4 llama.cpp-x"), None, "a non-numeric job is not a gate id");
+        let r = analyze("{\"kind\":\"deploy\",\"ts\":5,\"binary\":\"llama.cpp-b\",\"gate\":\"452.tsv\"}\n{\"kind\":\"deploy\",\"ts\":9,\"binary\":\"llama.cpp-a\",\"rollback\":true}\n{\"kind\":\"daemon\",\"ts\":3,\"phase\":\"autogate\",\"outcome\":\"queued\",\"detail\":\"queued 7 x llama.cpp-c\"}\n");
+        assert_eq!(r.rollbacks, std::vec![9.0]);
+        assert_eq!(r.gates, std::vec![("452.tsv".to_string(), "llama.cpp-b".to_string()), ("7.tsv".to_string(), "llama.cpp-c".to_string())]);
+    }
 
     #[test]
     fn json_parses_nested_and_escapes() {
