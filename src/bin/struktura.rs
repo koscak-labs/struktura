@@ -4748,6 +4748,20 @@ fn cmd_pulse(args: &[String]) {
         println!("  consecutive deploys get a bootstrap 95% CI verdict, stalls are flagged.");
         println!("  --min-effect  smallest believable effect, percent (default 1.16 = 2x lab calibration CV)");
         println!("  --cols seg,ctx,step,busy,tps   0-based columns (default 1,4,11,12,8)");
+        println!("  --metric token|step  judge ms per generated token (default; fair across drafter changes) or ms per decode step");
+        println!("  --archive FILE  merge the (rolling) input into an append-only, deduplicated FILE and analyze FILE");
+        println!("  --ref-state FILE  freeze the --watch reference (per-session first solo requests) in FILE across --watch-once runs");
+        println!("  --deploy-lead S  requests starting up to S s before a deploy row belong to it (its verify request; default 15)");
+        println!("  --deploys LEDGER  key deploys on the ledger's kind:\"deploy\" rows (a pid changes on every model reload);");
+        println!("     without it, segments are server children (pid:port) and no verdicts are issued");
+        println!("  --by-child  issue verdicts between server children anyway");
+        println!("  --model NAME  judge one model alias only (prod-pulse col 14)");
+        println!("  --churn-window S  seconds after a spawn / first request counted as cold (default 300)");
+        println!("  --spawns FILE  prod-pulse spawns.csv (ts,router_pid,alias,port): every reload, per alias / hour, cold-request tax");
+        println!("  --split TS  with --spawns: reload tax before vs after TS (e.g. a slot save/restore fix), bootstrap CI verdict");
+        println!("  --watch | --watch-once  live gate: newest --deploys row vs the one before, anytime-valid e-process");
+        println!("     (safe to re-check after every request); one JSON line per check; exit 0 faster/same, 1 slower, 3 pending/timeout");
+        println!("  --interval S (60)  --max-wait S (86400)  --alpha A (0.05)   for --watch");
         println!("  Exit: 0 = no regression, 1 = latest judged deploy is slower, 2 = error");
         process::exit(if args.len() < 3 { 2 } else { 0 });
     }
@@ -4755,11 +4769,19 @@ fn cmd_pulse(args: &[String]) {
     // seg, ctx, step_ms, busy, tps, start_ts, mlen (prod-pulse.sh req.csv)
     let mut cols = [1usize, 4, 11, 12, 8, 3, 10];
     let mut deploys_path: Option<String> = None;
+    // A deploy's ledger row is written after its verify request was served, so requests that
+    // start up to this many seconds before the row belong to the new config.
+    let mut deploy_lead = 15u64;
+    let mut ref_state: Option<String> = None;
+    let mut archive: Option<String> = None;
     // model alias and server child port (prod-pulse.sh cols 14, 15), prompt tokens and prompt t/s (cols 6, 7)
     let (model_col, port_col, pn_col, ptps_col) = (13usize, 14usize, 5usize, 6usize);
     let mut by_child = false;
     let mut want_model: Option<String> = None;
     let mut churn_window = 300u64;
+    let mut spawns_path: Option<String> = None;
+    let mut split_ts: Option<u64> = None;
+    let (mut watch_mode, mut watch_once, mut interval, mut max_wait, mut alpha) = (false, false, 60u64, 86400u64, 0.05f64);
     let mut i = 3;
     while i < args.len() {
         match args[i].as_str() {
@@ -4770,16 +4792,26 @@ fn cmd_pulse(args: &[String]) {
                 let p: Vec<usize> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
                 if p.len() == 5 || p.len() == 7 { cols[..p.len()].copy_from_slice(&p); } else { eprintln!("--cols needs 5 or 7 indices"); process::exit(2); } } }
             "--deploys" => { i += 1; deploys_path = args.get(i).cloned(); }
+            "--deploy-lead" => { i += 1; deploy_lead = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(deploy_lead); }
+            "--ref-state" => { i += 1; ref_state = args.get(i).cloned(); }
+            "--archive" => { i += 1; archive = args.get(i).cloned(); }
             "--model" => { i += 1; want_model = args.get(i).cloned(); }
             "--by-child" => by_child = true,
             "--churn-window" => { i += 1; churn_window = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(churn_window); }
+            "--spawns" => { i += 1; spawns_path = args.get(i).cloned(); }
+            "--split" => { i += 1; split_ts = args.get(i).and_then(|v| v.parse::<f64>().ok()).map(|v| v as u64); }
+            "--watch" => watch_mode = true,
+            "--watch-once" => { watch_mode = true; watch_once = true; }
+            "--interval" => { i += 1; interval = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(interval); }
+            "--max-wait" => { i += 1; max_wait = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(max_wait); }
+            "--alpha" => { i += 1; alpha = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(alpha); }
             "--metric" => { i += 1; match args.get(i).map(|s| s.as_str()) { Some("token") => per_step = false, Some("step") => per_step = true, _ => { eprintln!("--metric token|step"); process::exit(2); } } }
             "--json" => json = true,
             other => { eprintln!("pulse: unknown option {}", other); process::exit(2); }
         }
         i += 1;
     }
-    let text = match std::fs::read_to_string(&args[2]) { Ok(t) => t, Err(e) => { eprintln!("pulse: {}: {}", args[2], e); process::exit(2); } };
+    let text = pulse_load(&args[2], archive.as_deref());
     // Deploy boundaries from a lab ledger: JSON lines with "kind":"deploy" and a unix "ts".
     // A server process id changes on every model reload, so it is not a deploy; the ledger is.
     let mut deploys: Vec<(u64, String)> = Vec::new();
@@ -4802,10 +4834,86 @@ fn cmd_pulse(args: &[String]) {
         deploys.sort();
         if deploys.is_empty() { eprintln!("pulse: no kind:\"deploy\" rows with a ts in {}", p); process::exit(2); }
     }
+    if watch_mode {
+        // Live deploy gate: the newest ledger deploy versus the one before it, re-checked as rows arrive.
+        if deploys.is_empty() { eprintln!("pulse: --watch needs --deploys LEDGER"); process::exit(2); }
+        let (dep_ts, dep_label) = deploys[deploys.len() - 1].clone();
+        let prev_ts = if deploys.len() >= 2 { deploys[deploys.len() - 2].0 } else { 0 };
+        // Requests of one conversation are not independent, so the gate bets once per SESSION:
+        // its first solo request, fixed the moment it is seen (never revised as the session grows).
+        let session_firsts = |text: &str| -> (Vec<(f64, f64)>, Vec<(f64, f64)>) {
+            // (start, child, slot, ctx_k, ms, solo)
+            let mut all: Vec<(u64, u64, u64, f64, f64, bool)> = Vec::new();
+            for line in text.lines() {
+                let f: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
+                let get = |k: usize| f.get(k).and_then(|v| v.parse::<f64>().ok());
+                if let Some(m) = &want_model { if f.get(model_col).copied().unwrap_or("") != m { continue; } }
+                let pid = f.get(cols[0]).and_then(|v| v.parse::<u64>().ok());
+                let port = f.get(port_col).and_then(|v| v.parse::<u64>().ok()).filter(|p| *p < 65536);
+                let child = match (pid, port) { (Some(p), Some(q)) => Some((p << 16) | q), (p, _) => p };
+                if let (Some(c), Some(start), Some(ctx), Some(step), Some(busy), Some(tps)) = (child, get(cols[5]), get(cols[1]), get(cols[2]), get(cols[3]), get(cols[4])) {
+                    if step <= 0.0 || tps <= 0.0 { continue; }
+                    all.push((start as u64, c, get(2).unwrap_or(0.0) as u64, ctx / 1000.0, if per_step { step } else { 1000.0 / tps }, busy < struktura::pulse::BUSY_CUT));
+                }
+            }
+            let keys: Vec<(u64, u64, u64, f64)> = all.iter().map(|r| (r.1, r.2, r.0, r.3)).collect();
+            let sess = struktura::pulse::assign_sessions(&keys);
+            let mut idx: Vec<usize> = (0..all.len()).collect();
+            idx.sort_by_key(|&i| all[i].0);
+            let mut seen = std::collections::HashSet::new();
+            let (mut before, mut after) = (Vec::new(), Vec::new());
+            for i in idx {
+                let r = all[i];
+                if !r.5 || !seen.insert(sess[i]) { continue; }
+                if r.0 + deploy_lead >= dep_ts { after.push((r.3, r.4)) } else if r.0 + deploy_lead >= prev_ts { before.push((r.3, r.4)) }
+            }
+            (before, after)
+        };
+        // The reference is frozen at the first look (req.csv is a rolling window: re-deriving it on
+        // every check would move the thresholds between looks). --ref-state persists it for cron.
+        let mut frozen: Option<Vec<(f64, f64)>> = ref_state.as_ref().and_then(|p| std::fs::read_to_string(p).ok()).map(|t| t.lines()
+            .filter_map(|l| { let (a, b) = l.split_once(',')?; Some((a.trim().parse().ok()?, b.trim().parse().ok()?)) }).collect());
+        let t0 = std::time::Instant::now();
+        loop {
+            let text = pulse_load(&args[2], archive.as_deref());
+            let (reference_now, stream) = session_firsts(&text);
+            if frozen.is_none() && reference_now.len() >= struktura::pulse::MIN_SEG_ROWS {
+                if let Some(p) = &ref_state {
+                    let body: String = reference_now.iter().map(|(c, m)| format!("{},{}\n", c, m)).collect();
+                    let tmp = format!("{}.tmp", p);
+                    if std::fs::write(&tmp, body).and_then(|_| std::fs::rename(&tmp, p)).is_err() { eprintln!("pulse: cannot write --ref-state {}", p); process::exit(2); }
+                }
+                frozen = Some(reference_now.clone());
+            }
+            let reference = frozen.clone().unwrap_or(reference_now);
+            let st = struktura::pulse::watch(&reference, &stream, min_effect, alpha);
+            let verdict = match st.verdict {
+                struktura::pulse::Verdict::Inconclusive => "pending",
+                v => v.as_str(),
+            };
+            let num = |x: f64| if x.is_finite() { format!("{:.3}", x) } else { "null".to_string() };
+            println!("{{\"event\":\"watch\",\"deploy\":{},\"label\":\"{}\",\"unit\":\"sessions\",\"reference_n\":{},\"n_solo\":{},\"verdict\":\"{}\",\"need_more\":{},\"decided_at\":{},\"ref_median_ms\":{},\"ref_low_ms\":{},\"ref_high_ms\":{},\"same_reachable\":{},\"min_effect_pct\":{},\"alpha\":{},\"elapsed_s\":{}}}",
+                dep_ts, dep_label.replace('"', "'"), reference.len(), st.n, verdict,
+                st.need_more.map(|n| n.to_string()).unwrap_or_else(|| "null".to_string()),
+                st.decided_at.map(|n| (n + 1).to_string()).unwrap_or_else(|| "null".to_string()),
+                num(st.ref_median), num(st.ref_low), num(st.ref_high), st.same_reachable, min_effect, alpha, t0.elapsed().as_secs());
+            match verdict {
+                "faster" | "same" => process::exit(0),
+                "slower" => process::exit(1),
+                _ => {}
+            }
+            if watch_once || t0.elapsed().as_secs() + interval > max_wait { process::exit(3); }
+            std::thread::sleep(std::time::Duration::from_secs(interval));
+        }
+    }
+
     let mut rows = Vec::new();
     let mut starts: Vec<u64> = Vec::new();
     let mut churn_rows: Vec<struktura::pulse::ChurnRow> = Vec::new();
+    let mut spawn_reqs: Vec<struktura::pulse::SpawnReq> = Vec::new();
     let mut child_names: Vec<(u64, String)> = Vec::new();
+    let mut sess_keys: Vec<(u64, u64, u64, f64)> = Vec::new();
+    let slot_col = 2usize;
     let (mut skipped, mut other_model) = (0usize, 0usize);
     for line in text.lines() {
         let f: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
@@ -4821,26 +4929,50 @@ fn cmd_pulse(args: &[String]) {
             child_names.push((s, name.trim().to_string())); } }
         if let (Some(s), Some(t0), Some(pn), Some(pt)) = (seg_id, get(cols[5]), get(pn_col), get(ptps_col)) {
             if pt > 0.0 { churn_rows.push(struktura::pulse::ChurnRow { child: s, start: t0 as u64, prompt_s: pn / pt }); }
+            if let (Some(p), Some(q)) = (pid, port) { if pt > 0.0 { spawn_reqs.push(struktura::pulse::SpawnReq { pid: p, port: q, start: t0 as u64, prompt_s: pn / pt }); } }
         }
         match (seg_id, get(cols[1]), get(cols[2]), get(cols[3]), get(cols[4])) {
             (Some(seg), Some(ctx), Some(step), Some(busy), Some(tps)) if step > 0.0 && tps > 0.0 => {
                 rows.push(Row { seg, ctx_k: ctx / 1000.0, busy, ms: if per_step { step } else { 1000.0 / tps }, tps,
-                    mlen: get(cols[6]).unwrap_or(f64::NAN) });
+                    mlen: get(cols[6]).unwrap_or(f64::NAN), session: 0 });
                 starts.push(get(cols[5]).unwrap_or(0.0) as u64);
+                sess_keys.push((seg, get(slot_col).unwrap_or(0.0) as u64, get(cols[5]).unwrap_or(0.0) as u64, ctx / 1000.0));
             }
             _ => skipped += 1,
         }
     }
     if rows.len() < 2 { eprintln!("pulse: need at least 2 timing rows ({} skipped)", skipped); process::exit(2); }
+    // Requests of one conversation are not independent: tag each with its session (child, slot, growing context).
+    for (r, s) in rows.iter_mut().zip(struktura::pulse::assign_sessions(&sess_keys)) { r.session = s; }
     let mut labels: Vec<(u64, String)> = Vec::new();
     let ch = struktura::pulse::churn(&churn_rows, churn_window);
+    // Reload churn from the router's spawn stream (prod-pulse.sh spawns.csv: ts,router_pid,alias,port).
+    let mut alias_names: Vec<String> = Vec::new();
+    let mut spawn_view: Option<(struktura::pulse::SpawnChurn, Option<struktura::pulse::ChurnSplit>)> = None;
+    if let Some(p) = &spawns_path {
+        let sp = match std::fs::read_to_string(p) { Ok(t) => t, Err(e) => { eprintln!("pulse: {}: {}", p, e); process::exit(2); } };
+        let mut spawns = Vec::new();
+        for line in sp.lines() {
+            let f: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
+            if f.len() < 4 { continue; }
+            if let (Ok(ts), Ok(pid), Ok(port)) = (f[0].parse::<f64>(), f[1].parse::<u64>(), f[3].parse::<u64>()) {
+                if let Some(m) = &want_model { if f[2] != m { continue; } }
+                let a = match alias_names.iter().position(|n| n == f[2]) { Some(k) => k, None => { alias_names.push(f[2].to_string()); alias_names.len() - 1 } };
+                spawns.push(struktura::pulse::Spawn { ts: ts as u64, pid, port, alias: a });
+            }
+        }
+        spawns.sort_by_key(|s| s.ts);
+        let c = struktura::pulse::spawn_churn(&spawns, &spawn_reqs, churn_window);
+        let s = split_ts.map(|t| struktura::pulse::churn_split(&spawns, &spawn_reqs, churn_window, t, min_effect, boot, seed));
+        spawn_view = Some((c, s));
+    } else if split_ts.is_some() { eprintln!("pulse: --split needs --spawns"); process::exit(2); }
     if !deploys.is_empty() {
         // Segment = the last deploy at or before the request's start; 0 = before the first known deploy.
         let mut idx: Vec<usize> = (0..rows.len()).collect();
         idx.sort_by_key(|&k| starts[k]);
         rows = idx.iter().map(|&k| {
             let mut r = rows[k];
-            r.seg = deploys.iter().rev().find(|(ts, _)| *ts <= starts[k]).map(|(ts, _)| *ts).unwrap_or(0);
+            r.seg = deploys.iter().rev().find(|(ts, _)| *ts <= starts[k] + deploy_lead).map(|(ts, _)| *ts).unwrap_or(0);
             r
         }).collect();
         labels.push((0, "before first ledger deploy".to_string()));
@@ -4863,8 +4995,8 @@ fn cmd_pulse(args: &[String]) {
     let short = |seg: u64| if deploys.is_empty() && seg > 0xFFFF { format!("{}:{}", seg >> 16, seg & 0xFFFF) } else { seg.to_string() };
     if json {
         for s in &r.segments {
-            println!("{{\"event\":\"segment\",\"seg\":{},\"first_row\":{},\"n\":{},\"solo_n\":{},\"busy_n\":{},\"level_ms\":{},\"contention_pct\":{},\"solo_mlen\":{},\"label\":\"{}\",\"median_ms\":{},\"median_tps\":{},\"median_ctx_k\":{},\"busy_share\":{}}}",
-                s.seg, s.first_row + 1, s.n, s.solo_n, s.busy_n, num(s.level_ms), num(s.contention_pct), num(s.solo_mlen), label_of(s.seg), num(s.median_ms), num(s.median_tps), num(s.median_ctx_k), num(s.busy_share));
+            println!("{{\"event\":\"segment\",\"seg\":{},\"first_row\":{},\"n\":{},\"solo_n\":{},\"busy_n\":{},\"solo_sessions\":{},\"busy_sessions\":{},\"level_ms\":{},\"contention_pct\":{},\"solo_mlen\":{},\"label\":\"{}\",\"median_ms\":{},\"median_tps\":{},\"median_ctx_k\":{},\"busy_share\":{}}}",
+                s.seg, s.first_row + 1, s.n, s.solo_n, s.busy_n, s.solo_sessions, s.busy_sessions, num(s.level_ms), num(s.contention_pct), num(s.solo_mlen), label_of(s.seg), num(s.median_ms), num(s.median_tps), num(s.median_ctx_k), num(s.busy_share));
         }
         for c in &r.comparisons {
             println!("{{\"event\":\"deploy\",\"kind\":\"{}\",\"from\":{},\"to\":{},\"delta\":{},\"ci_low\":{},\"ci_high\":{},\"verdict\":\"{}\"}}",
@@ -4876,6 +5008,18 @@ fn cmd_pulse(args: &[String]) {
         }
         println!("{{\"event\":\"churn\",\"children\":{},\"span_h\":{},\"window_s\":{},\"cold_n\":{},\"warm_n\":{},\"cold_median_s\":{},\"warm_median_s\":{},\"cold_mean_s\":{},\"warm_mean_s\":{},\"cold_total_s\":{},\"excess_s\":{},\"other_model_rows\":{}}}",
             ch.children, num(ch.span_h), churn_window, ch.cold_n, ch.warm_n, num(ch.cold_median_s), num(ch.warm_median_s), num(ch.cold_mean_s), num(ch.warm_mean_s), num(ch.cold_total_s), num(ch.excess_s), other_model);
+        if let Some((c, s)) = &spawn_view {
+            let aliases: Vec<String> = c.per_alias.iter().map(|(a, n)| format!("\"{}\":{}", alias_names[*a].replace('"', "'"), n)).collect();
+            let hours: Vec<String> = c.per_hour.iter().map(|(h, n)| format!("[{},{}]", h, n)).collect();
+            println!("{{\"event\":\"spawn_churn\",\"reloads\":{},\"span_h\":{},\"reloads_per_h\":{},\"per_alias\":{{{}}},\"per_hour\":[{}],\"worst_hour\":{},\"window_s\":{},\"matched\":{},\"cold_n\":{},\"warm_n\":{},\"cold_mean_s\":{},\"warm_mean_s\":{},\"cold_total_s\":{},\"total_prompt_s\":{},\"excess_s\":{},\"excess_pct\":{}}}",
+                c.reloads, num(c.span_h), num(if c.span_h > 0.0 { c.reloads as f64 / c.span_h } else { f64::NAN }), aliases.join(","), hours.join(","),
+                c.worst_hour.map(|(h, n)| format!("[{},{}]", h, n)).unwrap_or_else(|| "null".to_string()), churn_window, c.matched, c.cold_n, c.warm_n,
+                num(c.cold_mean_s), num(c.warm_mean_s), num(c.cold_total_s), num(c.total_prompt_s), num(c.excess_s), num(c.excess_pct));
+            if let Some(s) = s {
+                println!("{{\"event\":\"churn_split\",\"split_ts\":{},\"before_cold_n\":{},\"after_cold_n\":{},\"before_excess_s\":{},\"after_excess_s\":{},\"delta_pct\":{},\"ci_low\":{},\"ci_high\":{},\"verdict\":\"{}\"}}",
+                    s.split_ts, s.before_cold_n, s.after_cold_n, num(s.before_excess_s), num(s.after_excess_s), num(s.delta_pct), num(s.ci_low), num(s.ci_high), s.verdict.as_str());
+            }
+        }
         println!("{{\"summary\":true,\"metric\":\"{}\",\"rows\":{},\"skipped\":{},\"ms_per_kctx\":{},\"slope_clamped\":{},\"verdicts\":{},\"min_effect_pct\":{},\"segments\":{},\"incidents\":{},\"regressed\":{}}}",
             metric, r.rows, skipped, num(r.slope_ms_per_kctx), r.slope_clamped, verdicts_on, num(min_effect), r.segments.len(), r.incidents.len(), regressed);
     } else {
@@ -4883,12 +5027,27 @@ fn cmd_pulse(args: &[String]) {
         if other_model > 0 { println!("  --model {}: {} rows of other models left out", want_model.as_deref().unwrap_or(""), other_model); }
         if ch.children > 0 { println!("  model churn: {} server children served requests over {:.1} h ({:.1}/h); requests within {} s of a child's first request: {} (prompt read mean {:.2} s vs {:.2} s warm, {:.0} s excess)",
             ch.children, ch.span_h, if ch.span_h > 0.0 { ch.children as f64 / ch.span_h } else { 0.0 }, churn_window, ch.cold_n, ch.cold_mean_s, ch.warm_mean_s, ch.excess_s); }
+        if let Some((c, s)) = &spawn_view {
+            println!("  reloads (spawn stream): {} over {:.1} h = {:.1}/h; per alias: {}", c.reloads, c.span_h,
+                if c.span_h > 0.0 { c.reloads as f64 / c.span_h } else { 0.0 },
+                c.per_alias.iter().map(|(a, n)| format!("{} {}", alias_names[*a], n)).collect::<Vec<_>>().join(", "));
+            if let Some((h, n)) = c.worst_hour { println!("    worst hour: {} reloads in the hour starting {} (unix)", n, h); }
+            println!("    requests within {} s after their child's spawn: {} of {} (prompt read mean {:.2} s vs {:.2} s warm); excess {:.0} s = {:.1}% of all prompt-read time",
+                churn_window, c.cold_n, c.cold_n + c.warm_n, c.cold_mean_s, c.warm_mean_s, c.excess_s, c.excess_pct);
+            if let Some(s) = s {
+                if s.verdict == struktura::pulse::Verdict::Insufficient {
+                    println!("    split at {}: INSUFFICIENT (needs >= {} cold and warm requests on each side, and a positive tax before)", s.split_ts, struktura::pulse::MIN_SPLIT_ROWS);
+                } else {
+                    println!("    split at {}: excess per cold request {:.2} s -> {:.2} s: {:+.1}% [{:+.1}, {:+.1}]  {}", s.split_ts, s.before_excess_s, s.after_excess_s, s.delta_pct, s.ci_low, s.ci_high, s.verdict.as_str().to_uppercase());
+                }
+            }
+        }
         println!("  context cost (fitted inside deploys, solo requests): +{:.3} ms per 1K tokens of context", r.slope_ms_per_kctx);
         if r.slope_clamped { println!("    (the fit came out negative: the traffic mix leaks into it, so no context adjustment is applied)"); }
-        println!("  {:>10} {:>5} {:>5} {:>5} {:>9} {:>11} {:>5} {:>8} {:>8} {:>6}", "deploy", "row", "solo", "busy", "solo_ms", "contention", "mlen", "raw_ms", "raw_tps", "ctx_K");
+        println!("  {:>10} {:>5} {:>9} {:>9} {:>9} {:>11} {:>5} {:>8} {:>8} {:>6}", "deploy", "row", "solo(ses)", "busy(ses)", "solo_ms", "contention", "mlen", "raw_ms", "raw_tps", "ctx_K");
         for s in &r.segments {
             let cont = if s.contention_pct.is_finite() { format!("{:+.0}%", s.contention_pct) } else { "-".to_string() };
-            println!("  {:>10} {:>5} {:>5} {:>5} {:>9.2} {:>11} {:>5.2} {:>8.2} {:>8.1} {:>6.0}", short(s.seg), s.first_row + 1, s.solo_n, s.busy_n, s.level_ms, cont, s.solo_mlen, s.median_ms, s.median_tps, s.median_ctx_k);
+            println!("  {:>10} {:>5} {:>9} {:>9} {:>9.2} {:>11} {:>5.2} {:>8.2} {:>8.1} {:>6.0}", short(s.seg), s.first_row + 1, format!("{}({})", s.solo_n, s.solo_sessions), format!("{}({})", s.busy_n, s.busy_sessions), s.level_ms, cont, s.solo_mlen, s.median_ms, s.median_tps, s.median_ctx_k);
         }
         if !labels.is_empty() {
             if deploys.is_empty() { println!("  segments = server children (router pid:port; a pid hosts several models, each reload is a new child)"); }
@@ -4902,8 +5061,12 @@ fn cmd_pulse(args: &[String]) {
             let unit = if c.kind == "solo" { "%" } else { "pp" };
             println!("    {:<10} {} -> {}: {:+.1}{} [{:+.1}, {:+.1}]  {}", c.kind, short(c.from), short(c.to), c.delta, unit, c.ci_low, c.ci_high, c.verdict.as_str().to_uppercase());
         }
+        if verdicts_on && !r.comparisons.iter().any(|c| c.verdict != Verdict::Insufficient) {
+            println!("    no verdict possible: a deploy needs >= {} solo sessions (conversations, not requests) and a predecessor with as many",
+                struktura::pulse::MIN_SOLO_SESSIONS);
+        }
         let insufficient = r.comparisons.iter().filter(|c| c.verdict == Verdict::Insufficient).count();
-        if insufficient > 0 { println!("    ({} deploy(s) too short to judge: < {} solo rows)", insufficient, struktura::pulse::MIN_SEG_ROWS); }
+        if insufficient > 0 { println!("    ({} deploy(s) too short to judge: < {} solo sessions)", insufficient, struktura::pulse::MIN_SOLO_SESSIONS); }
         println!("  incidents (> {} robust sd AND > {}x expected): {}", struktura::pulse::INCIDENT_Z, struktura::pulse::INCIDENT_RATIO, r.incidents.len());
         for x in r.incidents.iter().take(15) {
             println!("    row {:>5} {} {}: {:.1} ms vs {:.1} expected (z {:.0})", x.row + 1, if deploys.is_empty() { "child" } else { "deploy" }, short(x.seg), x.ms, x.expected_ms, x.z);
@@ -5143,4 +5306,31 @@ fn cmd_power(args: &[String]) {
             println!("  thresholds far below it pass easily and teach little (see `struktura lab`).");
         }
     }
+}
+
+/// Read pulse's request rows. With an archive, first merge the (rolling) input into an
+/// append-only archive file — one row per request, deduplicated on end_ts, pid, slot,
+/// start_ts and port — and return the archive, so references and past verdicts survive
+/// the input's window. The archive is rewritten atomically (temp file + rename).
+fn pulse_load(path: &str, archive: Option<&str>) -> String {
+    let text = match std::fs::read_to_string(path) { Ok(t) => t, Err(e) => { eprintln!("pulse: {}: {}", path, e); process::exit(2); } };
+    let Some(a) = archive else { return text };
+    let old = std::fs::read_to_string(a).unwrap_or_default();
+    let key = |l: &str| -> String {
+        let f: Vec<&str> = l.split(',').map(|s| s.trim()).collect();
+        format!("{}|{}|{}|{}|{}", f.first().unwrap_or(&""), f.get(1).unwrap_or(&""), f.get(2).unwrap_or(&""), f.get(3).unwrap_or(&""), f.get(14).unwrap_or(&""))
+    };
+    let mut seen: std::collections::HashSet<String> = old.lines().filter(|l| !l.trim().is_empty()).map(key).collect();
+    let mut merged = old.clone();
+    if !merged.is_empty() && !merged.ends_with('\n') { merged.push('\n'); }
+    let mut added = 0usize;
+    for l in text.lines().filter(|l| !l.trim().is_empty()) {
+        if seen.insert(key(l)) { merged.push_str(l); merged.push('\n'); added += 1; }
+    }
+    if added > 0 {
+        let tmp = format!("{}.tmp", a);
+        if std::fs::write(&tmp, &merged).and_then(|_| std::fs::rename(&tmp, a)).is_err() { eprintln!("pulse: cannot write archive {}", a); process::exit(2); }
+    }
+    eprintln!("pulse: archive {}: +{} new rows, {} total", a, added, merged.lines().count());
+    merged
 }
