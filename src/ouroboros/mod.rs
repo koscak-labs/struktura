@@ -17,6 +17,8 @@
 //!   tautological.
 //! - **remember** ([`memory`]): append-only, idempotent `knowledge.jsonl`.
 //! - **backtest** ([`backtest`]): replays the ledger to check its own signals.
+//! - **track** ([`track`]): the brain's track record: prequential replay of the
+//!   mind against a running-mean baseline, and scoring of live forecasts.
 //!
 //! The loop stops at the queue: jobs land in an outbox; submitting them to the
 //! GPU is the queue owner's decision (`--submit` exists, nothing calls it).
@@ -32,6 +34,7 @@ pub mod backtest;
 pub mod gate;
 pub mod step;
 pub mod mind;
+pub mod track;
 
 use crate::arms::{rank, ArmData, ArmsReport, Direction};
 use crate::lab::{analyze, LabReport};

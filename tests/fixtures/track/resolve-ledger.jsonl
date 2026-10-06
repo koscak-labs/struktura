@@ -1,0 +1,12 @@
+{"kind":"cal","ts":100,"ok":true,"code":{"tps":200.0}}
+{"kind":"cal","ts":101,"ok":true,"code":{"tps":202.0}}
+{"kind":"prediction","ts":500,"pred":"lab-300-ub128.tsv","name":"ub128-beats-ub256-d100000","value":"103 vs 100 (3.00%, need >% 2.20%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"job","job":"301-ub128.sh","start":1100,"end":1200,"rc":0}
+{"kind":"prediction","ts":1200,"pred":"lab-301-ub128.tsv","name":"ub128-beats-ub256-d100000","verdict":"missing"}
+{"kind":"prediction","ts":1210,"pred":"lab-301-ub128.tsv","name":"ub128-beats-ub256-d100000","value":"106 vs 100 (6.00%, need >% 2.20%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"job","job":"302-draft5.sh","start":1300,"end":1400,"rc":0}
+{"kind":"prediction","ts":1400,"pred":"302.tsv","name":"code-tps-check","value":"101 vs 100 (1.00%, need >% 0.5%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"prediction","ts":1500,"pred":"lab-303-draft3.tsv","name":"draft3-beats-draft7-code_tps","value":"VOID","verdict":"void"}
+{"kind":"prediction","ts":1600,"pred":"lab-304-ub1280.tsv","name":"ub1280-beats-ub256-d100000","value":"110 vs 100 (10.00%, need >% 2.20%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"queued","ts":1650,"job":"306-ub512","pred_file":"306.tsv","names":["ub-check"],"designed_by":"human"}
+{"kind":"prediction","ts":1800,"pred":"306.tsv","name":"ub-check","value":"120 vs 100 (20.00%, need >% 5%)","op":">%","threshold":"arm B","verdict":"pass"}

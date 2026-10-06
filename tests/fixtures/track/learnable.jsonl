@@ -1,0 +1,62 @@
+{"kind":"cal","ts":100,"ok":true,"code":{"tps":200.0}}
+{"kind":"cal","ts":101,"ok":true,"code":{"tps":202.0}}
+{"kind":"job","job":"1-synth.sh","start":1300,"end":1600,"rc":0}
+{"kind":"prediction","ts":1600,"pred":"1.tsv","name":"tps-ambitious-1","value":"108 vs 100 (8.00%, need >% 5%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"prediction","ts":1601,"pred":"1.tsv","name":"tps-timid-1","value":"101.5 vs 100 (1.50%, need >% 1%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"job","job":"2-synth.sh","start":1900,"end":2200,"rc":0}
+{"kind":"prediction","ts":2200,"pred":"2.tsv","name":"tps-ambitious-2","value":"108 vs 100 (8.00%, need >% 5%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"prediction","ts":2201,"pred":"2.tsv","name":"tps-timid-2","value":"101.5 vs 100 (1.50%, need >% 1%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"job","job":"3-synth.sh","start":2500,"end":2800,"rc":0}
+{"kind":"prediction","ts":2800,"pred":"3.tsv","name":"tps-ambitious-3","value":"108 vs 100 (8.00%, need >% 5%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"prediction","ts":2801,"pred":"3.tsv","name":"tps-timid-3","value":"101.5 vs 100 (1.50%, need >% 1%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"job","job":"4-synth.sh","start":3100,"end":3400,"rc":0}
+{"kind":"prediction","ts":3400,"pred":"4.tsv","name":"tps-ambitious-4","value":"108 vs 100 (8.00%, need >% 5%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"prediction","ts":3401,"pred":"4.tsv","name":"tps-timid-4","value":"101.5 vs 100 (1.50%, need >% 1%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"job","job":"5-synth.sh","start":3700,"end":4000,"rc":0}
+{"kind":"prediction","ts":4000,"pred":"5.tsv","name":"tps-ambitious-5","value":"108 vs 100 (8.00%, need >% 5%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"prediction","ts":4001,"pred":"5.tsv","name":"tps-timid-5","value":"101.5 vs 100 (1.50%, need >% 1%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"job","job":"6-synth.sh","start":4300,"end":4600,"rc":0}
+{"kind":"prediction","ts":4600,"pred":"6.tsv","name":"tps-ambitious-6","value":"108 vs 100 (8.00%, need >% 5%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"prediction","ts":4601,"pred":"6.tsv","name":"tps-timid-6","value":"101.5 vs 100 (1.50%, need >% 1%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"job","job":"7-synth.sh","start":4900,"end":5200,"rc":0}
+{"kind":"prediction","ts":5200,"pred":"7.tsv","name":"tps-ambitious-7","value":"108 vs 100 (8.00%, need >% 5%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"prediction","ts":5201,"pred":"7.tsv","name":"tps-timid-7","value":"101.5 vs 100 (1.50%, need >% 1%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"job","job":"8-synth.sh","start":5500,"end":5800,"rc":0}
+{"kind":"prediction","ts":5800,"pred":"8.tsv","name":"tps-ambitious-8","value":"108 vs 100 (8.00%, need >% 5%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"prediction","ts":5801,"pred":"8.tsv","name":"tps-timid-8","value":"101.5 vs 100 (1.50%, need >% 1%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"job","job":"9-synth.sh","start":6100,"end":6400,"rc":0}
+{"kind":"prediction","ts":6400,"pred":"9.tsv","name":"tps-ambitious-9","value":"108 vs 100 (8.00%, need >% 5%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"prediction","ts":6401,"pred":"9.tsv","name":"tps-timid-9","value":"101.5 vs 100 (1.50%, need >% 1%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"job","job":"10-synth.sh","start":6700,"end":7000,"rc":0}
+{"kind":"prediction","ts":7000,"pred":"10.tsv","name":"tps-ambitious-10","value":"108 vs 100 (8.00%, need >% 5%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"prediction","ts":7001,"pred":"10.tsv","name":"tps-timid-10","value":"101.5 vs 100 (1.50%, need >% 1%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"job","job":"11-synth.sh","start":7300,"end":7600,"rc":0}
+{"kind":"prediction","ts":7600,"pred":"11.tsv","name":"tps-ambitious-11","value":"108 vs 100 (8.00%, need >% 5%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"prediction","ts":7601,"pred":"11.tsv","name":"tps-timid-11","value":"101.5 vs 100 (1.50%, need >% 1%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"job","job":"12-synth.sh","start":7900,"end":8200,"rc":0}
+{"kind":"prediction","ts":8200,"pred":"12.tsv","name":"tps-ambitious-12","value":"108 vs 100 (8.00%, need >% 5%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"prediction","ts":8201,"pred":"12.tsv","name":"tps-timid-12","value":"101.5 vs 100 (1.50%, need >% 1%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"job","job":"13-synth.sh","start":8500,"end":8800,"rc":0}
+{"kind":"prediction","ts":8800,"pred":"13.tsv","name":"tps-ambitious-13","value":"108 vs 100 (8.00%, need >% 5%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"prediction","ts":8801,"pred":"13.tsv","name":"tps-timid-13","value":"101.5 vs 100 (1.50%, need >% 1%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"job","job":"14-synth.sh","start":9100,"end":9400,"rc":0}
+{"kind":"prediction","ts":9400,"pred":"14.tsv","name":"tps-ambitious-14","value":"108 vs 100 (8.00%, need >% 5%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"prediction","ts":9401,"pred":"14.tsv","name":"tps-timid-14","value":"101.5 vs 100 (1.50%, need >% 1%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"job","job":"15-synth.sh","start":9700,"end":10000,"rc":0}
+{"kind":"prediction","ts":10000,"pred":"15.tsv","name":"tps-ambitious-15","value":"108 vs 100 (8.00%, need >% 5%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"prediction","ts":10001,"pred":"15.tsv","name":"tps-timid-15","value":"101.5 vs 100 (1.50%, need >% 1%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"job","job":"16-synth.sh","start":10300,"end":10600,"rc":0}
+{"kind":"prediction","ts":10600,"pred":"16.tsv","name":"tps-ambitious-16","value":"108 vs 100 (8.00%, need >% 5%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"prediction","ts":10601,"pred":"16.tsv","name":"tps-timid-16","value":"101.5 vs 100 (1.50%, need >% 1%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"job","job":"17-synth.sh","start":10900,"end":11200,"rc":0}
+{"kind":"prediction","ts":11200,"pred":"17.tsv","name":"tps-ambitious-17","value":"108 vs 100 (8.00%, need >% 5%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"prediction","ts":11201,"pred":"17.tsv","name":"tps-timid-17","value":"101.5 vs 100 (1.50%, need >% 1%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"job","job":"18-synth.sh","start":11500,"end":11800,"rc":0}
+{"kind":"prediction","ts":11800,"pred":"18.tsv","name":"tps-ambitious-18","value":"108 vs 100 (8.00%, need >% 5%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"prediction","ts":11801,"pred":"18.tsv","name":"tps-timid-18","value":"101.5 vs 100 (1.50%, need >% 1%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"job","job":"19-synth.sh","start":12100,"end":12400,"rc":0}
+{"kind":"prediction","ts":12400,"pred":"19.tsv","name":"tps-ambitious-19","value":"108 vs 100 (8.00%, need >% 5%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"prediction","ts":12401,"pred":"19.tsv","name":"tps-timid-19","value":"101.5 vs 100 (1.50%, need >% 1%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"job","job":"20-synth.sh","start":12700,"end":13000,"rc":0}
+{"kind":"prediction","ts":13000,"pred":"20.tsv","name":"tps-ambitious-20","value":"108 vs 100 (8.00%, need >% 5%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"prediction","ts":13001,"pred":"20.tsv","name":"tps-timid-20","value":"101.5 vs 100 (1.50%, need >% 1%)","op":">%","threshold":"arm B","verdict":"pass"}
