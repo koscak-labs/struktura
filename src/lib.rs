@@ -1685,6 +1685,7 @@ pub mod smap_eval;
 pub mod rover;
 pub mod rover_flight;
 pub mod conformal;
+pub mod ab;
 
 /// Solve A x = b in place (Gauss–Jordan, partial pivoting). Shared by the
 /// reconstruction and autoregression fitters. Returns false if singular.
