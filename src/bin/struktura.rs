@@ -322,7 +322,19 @@ fn print_law_detail(law: &StructuralLaw) {
     println!("    Quality:   {}", quality_str(law.quality));
 }
 
+/// A CLI piped into `head` must exit quietly when the reader closes early, not panic: Rust ignores SIGPIPE,
+/// so `println!` would fail with EPIPE. Restore the default disposition (std already links libc).
+#[cfg(unix)]
+fn reset_sigpipe() {
+    extern "C" { fn signal(sig: i32, handler: usize) -> usize; }
+    // SIGPIPE = 13, SIG_DFL = 0 on Linux and the BSDs
+    unsafe { signal(13, 0); }
+}
+#[cfg(not(unix))]
+fn reset_sigpipe() {}
+
 fn main() {
+    reset_sigpipe();
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 || args[1] == "--help" || args[1] == "-h" || args[1] == "help" {
@@ -5145,19 +5157,23 @@ fn cmd_arms(args: &[String]) {
         match std::fs::read_to_string(f) { Ok(t) => data.ingest(&t), Err(e) => { eprintln!("arms: {}: {}", f, e); process::exit(2); } }
     }
     if let Some(m) = &only { for v in data.values.values_mut() { v.retain(|k, _| k == m); } }
-    // --tasks LO-HI (e.g. t01-t23, t31-, -t23): keep workbench tasks whose number is in range
-    // (a task's number is the digits after its leading letters: t31-foo -> 31).
+    // --tasks LO-HI (e.g. t01-t23, t31-, -t23, L01-L11): keep workbench tasks whose number is in range
+    // (a task's number is the digits after its leading letters: t31-foo -> 31). A letter prefix in the spec
+    // must match the task's (L01-L11 is the live lane, never t01-t11: numbers alone collide across lanes).
     if let Some(spec) = &task_range {
         let num = |t: &str| -> Option<u32> { let s = t.trim_start_matches(|c: char| c.is_ascii_alphabetic()); s.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().ok() };
+        let pre = |t: &str| -> String { t.chars().take_while(|c| c.is_ascii_alphabetic()).collect() };
         let (lo, hi) = match spec.split_once('-') { Some((a, b)) => (num(a).unwrap_or(0), num(b).unwrap_or(u32::MAX)), None => { let n = num(spec).unwrap_or(0); (n, n) } };
+        let want = match spec.split_once('-') { Some((a, b)) => if !pre(a).is_empty() { pre(a) } else { pre(b) }, None => pre(spec) };
+        let keep = |t: &str| (want.is_empty() || pre(t) == want) && num(t).map(|n| n >= lo && n <= hi).unwrap_or(false);
         let binary = data.binary.clone();
         for v in data.values.values_mut() {
             v.retain(|k, _| {
                 let task = match k.split_once('@') { Some((_, t)) => t, None if binary.contains(k) => k.as_str(), None => return true };
-                num(task).map(|n| n >= lo && n <= hi).unwrap_or(false)
+                keep(task)
             });
         }
-        data.binary.retain(|k| num(k).map(|n| n >= lo && n <= hi).unwrap_or(false));
+        data.binary.retain(|k| keep(k));
     }
     if let Some(list) = &arm_list {
         let keep: Vec<&str> = list.split(',').map(|s| s.trim()).collect();
