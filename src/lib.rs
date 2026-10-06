@@ -1751,3 +1751,11 @@ pub mod power;
 #[cfg(feature = "std")]
 pub mod ouroboros;
 pub mod brain;
+pub mod brain_conformal;
+pub mod brain_shield;
+pub mod brain_regime;
+pub mod brain_dream;
+pub mod brain_fleet;
+pub mod brain_recorder;
+pub mod brain_voi;
+pub mod brain_features;

@@ -176,9 +176,11 @@ impl<const N: usize, const D: usize, const A: usize> Brain<N, D, A> {
     }
 
     /// Record the outcome of taking `action` in situation `x`: update the model and remember the episode.
-    pub fn learn(&mut self, x: &[f32; D], action: u8, reward: f32) {
+    /// Returns the memory slot the episode was stored in (None if `action` is out of range or N = 0),
+    /// so extensions can keep per-slot side data aligned with memory.
+    pub fn learn(&mut self, x: &[f32; D], action: u8, reward: f32) -> Option<usize> {
         let a = action as usize;
-        if a >= A { return; }
+        if a >= A { return None; }
         let nb = self.nearest(x);
         let (expected, _) = self.estimate(a, x, &nb);
         // Sherman-Morrison: A^-1 <- A^-1 - (A^-1 x)(x^T A^-1) / (1 + x^T A^-1 x)
@@ -193,6 +195,7 @@ impl<const N: usize, const D: usize, const A: usize> Brain<N, D, A> {
         if self.len < N {
             self.mem[self.len] = ep;
             self.len += 1;
+            Some(self.len - 1)
         } else if N > 0 {
             // Forget the least valuable memory: least surprising, discounted by age.
             let mut worst = 0usize;
@@ -203,8 +206,52 @@ impl<const N: usize, const D: usize, const A: usize> Brain<N, D, A> {
                 if v < worst_v { worst_v = v; worst = s; }
             }
             self.mem[worst] = ep;
+            Some(worst)
+        } else {
+            None
         }
     }
+
+    // ---- extension points (used by brain_* modules; stable API) ----
+
+    /// Memory capacity N.
+    pub const CAPACITY: usize = N;
+
+    /// Decisions learned so far (wrapping).
+    pub fn clock(&self) -> u32 { self.clock }
+
+    /// The K nearest stored episodes to `x`: (slots, squared distances, count), nearest first.
+    pub fn neighbours(&self, x: &[f32; D]) -> ([u16; K], [f32; K], usize) { self.nearest(x) }
+
+    /// Per-action estimate for `x`: expected reward (model + memory correction),
+    /// model uncertainty width sqrt(x' A^-1 x) (before the exploration weight), and evidence.
+    pub fn estimates(&self, x: &[f32; D]) -> [Estimate; A] {
+        let nb = self.nearest(x);
+        let mut out = [Estimate { expected: 0.0, width: 0.0, evidence: 0.0 }; A];
+        for (a, o) in out.iter_mut().enumerate() {
+            let (expected, evidence) = self.estimate(a, x, &nb);
+            *o = Estimate { expected, width: self.width(a, x), evidence };
+        }
+        out
+    }
+
+    /// Exponential forgetting of the model (A <- keep * A, b <- keep * b): its
+    /// confidence shrinks and it re-explores. Memory is untouched. `keep` in (0, 1].
+    pub fn forget(&mut self, keep: f32) {
+        if !(keep > 0.0 && keep <= 1.0) { return; }
+        for a in 0..A {
+            for i in 0..D { for j in 0..D { self.a_inv[a][i][j] /= keep; } self.b[a][i] *= keep; }
+            self.pulls[a] = (self.pulls[a] as f32 * keep) as u32;
+        }
+    }
+}
+
+/// One action's estimate (see [`Brain::estimates`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Estimate {
+    pub expected: f32,
+    pub width: f32,
+    pub evidence: f32,
 }
 
 #[cfg(test)]
@@ -305,6 +352,24 @@ mod tests {
         }
         let (with_mem, model_only) = (late::<256>(&truth), late::<0>(&truth));
         assert!(with_mem >= model_only + 50, "memory+model {}/1000 vs model only {}/1000", with_mem, model_only);
+    }
+
+    #[test]
+    fn extension_points_are_consistent() {
+        let mut br: Brain<8, 3, 2> = Brain::new(0.0, 0.0);
+        assert_eq!(Brain::<8, 3, 2>::CAPACITY, 8);
+        let mut slots = Vec::new();
+        for i in 0..12 { slots.push(br.learn(&[i as f32 / 12.0, 0.5, 1.0], (i % 2) as u8, 1.0)); }
+        assert!(slots.iter().all(|s| s.map(|s| s < 8).unwrap_or(false)));
+        assert_eq!(br.learn(&[0.0, 0.0, 1.0], 5, 1.0), None, "out-of-range action is ignored");
+        let x = [0.4, 0.5, 1.0];
+        let e = br.estimates(&x);
+        let d = br.decide(&x, &[true; 2], 0);
+        assert!((e[d.action as usize].expected - d.expected).abs() < 1e-6);
+        let w0 = e[0].width;
+        br.forget(0.5);
+        assert!(br.estimates(&x)[0].width > w0, "forgetting widens uncertainty");
+        assert_eq!(br.neighbours(&x).2, K.min(8));
     }
 
     #[test]
