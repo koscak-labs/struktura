@@ -343,6 +343,90 @@ impl<const N: usize, const D: usize, const A: usize> Brain<N, D, A> {
             self.pulls[a] = (self.pulls[a] as f32 * keep) as u32;
         }
     }
+
+    /// The model's prediction refitted exactly WITHOUT input `j` on all the outcomes it has
+    /// learned (ridge with an infinite prior on `j`): `theta - A^-1 e_j theta_j / (A^-1)_jj`.
+    /// O(D^2). Equals [`Brain::predict`] when `j` is out of range or already dropped.
+    pub fn predict_without(&self, action: u8, x: &[f32; D], j: usize) -> f32 {
+        let a = action as usize;
+        if a >= A || !self.use_model { return 0.0; }
+        let th = self.theta(a);
+        let mut s = 0.0; for i in 0..D { s += th[i] * x[i]; }
+        if j >= D || self.a_inv[a][j][j] <= 1e-12 { return s; }
+        let mut col = 0.0f32; for i in 0..D { col += x[i] * self.a_inv[a][i][j]; }
+        s - col * th[j] / self.a_inv[a][j][j]
+    }
+
+    /// Remove input `j` from the model for every action, exactly: the model becomes the ridge
+    /// fit of all learned outcomes without `j` (see [`Brain::predict_without`]), and later
+    /// outcomes never move it (its row and column of `A^-1` are zero). Memory is untouched.
+    pub fn drop_input(&mut self, j: usize) {
+        if j >= D { return; }
+        for a in 0..A {
+            let p = self.a_inv[a][j][j];
+            if p > 1e-12 {
+                let mut col = [0.0f32; D];
+                for i in 0..D { col[i] = self.a_inv[a][i][j]; }
+                for i in 0..D { for k in 0..D { self.a_inv[a][i][k] -= col[i] * col[k] / p; } }
+            }
+            for i in 0..D { self.a_inv[a][i][j] = 0.0; self.a_inv[a][j][i] = 0.0; }
+        }
+    }
+
+    /// Leave-one-out residual of the model (the PRESS term) for an outcome whose situation `x` the
+    /// model has learned `n` times with `action`: `(reward - x'theta) / (1 - n x'A^-1 x)`, the error
+    /// of the model refitted without those `n` outcomes. With `without = Some(j)` the model is first
+    /// refitted exactly without input `j` ([`Brain::predict_without`]). O(D^2). The denominator is
+    /// floored at 1e-3 (an outcome only it explains gets a large, finite residual).
+    pub fn loo_residual(&self, action: u8, x: &[f32; D], reward: f32, n: f32, without: Option<usize>) -> f32 {
+        let a = action as usize;
+        if a >= A || !self.use_model { return reward; }
+        let th = self.theta(a);
+        let mut u = [0.0f32; D];
+        for i in 0..D { let mut s = 0.0; for k in 0..D { s += self.a_inv[a][i][k] * x[k]; } u[i] = s; }
+        let (mut pred, mut h) = (0.0f32, 0.0f32);
+        for i in 0..D { pred += th[i] * x[i]; h += x[i] * u[i]; }
+        if let Some(j) = without {
+            let p = if j < D { self.a_inv[a][j][j] } else { 0.0 };
+            if p > 1e-12 { pred -= u[j] * th[j] / p; h -= u[j] * u[j] / p; }
+        }
+        let den = 1.0 - n * h;
+        (reward - pred) / if den > 1e-3 { den } else { 1e-3 }
+    }
+
+    /// [`Brain::update_model`] as if the outcome had been learned `n` times (one rank-one update
+    /// of weight `n`). For an exact refit of a replayed dataset.
+    pub fn update_model_n(&mut self, x: &[f32; D], action: u8, reward: f32, n: u32) {
+        let a = action as usize;
+        if a >= A || n == 0 { return; }
+        let w = n as f32;
+        let mut u = [0.0f32; D];
+        for i in 0..D { let mut s = 0.0; for j in 0..D { s += self.a_inv[a][i][j] * x[j]; } u[i] = s; }
+        let mut den = 1.0; for i in 0..D { den += w * x[i] * u[i]; }
+        for i in 0..D { for j in 0..D { self.a_inv[a][i][j] -= w * u[i] * u[j] / den; } }
+        for i in 0..D { self.b[a][i] += w * reward * x[i]; }
+        self.pulls[a] = self.pulls[a].saturating_add(n);
+    }
+
+    /// Reset the model to its prior (no evidence); memory is untouched. With
+    /// [`Brain::update_model`] over the stored episodes this refits the model on memory.
+    pub fn reset_model(&mut self) {
+        for a in 0..A {
+            for i in 0..D { for j in 0..D { self.a_inv[a][i][j] = if i == j { 1.0 } else { 0.0 }; } self.b[a][i] = 0.0; }
+            self.pulls[a] = 0;
+        }
+    }
+
+    /// Whether input `j` is in the model (not removed by [`Brain::drop_input`]).
+    pub fn has_input(&self, j: usize) -> bool { j < D && A > 0 && self.a_inv[0][j][j] > 1e-12 }
+
+    /// (Re)open input `j` as a fresh one: dropped first (exact), then given the prior of an
+    /// input whose past values were all 0 (unit prior, no evidence). For a new sense in a slot.
+    pub fn open_input(&mut self, j: usize) {
+        if j >= D { return; }
+        self.drop_input(j);
+        for a in 0..A { self.a_inv[a][j][j] = 1.0; self.b[a][j] = 0.0; }
+    }
 }
 
 /// One action's estimate (see [`Brain::estimates`]).
@@ -517,5 +601,47 @@ mod tests {
         assert!(sz < 16 * 1024, "{} bytes", sz);
         // const-constructible: can live in a static on bare metal
         static _B: Brain<16, 4, 3> = Brain::new(0.1, 1.0);
+    }
+
+    /// The exact-removal, leave-one-out and refit extension points agree with brains trained
+    /// independently on the corresponding data.
+    #[test]
+    fn exact_input_removal_loo_and_weighted_refit() {
+        let mut r = Lcg(11);
+        let data: Vec<([f32; 4], u8, f32)> = (0..60).map(|_| {
+            let x = [r.f(), r.f(), r.f(), 1.0];
+            let a = (r.f() * 2.0) as u8 % 2;
+            (x, a, 0.5 * x[0] + x[2] * a as f32 + 0.1 * r.f())
+        }).collect();
+        let zero1 = |x: &[f32; 4]| { let mut z = *x; z[1] = 0.0; z };
+        let mut full: Brain<0, 4, 2> = Brain::new(0.0, 0.0);
+        let mut without: Brain<0, 4, 2> = Brain::new(0.0, 0.0);
+        for (x, a, y) in data.iter() { full.learn(x, *a, *y); without.learn(&zero1(x), *a, *y); }
+        let probe = [0.3, 0.7, 0.2, 1.0];
+        for a in 0..2u8 { assert!((full.predict_without(a, &probe, 1) - without.predict(a, &probe)).abs() < 1e-3); }
+        // leave-one-out: the residual of the model refitted without one outcome (and without input 1)
+        let (k, (xk, ak, yk)) = (7usize, data[7]);
+        let (mut rest, mut rest1): (Brain<0, 4, 2>, Brain<0, 4, 2>) = (Brain::new(0.0, 0.0), Brain::new(0.0, 0.0));
+        for (i, (x, a, y)) in data.iter().enumerate() { if i != k { rest.learn(x, *a, *y); rest1.learn(&zero1(x), *a, *y); } }
+        assert!((full.loo_residual(ak, &xk, yk, 1.0, None) - (yk - rest.predict(ak, &xk))).abs() < 1e-3);
+        assert!((full.loo_residual(ak, &xk, yk, 1.0, Some(1)) - (yk - rest1.predict(ak, &xk))).abs() < 1e-3);
+        // drop_input: the model without the input, and later outcomes never move it
+        full.drop_input(1);
+        assert!(!full.has_input(1) && full.has_input(0));
+        for (x, a, y) in data.iter().take(10) { full.learn(x, *a, *y); without.learn(&zero1(x), *a, *y); }
+        for a in 0..2u8 { assert!((full.predict(a, &probe) - without.predict(a, &probe)).abs() < 1e-3); }
+        // open_input: a fresh input with a unit prior, as in a brain whose input was always 0 until now
+        full.open_input(1);
+        assert!(full.has_input(1));
+        for (x, a, y) in data.iter().skip(10).take(20) { full.learn(x, *a, *y); without.learn(x, *a, *y); }
+        for a in 0..2u8 { assert!((full.predict(a, &probe) - without.predict(a, &probe)).abs() < 1e-3); }
+        // update_model_n(n) = n updates; reset_model forgets the evidence, not the memory
+        let (mut once, mut n5): (Brain<4, 4, 2>, Brain<4, 4, 2>) = (Brain::new(0.0, 0.0), Brain::new(0.0, 0.0));
+        for _ in 0..5 { once.update_model(&probe, 1, 0.8); }
+        n5.update_model_n(&probe, 1, 0.8, 5);
+        assert!((once.predict(1, &probe) - n5.predict(1, &probe)).abs() < 1e-5 && once.pulls(1) == n5.pulls(1));
+        n5.learn(&probe, 0, 1.0);
+        n5.reset_model();
+        assert_eq!((n5.predict(1, &probe), n5.pulls(1), n5.in_use()), (0.0, 0, 1));
     }
 }
