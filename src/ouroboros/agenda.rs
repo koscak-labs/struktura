@@ -69,6 +69,9 @@ pub fn agenda(obs: &Observation, lessons: &Lessons, knobs: &[Knob], cons: &[Cons
             if let Some(c) = con.filter(|c| violates(c, v)) {
                 it.kind = Kind::Infeasible;
                 it.why = format!("violates {} {} {} ({})", c.knob, c.op, c.value, c.source);
+            } else if let Some(n) = unmeasurable(obs, k, v) {
+                it.kind = Kind::Infeasible;
+                it.why = format!("INVALID VALUE: {} designed job(s) against {} produced no measurement (missing/void); the server or instrument cannot run it", n, k.current);
             } else if !k.has_instrument() {
                 it.kind = Kind::NeedsInstrument;
                 it.why = format!("no job template measures {} ({})", k.metric, k.what);
@@ -111,6 +114,21 @@ fn proven(obs: &Observation, k: &Knob, v: &str, band: f64) -> Option<(f64, usize
         .filter(|p| { let t: Vec<&str> = p.name.split(|c: char| !c.is_ascii_alphanumeric()).collect(); t.contains(&label.as_str()) && t.contains(&incumbent.as_str()) })
         .filter_map(|p| p.margin_pct.filter(|m| *m >= band).map(|m| (m, p.agreeing)))
         .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+}
+
+/// INVALID VALUE: the prediction comparing this arm with the CURRENT one came back with no measurement
+/// (verdict missing/void) from at least 2 separate jobs and was never scored pass/fail. A value the
+/// server cannot even load (draft9: "failed to create MTP context") must not be re-designed as
+/// "never measured" forever. Returns how many jobs produced nothing.
+fn unmeasurable(obs: &Observation, k: &Knob, v: &str) -> Option<usize> {
+    let (_, label) = k.arm_of(v);
+    let (_, incumbent) = k.arm_of(&k.current);
+    let names_it = |name: &str| { let t: Vec<&str> = name.split(|c: char| !c.is_ascii_alphanumeric()).collect(); t.contains(&label.as_str()) && t.contains(&incumbent.as_str()) };
+    let mine: Vec<_> = obs.lab.predictions.iter().filter(|p| names_it(&p.name)).collect();
+    if mine.iter().any(|p| p.verdict == "pass" || p.verdict == "fail") { return None; }
+    let mut jobs: Vec<&str> = mine.iter().filter(|p| p.verdict == "missing" || p.verdict == "void").map(|p| p.pred.as_str()).collect();
+    jobs.sort(); jobs.dedup();
+    (jobs.len() >= 2).then_some(jobs.len())
 }
 
 /// A failed prediction whose name mentions the arm label (e.g. "ub512-...").
@@ -176,5 +194,25 @@ mod tests {
         assert!(it.why.starts_with("PROVEN"), "{}", it.why);
         // the other draft values are untouched by draft5's proof
         assert_eq!(a.iter().find(|i| i.knob == "draft" && i.value == "3").unwrap().kind, Kind::Challenger);
+    }
+
+    #[test]
+    fn a_value_that_never_produces_a_measurement_is_invalid_not_retried() {
+        let m = |ts: u32, pf: &str| format!("{{\"kind\":\"prediction\",\"ts\":{ts},\"pred\":\"{pf}\",\"name\":\"draft9-beats-draft7-code_tps\",\"value\":\"-\",\"verdict\":\"missing\"}}\n");
+        let once = m(1, "lab-346-draft9.tsv");
+        let (o, k) = setup(&once);
+        let a = agenda(&o, &learn(&o), &k, &constraints(&[], &[]));
+        assert_eq!(a.iter().find(|i| i.knob == "draft" && i.value == "9").unwrap().kind, Kind::Challenger, "one empty job may be bad luck");
+        let twice = once + &m(2, "lab-347-draft9.tsv") + &m(3, "lab-348-draft9.tsv");
+        let (o, k) = setup(&twice);
+        let a = agenda(&o, &learn(&o), &k, &constraints(&[], &[]));
+        let it = a.iter().find(|i| i.knob == "draft" && i.value == "9").unwrap();
+        assert_eq!(it.kind, Kind::Infeasible, "{}", it.why);
+        assert!(it.why.starts_with("INVALID VALUE: 3 designed job(s)"), "{}", it.why);
+        // a value that was ever scored stays a normal candidate even if some jobs came back empty
+        let scored = twice + "{\"kind\":\"prediction\",\"ts\":4,\"pred\":\"lab-349-draft9.tsv\",\"name\":\"draft9-beats-draft7-code_tps\",\"value\":\"190 vs 200 (-5.00%, need >% 2%)\",\"op\":\">%\",\"threshold\":\"arm B\",\"verdict\":\"fail\"}\n";
+        let (o, k) = setup(&scored);
+        let a = agenda(&o, &learn(&o), &k, &constraints(&[], &[]));
+        assert_ne!(a.iter().find(|i| i.knob == "draft" && i.value == "9").unwrap().kind, Kind::Infeasible);
     }
 }
