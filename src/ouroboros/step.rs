@@ -163,6 +163,6 @@ mod tests {
         let t = turn(LEDGER, &[], &cfg(None));
         assert!(t.written.is_empty());
         let d = t.design.unwrap();
-        assert!(d.knob == "draft" || d.knob == "ub", "only instrumented knobs are designed: {}", d.knob);
+        assert!(["ub", "draft", "draftmin", "b"].contains(&d.knob.as_str()), "only instrumented knobs are designed: {}", d.knob);
     }
 }

@@ -52,6 +52,19 @@ for v in @INC@ @CH@; do
 done
 "#;
 
+// The logical batch b at live's physical batch ub (the ub template varies ub at b=2048).
+const BBENCH: &str = r#"M=/home/phil/models/Qwen3.8-27B-Uncensored-IQ4_XS.gguf
+for v in @INC@ @CH@; do
+  for r in $(seq 1 @R@); do
+    x=$(LD_LIBRARY_PATH=$D timeout --foreground 900 $D/llama-bench -m $M -ngl 99 -fa 1 -ctk q4_0 -ctv q4_0 -b $v -ub @UB@ -p 2048 -n 0 -d 0,32768,100000 -r 1 -o csv 2>/dev/null \
+        | awk -F, 'NR==1{for(i=1;i<=NF;i++){gsub(/"/,"",$i); h[$i]=i}} NR>1{gsub(/"/,""); printf "d%s=%d ", $h["n_depth"], $h["avg_ts"]}')
+    printf 'rep\t@P@%s\t%s\n' "$v" "${x:-FAIL}" | tee -a "$OUT"
+  done
+  m=$(grep -P "^rep\t@P@$v\t" "$OUT" | grep -oP '@METRIC@=\K[0-9.]+' | med)
+  printf 'arm\t@P@%s\tmedian @METRIC@=%s\n' "$v" "$m" | tee -a "$OUT"
+done
+"#;
+
 const DRAFT: &str = r#"M=/home/phil/models/Qwen3.8-27B-Uncensored-IQ4_XS.gguf
 DF=/home/phil/qmodels/Qwen3.8-27B-DFlash2-Q4_K_M.gguf
 q(){ curl -s -m 300 localhost:$LAB_P/v1/chat/completions -H 'Content-Type: application/json' \
@@ -59,7 +72,7 @@ q(){ curl -s -m 300 localhost:$LAB_P/v1/chat/completions -H 'Content-Type: appli
 for v in @INC@ @CH@; do
   SRV=~/logs/@JOB@-srv-$v.log
   $B/llama-server -m $M -ngl 99 -fa on --jinja -np 2 -c 262144 --kv-unified -ctk q4_0 -ctv q4_0 -ctkd q4_0 -ctvd q4_0 \
-    -md $DF -ngld 99 --spec-type draft-dflash --spec-draft-n-max $v -ub @UB@ --port $LAB_P --host 127.0.0.1 > $SRV 2>&1 & pid=$!
+    -md $DF -ngld 99 --spec-type draft-dflash @DRAFTARGS@ -ub @UB@ --port $LAB_P --host 127.0.0.1 > $SRV 2>&1 & pid=$!
   if ! up $pid; then printf 'arm\t@P@%s\tERROR server-died\n' "$v" | tee -a "$OUT"; continue; fi
   if ! smoke $SRV >/dev/null; then printf 'arm\t@P@%s\tERROR smoke\n' "$v" | tee -a "$OUT"; kill $pid; wait $pid 2>/dev/null; continue; fi
   for r in $(seq 1 @R@); do
@@ -120,12 +133,14 @@ D=~/alien-bin/{b}; B=$D\n[ -d \"$D\" ] || {{ echo \"MISSING live binary $D\" | t
 fn shippable(k: &Knob) -> Option<(&'static str, &'static str)> {
     // ub: the gate prints prefill_gain_permille AND keeps every decode-at-depth guard (gate 404: ub512 +5.9%
     // prefill but -11% decode at 32K/64K through DFlash acceptance must, and does, fail)
-    match k.name.as_str() { "draft" => Some(("spec-draft-n-max", "code_gain_permille")), "ub" => Some(("ub", "prefill_gain_permille")), _ => None }
+    match k.name.as_str() {
+        "draft" => Some(("spec-draft-n-max", "code_gain_permille")), "draftmin" => Some(("spec-draft-n-min", "code_gain_permille")),
+        "ub" => Some(("ub", "prefill_gain_permille")), "b" => Some(("b", "prefill_gain_permille")), _ => None }
 }
 
 fn template(id: &str) -> Option<(&'static str, u32, u32)> {
     // (body, fixed minutes, minutes per run per arm)
-    match id { "ub" => Some((UB, 2, 2)), "draft" => Some((DRAFT, 4, 1)), _ => None }
+    match id { "ub" => Some((UB, 2, 2)), "draft" => Some((DRAFT, 4, 1)), "draftmin" => Some((DRAFT, 4, 1)), "bbench" => Some((BBENCH, 2, 2)), _ => None }
 }
 
 /// The pre-registration regex for one arm's summary line.
@@ -172,12 +187,15 @@ pub fn design(item: &Item, k: &Knob, lessons: &Lessons, cv_pct: f64, job_id: u32
         _ => String::new(),
     };
     let ub = live.and_then(|l| l.flags.split_whitespace().find_map(|t| t.strip_prefix("ub="))).unwrap_or("256").to_string();
+    let nmax = live.and_then(|l| l.flags.split_whitespace().find_map(|t| t.strip_prefix("spec-draft-n-max="))).unwrap_or("7").to_string();
+    // draft varies the maximum draft length; draftmin holds live's maximum and varies the minimum
+    let draft_args = if k.template == "draftmin" { "--spec-draft-n-max @NMAX@ --spec-draft-n-min $v" } else { "--spec-draft-n-max $v" };
     let mut job = format!("#!/usr/bin/env bash\n# LAB-META: est_min={} value={} out=logs/{n}.out pred=lab-pred/{n}.tsv\n\
 {feat}# struktura loop {n}: {} {} (arm A) vs incumbent {} (arm B) on {} ({}), {} runs per arm\n\
 # why: {}\nset -uo pipefail\nsource ~/lab-lib.sh\nOUT=~/logs/{n}.out; : > \"$OUT\"\n{}\n{stage}",
         est, value_meta, k.name, item.value, k.current, k.metric, k.what, runs, item.why, MED, n = job_name, feat = feature, stage = stage_prelude(live));
     job.push_str(&body.replace("@INC@", &k.current).replace("@CH@", &item.value).replace("@R@", &runs.to_string())
-        .replace("@P@", prefix).replace("@METRIC@", &k.metric).replace("@JOB@", &job_name).replace("@UB@", &ub));
+        .replace("@P@", prefix).replace("@METRIC@", &k.metric).replace("@JOB@", &job_name).replace("@DRAFTARGS@", draft_args).replace("@NMAX@", &nmax).replace("@UB@", &ub));
     job.push_str(&format!("echo \"### {}-DONE $(date +%T)\" | tee -a \"$OUT\"\n", job_name));
     let (a, b) = (arm_regex(k, &item.value), arm_regex(k, &k.current));
     let op = if k.lower_is_better { "<%" } else { ">%" };
@@ -293,6 +311,20 @@ rep\tub128\td0=2700 d32768=2100 d100000=1350\nrep\tub128\td0=2710 d32768=2101 d1
         }
         assert!(live_of("{\"kind\":\"deploy\",\"ts\":1,\"binary\":\"../evil\"}").is_none());
         assert!(live_of("").is_none());
+    }
+
+    #[test]
+    fn draftmin_and_b_knobs_hold_live_and_vary_their_own_flag() {
+        let live = Live { binary: "llama.cpp-alien2-5a3cf82".into(), sha: "5a3cf82".into(), env: String::new(), flags: "ub=256 spec-draft-n-max=7".into() };
+        let dm = design(&item("draftmin", "2", None), &knob("draftmin"), &lessons(1.0), 0.578, 400, Some(&live)).unwrap();
+        assert!(dm.job.contains("--spec-draft-n-max 7 --spec-draft-n-min $v -ub 256 --port"), "{}", dm.job);
+        assert!(dm.job.contains("flags=spec-draft-n-min=2 required=draftmin2-beats-draftmin0-code_tps value=code_gain_permille>="), "{}", dm.job);
+        let d = design(&item("draft", "6", None), &knob("draft"), &lessons(1.0), 0.578, 401, Some(&live)).unwrap();
+        assert!(d.job.contains("--spec-draft-n-max $v -ub 256 --port") && !d.job.contains("spec-draft-n-min"));
+        let b = design(&item("b", "4096", None), &knob("b"), &lessons(1.0), 0.578, 402, Some(&live)).unwrap();
+        assert!(b.job.contains("-b $v -ub 256 -p 2048"), "{}", b.job);
+        assert!(b.job.contains("flags=b=4096 required=b4096-beats-b2048-d100000 value=prefill_gain_permille>="), "{}", b.job);
+        assert!(b.pred.contains("^arm\\tb4096\\tmedian d100000="), "{}", b.pred);
     }
 
     #[test]

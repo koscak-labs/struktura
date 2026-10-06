@@ -70,6 +70,9 @@ pub fn parse_knobs(text: &str) -> Result<Vec<Knob>, String> {
             return Err(format!("line {}: knob {} needs >= 2 values, current= and metric=", ln + 1, name));
         }
         if !k.values.contains(&k.current) { return Err(format!("line {}: current={} is not one of the values", ln + 1, k.current)); }
+        // predictions are NAMED <knob><value>-beats-...; the prefix is how the agenda finds them again (proven /
+        // falsified / invalid). A prefix other than the name would make every result of this knob invisible.
+        if let Some(p) = k.matcher.strip_prefix("prefix:") { if p != k.name { return Err(format!("line {}: knob {}: match=prefix:{} must equal the knob name (results are named {}<value>-beats-...)", ln + 1, k.name, p, k.name)); } }
         out.push(k);
     }
     Ok(out)
@@ -78,7 +81,9 @@ pub fn parse_knobs(text: &str) -> Result<Vec<Knob>, String> {
 /// Built-in knob space for the raven lab. Each knob names the measurement it moves.
 pub const BUILTIN: &str = "\
 knob ub 128 256 512 1024 current=256 metric=d100000 dir=higher match=prefix:ub template=ub what=prefill_t/s_of_a_2048-token_chunk_at_100K_depth
-knob draft 3 5 7 9 current=7 metric=code_tps dir=higher match=prefix:draft template=draft what=decode_t/s_on_code_with_the_DFlash_drafter,_thinking_as_in_prod
+knob draft 3 4 5 6 7 8 9 current=7 metric=code_tps dir=higher match=prefix:draft template=draft what=decode_t/s_on_code_with_the_DFlash_drafter,_thinking_as_in_prod
+knob draftmin 0 1 2 3 current=0 metric=code_tps dir=higher match=prefix:draftmin template=draftmin what=decode_t/s_on_code_with_a_minimum_DFlash_draft_length_(live_default_0)
+knob b 512 1024 2048 4096 current=2048 metric=d100000 dir=higher match=prefix:b template=bbench what=prefill_t/s_at_100K_depth_with_logical_batch_b_(live_default_2048)
 knob chunk 0 32 64 128 248 current=64 metric=sum_s dir=lower match=group:contend alias=0:stock template=none what=time-to-done_of_two_overlapping_streams_(read+decode)
 knob budget 1500 4000 12000 current=12000 metric=pass_rate dir=higher match=prefix:budget template=none what=workbench_verified_pass_rate_x_time-to-done,_paired_by_task
 ";
@@ -118,7 +123,7 @@ mod tests {
     #[test]
     fn builtin_parses_with_metric_per_knob() {
         let k = parse_knobs(BUILTIN).unwrap();
-        assert_eq!(k.len(), 4);
+        assert_eq!(k.len(), 6, "ub draft draftmin b chunk budget");
         let ub = &k[0];
         assert_eq!((ub.metric.as_str(), ub.lower_is_better, ub.has_instrument()), ("d100000", false, true));
         assert_eq!(ub.arm_of("512"), (String::new(), "ub512".into()));
@@ -143,5 +148,13 @@ mod tests {
         assert!(!violates(ub, "512") && violates(ub, "1024"));
         let c = constraints(&[parse_constraint("ub<=128", "cli").unwrap()], &["ub <= 512".to_string()]);
         assert!(violates(c.iter().find(|c| c.knob == "ub").unwrap(), "256"));
+    }
+
+    #[test]
+    fn a_prefix_that_is_not_the_knob_name_is_refused() {
+        let e = parse_knobs("knob draftmin 0 1 current=0 metric=code_tps match=prefix:dmin template=draftmin").unwrap_err();
+        assert!(e.contains("must equal the knob name"), "{e}");
+        assert!(parse_knobs("knob draftmin 0 1 current=0 metric=code_tps match=prefix:draftmin template=draftmin").is_ok());
+        assert!(parse_knobs("knob chunk 32 64 current=64 metric=sum_s match=group:contend template=none").is_ok(), "group matchers are free");
     }
 }

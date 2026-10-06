@@ -96,6 +96,17 @@ pub fn agenda(obs: &Observation, lessons: &Lessons, knobs: &[Knob], cons: &[Cons
             items.push(it);
         }
     }
+    // R5 for a whole knob: once one value is PROVEN better than the current one, the knob is decided (ship that
+    // value first). Other values of it wait: measured against the old current they would answer a stale question;
+    // after the ship they re-open against the new current.
+    let decided: Vec<(String, String)> = items.iter().filter(|i| i.kind == Kind::Settled && i.why.starts_with("PROVEN"))
+        .map(|i| (i.knob.clone(), i.value.clone())).collect();
+    for it in items.iter_mut().filter(|i| i.kind == Kind::Challenger) {
+        if let Some((_, v)) = decided.iter().find(|(k, _)| *k == it.knob) {
+            it.kind = Kind::Settled; it.score = 0.05;
+            it.why = format!("knob decided: {}={} is a PROVEN ship candidate; this value re-opens against the new current after it ships", it.knob, v);
+        }
+    }
     items.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
         .then(a.knob.cmp(&b.knob)).then(a.value.cmp(&b.value)).then(a.pred.cmp(&b.pred)));
     items
@@ -192,8 +203,12 @@ mod tests {
         let it = a.iter().find(|i| i.knob == "draft" && i.value == "5").unwrap();
         assert_eq!(it.kind, Kind::Settled, "replicated decisive pass: {}", it.why);
         assert!(it.why.starts_with("PROVEN"), "{}", it.why);
-        // the other draft values are untouched by draft5's proof
-        assert_eq!(a.iter().find(|i| i.knob == "draft" && i.value == "3").unwrap().kind, Kind::Challenger);
+        // the knob is decided: other draft values wait for draft5 to ship, then re-open against the new current
+        let other = a.iter().find(|i| i.knob == "draft" && i.value == "3").unwrap();
+        assert_eq!(other.kind, Kind::Settled, "{}", other.why);
+        assert!(other.why.starts_with("knob decided: draft=5 is a PROVEN ship candidate"), "{}", other.why);
+        // other knobs are untouched
+        assert_eq!(a.iter().find(|i| i.knob == "ub" && i.value == "128").unwrap().kind, Kind::Challenger);
     }
 
     #[test]
