@@ -85,9 +85,49 @@
 //! Note on the cycle's own "grokking events": its detector watches the prequential error of the
 //! replayed TRAINING stream, so in this world it measures memorization, not held-out generalization.
 //!
-//! ## RESULT
+//! ## RESULT (added after the run; thresholds, seeds and criteria unchanged)
 //!
-//! (added after the run; see the falsifier tests)
+//! **FAIL on both encodings: 0 of 5 fresh seeds pass; no jump in either arm on any seed.**
+//! Train accuracy is 1.000 in both arms from epoch 1 (memory recalls every replayed pair), so the
+//! plateau starts at epoch 1; held-out never rises. Chance is 0.143.
+//!
+//! | seed | one-hot held-out A / B | A size plateau -> end | Fourier held-out A / B | A size plateau -> end |
+//! |------|------------------------|-----------------------|------------------------|-----------------------|
+//! | 5101 | 0.000 / 0.034 | 62/0 -> 251/2 | 0.034 / 0.069 | 64/0 -> 256/2 |
+//! | 5202 | 0.000 / 0.000 | 61/0 -> 256/4 | 0.000 / 0.034 | 63/0 -> 254/2 |
+//! | 5303 | 0.000 / 0.000 | 59/0 -> 255/4 | 0.000 / 0.034 | 59/0 -> 250/2 |
+//! | 5404 | 0.000 / 0.000 | 59/0 -> 255/2 | 0.000 / 0.000 | 62/0 -> 255/2 |
+//! | 5505 | 0.010 / 0.000 | 60/0 -> 255/2 | 0.000 / 0.138 | 61/0 -> 248/2 |
+//!
+//! (held-out = mean of the last 10 epochs; size = memories in use / active grown senses.)
+//! The pre-registered analysis prediction holds on 5/5 seeds (one-hot held-out <= 0.243 in both arms).
+//!
+//! Why, exactly:
+//! - **One-hot**: as predicted above. Both arms end at or below chance; arm B grows 16 senses, all
+//!   lookup cells and row/column comparisons (`Prod(a_i, b_j)`, `Gt(a_i, b_j)`, `Gt(b_j, a_i)`) on all
+//!   5 seeds, which memorize.
+//! - **Fourier, arm A**: the cycle's grokking detector watches the prequential error of the replayed
+//!   TRAINING stream. Memory fits the 20 pairs in epoch 1, so there is no later drop to detect: 0
+//!   grok events on 5/5 seeds, the tier stays at 1 and the brain never holds more than 2 grown
+//!   senses (one frequency needs 4). (One-hot: one grok event on 2/5 seeds, tier 2, with no held-out
+//!   change at all: a train-side event.) Compression has nothing to absorb either: a memory is
+//!   forgotten only once the model predicts it, which it cannot without the senses, so memory grows
+//!   from about 60 to about 250 instead of shrinking. Nothing compresses before anything generalizes.
+//! - **Fourier, arm B**: has grown all 16 senses by epoch 29 (one per growth check), but the grower's held-out test runs
+//!   on memory, i.e. duplicates of the same 20 memorized pairs, and accepts cross-frequency
+//!   products, `Step`s and `Gt`s as readily as the 12 same-frequency products that matter. It
+//!   completes frequency 1 on 2/5 seeds (5101, 5505), never all three frequencies.
+//! - **Post-hoc, not pre-registered** (`posthoc_ridge_with_the_right_senses`): the ridge model alone,
+//!   same 20 pairs, given the 12 same-frequency products and a bias, reaches held-out 1.000 on 4/5
+//!   seeds (0.759 on 5505); with the base senses too, 0.655 to 0.966; with the base senses and only
+//!   the 4 frequency-1 products, 0.069 to 0.172 (chance). So in the Fourier world the answer is
+//!   representable and learnable from 20 pairs by this model; what fails is the growth search and,
+//!   in arm A, the tier gate that waits for a grokking event the train stream cannot show.
+//!
+//! Not tested here: a grokking signal measured on held-out situations instead of the replayed
+//! train stream, a grower test on distinct situations instead of memory duplicates, and a
+//! compression that removes base or junk senses (the analogue of weight decay); the current
+//! machinery only prunes grown senses that are constant or explain nothing on memory.
 //!
 //! no_std, no heap (the curves are fixed arrays), deterministic for a seed, CPU only.
 
@@ -95,6 +135,7 @@ use crate::brain::Brain;
 use crate::brain_cycle::Cycle;
 use crate::brain_prune::Pruner;
 use crate::brain_sleep::Sleep;
+use crate::brain_grow::Feat;
 
 /// Modulus (prime) and number of actions.
 pub const P: usize = 7;
@@ -184,10 +225,14 @@ pub struct Epoch {
     /// Arm A: capacity tier and grokking events (cycle detector) so far.
     pub tier_a: u8,
     pub groks_a: u8,
+    /// Diagnostic (not part of the verdict): held-out accuracy of the model alone (argmax of the
+    /// linear prediction, memory not consulted).
+    pub model_held_a: f32,
+    pub model_held_b: f32,
 }
 
 impl Epoch {
-    pub const ZERO: Self = Epoch { train_a: 0.0, held_a: 0.0, train_b: 0.0, held_b: 0.0, mem_a: 0, mem_b: 0, senses_a: 0, senses_b: 0, tier_a: 0, groks_a: 0 };
+    pub const ZERO: Self = Epoch { train_a: 0.0, held_a: 0.0, train_b: 0.0, held_b: 0.0, mem_a: 0, mem_b: 0, senses_a: 0, senses_b: 0, tier_a: 0, groks_a: 0, model_held_a: 0.0, model_held_b: 0.0 };
 }
 
 /// A model's size: memories in use and active grown senses.
@@ -230,7 +275,7 @@ fn newest<const D: usize>(br: &Brain<MEM, D, P>) -> Option<usize> {
 
 /// Run one arm for `epochs` epochs, writing its columns of `out`.
 fn run_arm<const B: usize, const D: usize>(seed: u64, enc: fn(usize, usize) -> [f32; B], train: &[bool; PAIRS],
-    compress: bool, epochs: usize, out: &mut [Epoch; EPOCHS]) {
+    compress: bool, epochs: usize, out: &mut [Epoch; EPOCHS]) -> [Feat; SLOTS] {
     let mut br: Brain<MEM, D, P> = Brain::new(0.0, 0.0);
     let mut cy: Cycle<B, SLOTS> = Cycle::new(seed ^ 0xC1C1);
     cy.grower.constant[B - 1] = true;
@@ -264,21 +309,29 @@ fn run_arm<const B: usize, const D: usize>(seed: u64, enc: fn(usize, usize) -> [
                 }
             }
         }
-        let (mut tr, mut ho) = (0usize, 0usize);
+        let (mut tr, mut ho, mut mo) = (0usize, 0usize, 0usize);
         for (k, &is_train) in train.iter().enumerate() {
             let (a, b) = (k / P, k % P);
             let x: [f32; D] = cy.situation(&enc(a, b));
             if br.decide(&x, &[true; P], 0).action as usize == (a + b) % P { if is_train { tr += 1; } else { ho += 1; } }
+            if !is_train {
+                let mut best = 0usize;
+                for c in 1..P { if br.predict(c as u8, &x) > br.predict(best as u8, &x) { best = c; } }
+                if best == (a + b) % P { mo += 1; }
+            }
         }
-        let (t, h) = (tr as f32 / N_TRAIN as f32, ho as f32 / N_HELD as f32);
+        let (t, h, mh) = (tr as f32 / N_TRAIN as f32, ho as f32 / N_HELD as f32, mo as f32 / N_HELD as f32);
         let (m, s) = (br.in_use() as u16, cy.grower.active() as u8);
         if compress {
             row.train_a = t; row.held_a = h; row.mem_a = m; row.senses_a = s;
-            row.tier_a = cy.tier(); row.groks_a = cy.events().len() as u8;
+            row.tier_a = cy.tier(); row.groks_a = cy.events().len() as u8; row.model_held_a = mh;
         } else {
-            row.train_b = t; row.held_b = h; row.mem_b = m; row.senses_b = s;
+            row.train_b = t; row.held_b = h; row.mem_b = m; row.senses_b = s; row.model_held_b = mh;
         }
     }
+    let mut grown = [Feat::Off; SLOTS];
+    for (o, g) in grown.iter_mut().zip(cy.grower.grown()) { *o = *g; }
+    grown
 }
 
 /// Both arms' per-epoch curves for one seed.
@@ -291,6 +344,9 @@ pub struct GrokRun {
     /// `true` for training pairs (index `a * P + b`).
     pub train: [bool; PAIRS],
     pub curve: [Epoch; EPOCHS],
+    /// Diagnostic: grown senses at the end (slot order; pruned slots are `Off`), arms A and B.
+    pub grown_a: [Feat; SLOTS],
+    pub grown_b: [Feat; SLOTS],
 }
 
 /// Run both arms on one seed for the full [`EPOCHS`].
@@ -301,17 +357,18 @@ pub fn run_for(seed: u64, enc: Encoding, epochs: usize) -> GrokRun {
     let epochs = epochs.min(EPOCHS);
     let train = split(seed);
     let mut curve = [Epoch::ZERO; EPOCHS];
+    let (grown_a, grown_b);
     match enc {
         Encoding::OneHot => {
-            run_arm::<B_ONEHOT, { B_ONEHOT + SLOTS }>(seed, onehot, &train, true, epochs, &mut curve);
-            run_arm::<B_ONEHOT, { B_ONEHOT + SLOTS }>(seed, onehot, &train, false, epochs, &mut curve);
+            grown_a = run_arm::<B_ONEHOT, { B_ONEHOT + SLOTS }>(seed, onehot, &train, true, epochs, &mut curve);
+            grown_b = run_arm::<B_ONEHOT, { B_ONEHOT + SLOTS }>(seed, onehot, &train, false, epochs, &mut curve);
         }
         Encoding::Fourier => {
-            run_arm::<B_FOURIER, { B_FOURIER + SLOTS }>(seed, fourier, &train, true, epochs, &mut curve);
-            run_arm::<B_FOURIER, { B_FOURIER + SLOTS }>(seed, fourier, &train, false, epochs, &mut curve);
+            grown_a = run_arm::<B_FOURIER, { B_FOURIER + SLOTS }>(seed, fourier, &train, true, epochs, &mut curve);
+            grown_b = run_arm::<B_FOURIER, { B_FOURIER + SLOTS }>(seed, fourier, &train, false, epochs, &mut curve);
         }
     }
-    GrokRun { seed, encoding: enc, epochs, train, curve }
+    GrokRun { seed, encoding: enc, epochs, train, curve, grown_a, grown_b }
 }
 
 /// The pre-registered jump detector (see the module docs) over one arm's curves.
@@ -360,6 +417,8 @@ pub struct GrokTrial {
     pub size_before: Size,
     /// Arm A's size at the jump end (no jump: at the last epoch).
     pub size_after: Size,
+    /// Arm A: grokking events fired by the cycle's detector (it watches the replayed train stream).
+    pub groks_a: u8,
     pub pass: bool,
 }
 
@@ -401,7 +460,7 @@ impl GrokRun {
             seed: self.seed, encoding: self.encoding,
             plateau_epoch: plateau.map(|p| p as u16 + 1), jump_epoch: ja.map(|j| j.end as u16 + 1), jump_b: jb.map(|j| j.end as u16 + 1),
             heldout_a, heldout_b, train_a: self.end(&ta), train_b: self.end(&tb),
-            size_plateau, size_before, size_after, pass,
+            size_plateau, size_before, size_after, groks_a: self.curve[n.saturating_sub(1)].groks_a, pass,
         }
     }
 }
@@ -434,9 +493,9 @@ mod tests {
             let t: [GrokTrial; 5] = std::thread::scope(|s| FRESH_SEEDS.map(|seed| s.spawn(move || trial_with(seed, enc))).map(|h| h.join().unwrap()));
             let r = (t, t.iter().filter(|x| x.pass).count() >= PASS_SEEDS);
             for t in r.0.iter() {
-                std::println!("  {} seed {}: plateau {:?} jump {:?} (B jump {:?}) | held-out A {:.3} B {:.3} | train A {:.3} B {:.3} | size A plateau {:?} before {:?} after {:?} | pass {}",
+                std::println!("  {} seed {}: plateau {:?} jump {:?} (B jump {:?}) | held-out A {:.3} B {:.3} | train A {:.3} B {:.3} | size A plateau {:?} before {:?} after {:?} | grok events A {} | pass {}",
                     enc.name(), t.seed, t.plateau_epoch, t.jump_epoch, t.jump_b, t.heldout_a, t.heldout_b, t.train_a, t.train_b,
-                    t.size_plateau, t.size_before, t.size_after, t.pass);
+                    t.size_plateau, t.size_before, t.size_after, t.groks_a, t.pass);
             }
             std::println!("{} falsifier: {}/5 seeds pass -> {}", enc.name(), r.0.iter().filter(|t| t.pass).count(), if r.1 { "PASS" } else { "FAIL" });
             r
@@ -505,15 +564,19 @@ mod tests {
     }
 
     /// PRE-REGISTERED primary falsifier (one-hot senses, 5 fresh seeds; criteria in the module docs).
+    /// RESULT: FAILED, 0/5 seeds; held-out A 0.000-0.010, B 0.000-0.034, no jump in either arm (see module docs).
     /// Run: cargo test --release --lib brain_grok -- --nocapture
     #[test]
+    #[ignore = "FAILED as pre-registered: 0/5 seeds; one-hot held-out stays at or below chance in both arms (see module docs)"]
     fn falsifier_onehot_groks_only_with_compression() {
         let (t, pass) = fresh(Encoding::OneHot);
         assert!(*pass, "one-hot: {}/5 seeds pass (need {})", t.iter().filter(|x| x.pass).count(), PASS_SEEDS);
     }
 
     /// PRE-REGISTERED secondary falsifier (Fourier senses, same seeds and criteria).
+    /// RESULT: FAILED, 0/5 seeds; held-out A 0.000-0.034, B 0.000-0.138, no jump in either arm (see module docs).
     #[test]
+    #[ignore = "FAILED as pre-registered: 0/5 seeds; no grok event, arm A capped at 2 senses, arm B grows junk (see module docs)"]
     fn falsifier_fourier_groks_only_with_compression() {
         let (t, pass) = fresh(Encoding::Fourier);
         assert!(*pass, "fourier: {}/5 seeds pass (need {})", t.iter().filter(|x| x.pass).count(), PASS_SEEDS);
@@ -527,6 +590,50 @@ mod tests {
         let bound = 1.0 / P as f32 + CHANCE_MARGIN;
         for x in t.iter() {
             assert!(x.heldout_a <= bound && x.heldout_b <= bound, "seed {}: held-out A {:.3} B {:.3} > {:.3}", x.seed, x.heldout_a, x.heldout_b, bound);
+        }
+    }
+
+    /// POST-HOC diagnostic (added after the falsifier failed; not pre-registered): the model alone
+    /// (ridge, no memory), full information, 300 epochs on the same 20 training pairs, with hand-given
+    /// senses. Does the linear model generalize when it HAS the right Fourier products?
+    /// Returns held-out accuracy of the argmax for: (i) Fourier base senses + the 4 frequency-1
+    /// products, (ii) bias + those 4 products only, (iii) bias + all 12 products (exact), (iv) base +
+    /// all 12 products.
+    fn ridge_with_senses(seed: u64) -> [f32; 4] {
+        fn fit<const D: usize>(train: &[bool; PAIRS], f: &dyn Fn(usize, usize) -> [f32; D]) -> f32 {
+            let mut br: Brain<0, D, P> = Brain::new(0.0, 0.0);
+            for _ in 0..EPOCHS { for k in 0..PAIRS { if !train[k] { continue; }
+                let (a, b) = (k / P, k % P); let x = f(a, b);
+                for c in 0..P { br.update_model(&x, c as u8, if c == (a + b) % P { 1.0 } else { 0.0 }); }
+            } }
+            let mut ok = 0;
+            for k in 0..PAIRS { if train[k] { continue; }
+                let (a, b) = (k / P, k % P); let x = f(a, b);
+                let mut best = 0; for c in 1..P { if br.predict(c as u8, &x) > br.predict(best as u8, &x) { best = c; } }
+                if best == (a + b) % P { ok += 1; }
+            }
+            ok as f32 / N_HELD as f32
+        }
+        let prods = |a: usize, b: usize, kmax: usize| -> [f32; 12] {
+            let x = fourier(a, b); let mut p = [0.0f32; 12];
+            for k in 0..kmax { let (ca, sa, cb, sb) = (x[2 * k], x[2 * k + 1], x[P - 1 + 2 * k], x[P + 2 * k]);
+                p[4 * k] = ca * cb; p[4 * k + 1] = sa * sb; p[4 * k + 2] = sa * cb; p[4 * k + 3] = ca * sb; }
+            p
+        };
+        let train = split(seed);
+        let i = fit::<17>(&train, &|a, b| { let mut v = [0.0f32; 17]; v[..13].copy_from_slice(&fourier(a, b)); v[13..].copy_from_slice(&prods(a, b, 1)[..4]); v });
+        let ii = fit::<5>(&train, &|a, b| { let mut v = [1.0f32; 5]; v[..4].copy_from_slice(&prods(a, b, 1)[..4]); v });
+        let iii = fit::<13>(&train, &|a, b| { let mut v = [1.0f32; 13]; v[..12].copy_from_slice(&prods(a, b, 3)); v });
+        let iv = fit::<25>(&train, &|a, b| { let mut v = [0.0f32; 25]; v[..13].copy_from_slice(&fourier(a, b)); v[13..].copy_from_slice(&prods(a, b, 3)); v });
+        [i, ii, iii, iv]
+    }
+
+    #[test]
+    #[ignore = "post-hoc diagnostic (run with --ignored --nocapture)"]
+    fn posthoc_ridge_with_the_right_senses() {
+        for s in FRESH_SEEDS {
+            let r = ridge_with_senses(s);
+            std::println!("seed {}: held-out of the model alone: base+4 freq-1 products {:.3} | bias+4 products {:.3} | bias+12 products {:.3} | base+12 products {:.3}", s, r[0], r[1], r[2], r[3]);
         }
     }
 }

@@ -5570,9 +5570,9 @@ fn cmd_brain_grok(args: &[String]) {
     let ep = |e: Option<u16>| e.map(|v| v.to_string()).unwrap_or_else(|| "none".into());
     let ep_json = |e: Option<u16>| e.map(|v| v.to_string()).unwrap_or_else(|| "null".into());
     let trial_json = |t: &GrokTrial| format!(
-        "{{\"seed\":{},\"encoding\":\"{}\",\"plateau_epoch\":{},\"jump_epoch\":{},\"jump_b\":{},\"heldout_a\":{:.4},\"heldout_b\":{:.4},\"train_a\":{:.4},\"train_b\":{:.4},\"size_plateau\":{{\"memories\":{},\"senses\":{}}},\"size_before\":{{\"memories\":{},\"senses\":{}}},\"size_after\":{{\"memories\":{},\"senses\":{}}},\"pass\":{}}}",
+        "{{\"seed\":{},\"encoding\":\"{}\",\"plateau_epoch\":{},\"jump_epoch\":{},\"jump_b\":{},\"heldout_a\":{:.4},\"heldout_b\":{:.4},\"train_a\":{:.4},\"train_b\":{:.4},\"size_plateau\":{{\"memories\":{},\"senses\":{}}},\"size_before\":{{\"memories\":{},\"senses\":{}}},\"size_after\":{{\"memories\":{},\"senses\":{}}},\"groks_a\":{},\"pass\":{}}}",
         t.seed, t.encoding.name(), ep_json(t.plateau_epoch), ep_json(t.jump_epoch), ep_json(t.jump_b), t.heldout_a, t.heldout_b, t.train_a, t.train_b,
-        t.size_plateau.memories, t.size_plateau.senses, t.size_before.memories, t.size_before.senses, t.size_after.memories, t.size_after.senses, t.pass);
+        t.size_plateau.memories, t.size_plateau.senses, t.size_before.memories, t.size_before.senses, t.size_after.memories, t.size_after.senses, t.groks_a, t.pass);
     let header = format!("(a + b) mod {}, {} senses; {} of {} pairs trained (fixed), {} held out; {} epochs; full information",
         g::P, enc.name(), g::N_TRAIN, g::PAIRS, g::N_HELD, g::EPOCHS);
     let rule = format!("pre-registered: A rises >= {:.0} pts within {} epochs after >= {} epochs of train >= {:.2}, sustained; B has no jump and ends >= {:.0} pts below A; PASS iff >= {}/5 fresh seeds",
@@ -5589,10 +5589,10 @@ fn cmd_brain_grok(args: &[String]) {
         }
         println!("struktura brain grok --all: {}", header);
         println!("  {}", rule);
-        println!("  {:>5} | {:>7} {:>5} {:>6} | {:>7} {:>7} | {:>7} {:>7} | {:>9} {:>9} {:>9} | pass", "seed", "plateau", "jump", "B jump", "held A", "held B", "train A", "train B", "size plat", "size pre", "size post");
+        println!("  {:>5} | {:>7} {:>5} {:>6} | {:>7} {:>7} | {:>7} {:>7} | {:>9} {:>9} {:>9} | {:>5} | pass", "seed", "plateau", "jump", "B jump", "held A", "held B", "train A", "train B", "size plat", "size pre", "size post", "groks");
         for t in trials.iter() {
-            println!("  {:>5} | {:>7} {:>5} {:>6} | {:>7.3} {:>7.3} | {:>7.3} {:>7.3} | {:>9} {:>9} {:>9} | {}", t.seed, ep(t.plateau_epoch), ep(t.jump_epoch), ep(t.jump_b),
-                t.heldout_a, t.heldout_b, t.train_a, t.train_b, sz(&t.size_plateau), sz(&t.size_before), sz(&t.size_after), if t.pass { "PASS" } else { "fail" });
+            println!("  {:>5} | {:>7} {:>5} {:>6} | {:>7.3} {:>7.3} | {:>7.3} {:>7.3} | {:>9} {:>9} {:>9} | {:>5} | {}", t.seed, ep(t.plateau_epoch), ep(t.jump_epoch), ep(t.jump_b),
+                t.heldout_a, t.heldout_b, t.train_a, t.train_b, sz(&t.size_plateau), sz(&t.size_before), sz(&t.size_after), t.groks_a, if t.pass { "PASS" } else { "fail" });
         }
         println!("  sizes = memories in use / active grown senses of arm A; held/train = mean of the last {} epochs", g::END);
         println!("verdict ({}): {}/5 seeds pass -> {}", enc.name(), n, if pass { "PASS" } else { "FAIL" });
@@ -5602,23 +5602,28 @@ fn cmd_brain_grok(args: &[String]) {
     let t = r.verdict();
     if json {
         let rows: Vec<String> = r.curve[..r.epochs].iter().enumerate().map(|(i, e)| format!(
-            "{{\"epoch\":{},\"train_a\":{:.4},\"held_a\":{:.4},\"mem_a\":{},\"senses_a\":{},\"tier_a\":{},\"groks_a\":{},\"train_b\":{:.4},\"held_b\":{:.4},\"mem_b\":{},\"senses_b\":{}}}",
-            i + 1, e.train_a, e.held_a, e.mem_a, e.senses_a, e.tier_a, e.groks_a, e.train_b, e.held_b, e.mem_b, e.senses_b)).collect();
+            "{{\"epoch\":{},\"train_a\":{:.4},\"held_a\":{:.4},\"model_held_a\":{:.4},\"mem_a\":{},\"senses_a\":{},\"tier_a\":{},\"groks_a\":{},\"train_b\":{:.4},\"held_b\":{:.4},\"model_held_b\":{:.4},\"mem_b\":{},\"senses_b\":{}}}",
+            i + 1, e.train_a, e.held_a, e.model_held_a, e.mem_a, e.senses_a, e.tier_a, e.groks_a, e.train_b, e.held_b, e.model_held_b, e.mem_b, e.senses_b)).collect();
         println!("{{\"world\":\"(a+b) mod {}\",\"encoding\":\"{}\",\"seed\":{},\"train_pairs\":{},\"held_pairs\":{},\"epochs\":[{}],\"verdict\":{}}}",
             g::P, enc.name(), seed, g::N_TRAIN, g::N_HELD, rows.join(","), trial_json(&t));
         return;
     }
     println!("struktura brain grok: {} (seed {})", header, seed);
     println!("  arm A = brain + growth + compression (cycle, pruner, sleep); arm B = same brain + growth, compression off");
-    println!("  {:>5} | {:>7} {:>7} {:>5} {:>4} {:>4} {:>4} | {:>7} {:>7} {:>5} {:>4}", "epoch", "A train", "A held", "mem", "sens", "tier", "grok", "B train", "B held", "mem", "sens");
+    println!("  {:>5} | {:>7} {:>7} {:>7} {:>5} {:>4} {:>4} {:>4} | {:>7} {:>7} {:>7} {:>5} {:>4}", "epoch", "A train", "A held", "A model", "mem", "sens", "tier", "grok", "B train", "B held", "B model", "mem", "sens");
     for (i, e) in r.curve[..r.epochs].iter().enumerate() {
         if (i + 1) % every != 0 && i + 1 != r.epochs && i != 0 { continue; }
-        println!("  {:>5} | {:>7.3} {:>7.3} {:>5} {:>4} {:>4} {:>4} | {:>7.3} {:>7.3} {:>5} {:>4}", i + 1, e.train_a, e.held_a, e.mem_a, e.senses_a, e.tier_a, e.groks_a, e.train_b, e.held_b, e.mem_b, e.senses_b);
+        println!("  {:>5} | {:>7.3} {:>7.3} {:>7.3} {:>5} {:>4} {:>4} {:>4} | {:>7.3} {:>7.3} {:>7.3} {:>5} {:>4}", i + 1, e.train_a, e.held_a, e.model_held_a, e.mem_a, e.senses_a, e.tier_a, e.groks_a, e.train_b, e.held_b, e.model_held_b, e.mem_b, e.senses_b);
     }
     println!("verdict ({}):", rule);
     println!("  arm A: train plateau from epoch {}, jump completed at epoch {} | arm B jump: {}", ep(t.plateau_epoch), ep(t.jump_epoch), ep(t.jump_b));
     println!("  held-out (mean last {} epochs): A {:.3}  B {:.3}   train: A {:.3}  B {:.3}   chance {:.3}", g::END, t.heldout_a, t.heldout_b, t.train_a, t.train_b, 1.0 / g::P as f32);
     println!("  arm A size, memories/senses: plateau {} -> jump start {} -> jump end (or final) {}", sz(&t.size_plateau), sz(&t.size_before), sz(&t.size_after));
+    let feats = |v: &[struktura::brain_grow::Feat]| { let s: Vec<String> = v.iter().filter(|f| **f != struktura::brain_grow::Feat::Off).map(|f| format!("{:?}", f)).collect(); if s.is_empty() { "none".to_string() } else { s.join(" ") } };
+    println!("  grown senses at the end (base index: onehot a=0..{p1}, b={p}..{p2}, 1={bias1}; fourier cos/sin pairs, a=0..{f1}, b={f2}..):", p1 = g::P - 1, p = g::P, p2 = 2 * g::P - 1, bias1 = 2 * g::P, f1 = g::P - 2, f2 = g::P - 1);
+    println!("    A: {}", feats(&r.grown_a));
+    println!("    B: {}", feats(&r.grown_b));
+    println!("  (A model / B model = held-out accuracy of the linear model alone, memory not consulted: a diagnostic, not part of the verdict)");
     println!("  seed {}: {}", seed, if t.pass { "PASS" } else { "FAIL" });
 }
 
