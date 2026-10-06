@@ -5459,6 +5459,7 @@ fn pulse_load(path: &str, archive: Option<&str>) -> String {
 fn cmd_brain(args: &[String]) {
     use struktura::brain::Brain;
     if args.get(2).map(|s| s.as_str()) == Some("grow") { cmd_brain_grow(); return; }
+    if matches!(args.get(2).map(|s| s.as_str()), Some("init" | "decide" | "learn" | "stats")) { cmd_brain_state(args); return; }
     if args.get(2).map(|s| s.as_str()) != Some("demo") {
         println!("struktura brain demo   native decision brain (no heap, no model weights to ship): memory + linear model,");
         println!("                       learning a rover fault-response policy online from its own outcomes, with an ablation");
@@ -5558,4 +5559,77 @@ fn cmd_brain_grow() {
         }
     }
     println!("  right-action rate, last 1000 decisions: growing brain {:.1}%  vs same brain without growth {:.1}%", ok_g as f32 / 10.0, ok_p as f32 / 10.0);
+}
+
+/// Stateful brain for other programs (Helix organs, shell): one checksummed state file.
+fn cmd_brain_state(args: &[String]) {
+    use struktura::brain::Brain;
+    type B = Brain<256, 16, 8>;
+    let sub = args.get(2).map(|s| s.as_str()).unwrap_or("");
+    let opt = |name: &str| -> Option<String> { args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned() };
+    let num = |name: &str, d: f64| -> f64 { opt(name).and_then(|v| v.parse().ok()).unwrap_or(d) };
+    let Some(state) = opt("--state") else { eprintln!("brain {}: --state FILE required", sub); process::exit(2) };
+    let meta_path = format!("{}.meta", state);
+    let load = || -> (Box<B>, usize, usize) {
+        let bytes = match std::fs::read(&state) { Ok(b) => b, Err(e) => { eprintln!("brain: {}: {} (run `struktura brain init` first)", state, e); process::exit(2) } };
+        let br = match B::from_bytes(&bytes) { Some(b) => Box::new(b), None => { eprintln!("brain: {}: damaged or incompatible state (magic/version/dims/CRC); refusing to load", state); process::exit(2) } };
+        let meta = std::fs::read_to_string(&meta_path).unwrap_or_default();
+        let get = |k: &str| meta.lines().find_map(|l| l.strip_prefix(k).and_then(|v| v.trim().parse::<usize>().ok()));
+        (br, get("features ").unwrap_or(16), get("actions ").unwrap_or(8))
+    };
+    let save = |br: &B| {
+        let mut buf = vec![0u8; B::state_bytes()];
+        let n = br.to_bytes(&mut buf).expect("buffer sized by state_bytes");
+        let tmp = format!("{}.tmp", state);
+        if std::fs::write(&tmp, &buf[..n]).and_then(|_| std::fs::rename(&tmp, &state)).is_err() { eprintln!("brain: cannot write {}", state); process::exit(2); }
+    };
+    let parse_x = |features: usize| -> [f32; 16] {
+        let Some(s) = opt("--x") else { eprintln!("brain: --x v1,v2,... required"); process::exit(2) };
+        let v: Vec<f32> = s.split(',').filter_map(|t| t.trim().parse().ok()).collect();
+        if v.len() != features || v.iter().any(|x| !x.is_finite()) { eprintln!("brain: --x needs exactly {} finite numbers (got {})", features, v.len()); process::exit(2); }
+        let mut x = [0.0f32; 16]; x[..features].copy_from_slice(&v); x
+    };
+    match sub {
+        "init" => {
+            let (f, a) = (num("--features", 0.0) as usize, num("--actions", 0.0) as usize);
+            if !(1..=16).contains(&f) || !(2..=8).contains(&a) { eprintln!("brain init: --features 1..16 and --actions 2..8"); process::exit(2); }
+            if std::path::Path::new(&state).exists() && !args.iter().any(|x| x == "--force") { eprintln!("brain init: {} exists (pass --force to replace)", state); process::exit(2); }
+            let br: Box<B> = Box::new(B::new(num("--explore", 0.3) as f32, num("--min-evidence", 0.5) as f32));
+            save(&br);
+            if std::fs::write(&meta_path, format!("features {}\nactions {}\n", f, a)).is_err() { eprintln!("brain: cannot write {}", meta_path); process::exit(2); }
+            println!("{{\"event\":\"init\",\"state\":\"{}\",\"features\":{},\"actions\":{},\"bytes\":{}}}", state, f, a, B::state_bytes());
+        }
+        "decide" => {
+            let (br, f, a) = load();
+            let x = parse_x(f);
+            let mut allowed = [false; 8];
+            match opt("--allow") {
+                Some(s) => for t in s.split(',') { if let Ok(k) = t.trim().parse::<usize>() { if k < a { allowed[k] = true; } } },
+                None => for k in 0..a { allowed[k] = true; },
+            }
+            let safe = num("--safe", 0.0) as u8;
+            if safe as usize >= a { eprintln!("brain decide: --safe must be < actions ({})", a); process::exit(2); }
+            let d = br.decide(&x, &allowed, safe);
+            let cites: Vec<String> = (0..d.n_cited as usize).map(|k| d.cited[k].to_string()).collect();
+            println!("{{\"event\":\"decide\",\"action\":{},\"abstained\":{},\"expected\":{:.4},\"bonus\":{:.4},\"evidence\":{:.2},\"cites\":[{}]}}",
+                d.action, d.abstained, d.expected, d.bonus, d.evidence, cites.join(","));
+        }
+        "learn" => {
+            let (mut br, f, a) = load();
+            let x = parse_x(f);
+            let act = num("--action", -1.0);
+            let reward = num("--reward", f64::NAN);
+            if act < 0.0 || act as usize >= a || !reward.is_finite() { eprintln!("brain learn: --action 0..{} and a finite --reward required", a - 1); process::exit(2); }
+            let slot = br.learn(&x, act as u8, reward as f32);
+            save(&br);
+            println!("{{\"event\":\"learn\",\"slot\":{},\"memories\":{},\"clock\":{}}}", slot.map(|s| s.to_string()).unwrap_or("null".into()), br.len(), br.clock());
+        }
+        "stats" => {
+            let (br, f, a) = load();
+            let pulls: Vec<String> = (0..a).map(|k| br.pulls(k).to_string()).collect();
+            println!("{{\"event\":\"stats\",\"features\":{},\"actions\":{},\"memories\":{},\"capacity\":{},\"clock\":{},\"pulls\":[{}],\"explore\":{},\"min_evidence\":{}}}",
+                f, a, br.len(), B::CAPACITY, br.clock(), pulls.join(","), br.explore, br.min_evidence);
+        }
+        _ => { eprintln!("brain: init | decide | learn | stats (with --state FILE)"); process::exit(2); }
+    }
 }

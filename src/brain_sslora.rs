@@ -1,4 +1,9 @@
-//! SS-LoRA / KSS-LoRA (Koščák & Koščák) stochastic sparse low-rank adapter for the brain.
+//! SS-LoRA (Koščák) stochastic sparse low-rank adapter for the brain.
+//!
+//! Scope, stated exactly: this implements the SS-LoRA core (a Bernoulli mask over
+//! low-rank update components with 1/(1-p) rescaling). It does NOT implement
+//! KSS-LoRA, the Koščák Gamma Theorem's one-parameter, theorem-derived fix (negative
+//! Koščák coefficient), whose formula is not part of this repository.
 //!
 //! The brain's own model is one small ridge regression per action, so an action
 //! that has been tried a few times learns alone and overfits its few outcomes.
