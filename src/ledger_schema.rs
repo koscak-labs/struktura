@@ -136,7 +136,8 @@ pub const SCHEMA: &[KindSchema] = &[
     // Read by `lab` and the ouroboros knobs.
     nuwa("constraint", &[req("knob", Str), req("op", Str), req("value", Any)]),
     // lab-q.sh, at submit (the leadership arbiter's source of truth for what was queued, and by whom).
-    nuwa("queued", &[req("job", Str), req("ts", Num), req("names", Arr), opt("pred_file", Str), opt("designed_by", Str)]),
+    nuwa("queued", &[req("job", Str), req("ts", Num), req("names", Arr), opt("pred_file", Str), opt("designed_by", Str),
+        opt("src", Str)]), // src:"daemon" = queued from inside a daemon tick (never wakes the daemon)
     // ---- Fuxi: judging / learning (envelope only for now) ----
     fuxi("brain", &[]),
     fuxi("forecast", &[]),
