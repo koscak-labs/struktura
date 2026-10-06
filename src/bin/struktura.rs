@@ -411,6 +411,7 @@ fn main() {
         "replay" => cmd_replay(&args),
         "pulse" => cmd_pulse(&args),
         "arms" => cmd_arms(&args),
+        "lab" => cmd_lab(&args),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -4980,5 +4981,74 @@ fn cmd_arms(args: &[String]) {
         }
         if r.dominant.is_empty() { println!("  no dominant arm (needs: never loses, never inconclusive, wins at least once)"); }
         for (g, a) in &r.dominant { println!("  DOMINANT: {}", name(g, a)); }
+    }
+}
+
+fn cmd_lab(args: &[String]) {
+    use struktura::lab::analyze;
+    if args.len() < 3 || args[2] == "--help" {
+        println!("struktura lab <ledger.jsonl> [--json | --md] [--fragile]");
+        println!("  What an experiment ledger has established, and how well the lab predicts its own results:");
+        println!("  noise floor (calibration CV), latest verdict per prediction (void supersedes, never a fail),");
+        println!("  per-file status (CONFIRMED / FALSIFIED / MIXED / VOID), margins vs thresholds, fragile verdicts");
+        println!("  (inside the noise floor), flipped verdicts, failed jobs, and lab-window utilisation.");
+        println!("  --md  markdown section for a facts file    --fragile  list every fragile / flipped prediction");
+        process::exit(if args.len() < 3 { 2 } else { 0 });
+    }
+    let (mut json, mut md, mut list) = (false, false, false);
+    for a in &args[3..] {
+        match a.as_str() { "--json" => json = true, "--md" => md = true, "--fragile" => list = true,
+            o => { eprintln!("lab: unknown option {}", o); process::exit(2); } }
+    }
+    let text = match std::fs::read_to_string(&args[2]) { Ok(t) => t, Err(e) => { eprintln!("lab: {}: {}", args[2], e); process::exit(2); } };
+    let r = analyze(&text);
+    if r.rows == 0 { eprintln!("lab: empty ledger"); process::exit(2); }
+    let num = |x: f64| if x.is_finite() { format!("{:.3}", x) } else { "null".to_string() };
+    let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
+    let scored = r.predictions.iter().filter(|p| p.verdict == "pass" || p.verdict == "fail").count();
+    let passed = r.predictions.iter().filter(|p| p.verdict == "pass").count();
+    let util = if r.window_min > 0.0 { 100.0 * r.job_min_in_windows / r.window_min } else { f64::NAN };
+    if json {
+        for f in &r.files {
+            println!("{{\"event\":\"pred_file\",\"pred\":\"{}\",\"status\":\"{}\",\"pass\":{},\"fail\":{},\"void\":{},\"missing\":{}}}",
+                esc(&f.pred), f.status, f.pass, f.fail, f.void, f.missing);
+        }
+        for p in &r.predictions {
+            println!("{{\"event\":\"prediction\",\"pred\":\"{}\",\"name\":\"{}\",\"verdict\":\"{}\",\"margin_pct\":{},\"fragile\":{},\"flips\":{}}}",
+                esc(&p.pred), esc(&p.name), esc(&p.verdict), p.margin_pct.map(num).unwrap_or("null".into()),
+                p.margin_pct.map(|m| m.abs() < r.floor_pct && (p.verdict == "pass" || p.verdict == "fail")).unwrap_or(false), p.flips);
+        }
+        println!("{{\"summary\":true,\"rows\":{},\"bad_rows\":{},\"cal_n\":{},\"cal_mean_tps\":{},\"cal_cv_pct\":{},\"floor_pct\":{},\"predictions\":{},\"scored\":{},\"passed\":{},\"fragile\":{},\"flipped\":{},\"easy\":{},\"median_pass_margin_pct\":{},\"jobs\":{},\"jobs_failed\":{},\"window_min\":{},\"job_min_in_windows\":{},\"utilisation_pct\":{},\"cal_min\":{},\"deploys\":{},\"constraints\":{}}}",
+            r.rows, r.bad_rows, r.cal_n, num(r.cal_mean_tps), num(r.cal_cv_pct), num(r.floor_pct), r.predictions.len(), scored, passed,
+            r.fragile, r.flipped, r.easy, num(r.median_pass_margin), r.jobs, r.jobs_failed, num(r.window_min), num(r.job_min_in_windows), num(util), num(r.cal_min),
+            r.deploys.len(), r.constraints.len());
+        return;
+    }
+    let h = if md { "## " } else { "" };
+    let b = if md { "- " } else { "  " };
+    println!("{}struktura lab: {} ledger rows ({} unreadable)", h, r.rows, r.bad_rows);
+    let kinds: Vec<String> = r.kinds.iter().map(|(k, n)| format!("{} {}", n, k)).collect();
+    println!("{}rows: {}", b, kinds.join(", "));
+    println!("{}noise floor: calibration code t/s n={} mean {:.1}, CV {:.3}% -> smallest believable effect {:.2}%", b, r.cal_n, r.cal_mean_tps, r.cal_cv_pct, r.floor_pct);
+    println!("{}predictions: {} (latest verdict each), {} scored, {} pass ({:.0}%), median pass margin {:+.1}%", b, r.predictions.len(), scored, passed,
+        if scored > 0 { 100.0 * passed as f64 / scored as f64 } else { f64::NAN }, r.median_pass_margin);
+    println!("{}self-calibration: {} fragile (|margin| < floor: a re-run could flip them), {} flipped on re-scoring, {} easy passes (margin > 3 floors: thresholds set below the expected effect teach little)", b, r.fragile, r.flipped, r.easy);
+    println!("{}lab windows: {:.0} min open, {:.0} min of jobs inside -> {:.0}% utilisation; calibration {:.0} min; jobs {} ({} failed)",
+        b, r.window_min, r.job_min_in_windows, util, r.cal_min, r.jobs, r.jobs_failed);
+    for (ts, l) in &r.deploys { println!("{}deploy @{:.0}: {}", b, ts, l); }
+    for c in &r.constraints { println!("{}constraint: {}", b, c); }
+    if md { println!("\n| pred | status | pass | fail | void | missing |\n|---|---|---|---|---|---|"); }
+    else { println!("  {:<16} {:<10} {:>4} {:>4} {:>4} {:>7}", "pred", "status", "pass", "fail", "void", "missing"); }
+    for f in &r.files {
+        if md { println!("| {} | {} | {} | {} | {} | {} |", f.pred, f.status, f.pass, f.fail, f.void, f.missing); }
+        else { println!("  {:<16} {:<10} {:>4} {:>4} {:>4} {:>7}", f.pred, f.status, f.pass, f.fail, f.void, f.missing); }
+    }
+    if list || md {
+        let fragile: Vec<_> = r.predictions.iter().filter(|p| (p.verdict == "pass" || p.verdict == "fail")
+            && p.margin_pct.map(|m| m.abs() < r.floor_pct).unwrap_or(false)).collect();
+        let flipped: Vec<_> = r.predictions.iter().filter(|p| p.flips > 0).collect();
+        if !fragile.is_empty() || !flipped.is_empty() { println!("{}", if md { "\n**Fragile / flipped (re-measure before relying on them):**" } else { "  fragile / flipped:" }); }
+        for p in fragile { println!("{}[{}] {} :: {} margin {:+.2}% (floor {:.2}%) value {}", b, p.verdict, p.pred, p.name, p.margin_pct.unwrap(), r.floor_pct, p.value); }
+        for p in flipped { println!("{}[{}] {} :: {} flipped {}x on re-scoring", b, p.verdict, p.pred, p.name, p.flips); }
     }
 }
