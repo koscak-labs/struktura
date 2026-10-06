@@ -5322,12 +5322,14 @@ fn cmd_loop(args: &[String]) {
         println!("  and with --outbox write job.sh + pred.tsv + manifest.json and an idempotent knowledge.jsonl row.");
         println!("  --req       prod-pulse req.csv: prod gate from the ledger's deploy rows (open / closed / no-evidence)");
         println!("  --knobs     knob space file (default built-in: ub, draft, chunk, budget); --constraint overrides ledger rows");
+        println!("  --features  the lab's feature registry (features.tsv): aim the brain's reward at the main goal (predictions that prove a feature on the path to prod)");
         println!("  --backtest  replay the ledger at each job start: do fragile flags predict later flips?");
         println!("  --submit    hand the emitted job to ~/.oura/lab-q.sh (refused when the prod gate is closed)");
         process::exit(if args.len() < 3 { 2 } else { 0 });
     }
     let (mut ledger, mut logs, mut outbox, mut req, mut model) = (None::<String>, Vec::<String>::new(), None::<String>, None::<String>, "qwen38".to_string());
     let (mut knobs_file, mut cons, mut top, mut json, mut bt, mut submit) = (None::<String>, Vec::new(), 12usize, false, false, false);
+    let mut goal_file: Option<String> = None;
     let mut i = 2;
     while i < args.len() {
         let v = args.get(i + 1).cloned();
@@ -5338,6 +5340,7 @@ fn cmd_loop(args: &[String]) {
             "--req" => { req = v; i += 1; }
             "--model" => { model = v.unwrap_or_default(); i += 1; }
             "--knobs" => { knobs_file = v; i += 1; }
+            "--features" => { goal_file = v; i += 1; }
             "--constraint" => { match v.as_deref().and_then(|s| knobs::parse_constraint(s, "cli")) { Some(c) => cons.push(c), None => { eprintln!("loop: bad --constraint"); process::exit(2); } } i += 1; }
             "--top" => { top = v.and_then(|x| x.parse().ok()).unwrap_or(top); i += 1; }
             "--json" => json = true,
@@ -5369,7 +5372,8 @@ fn cmd_loop(args: &[String]) {
     let log_texts: Vec<(String, String)> = logs.iter().map(|p| (std::path::Path::new(p).file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or(p.clone()), read(p))).collect();
     let knobs_text = match &knobs_file { Some(p) => read(p), None => knobs::BUILTIN.to_string() };
     let knobs = knobs::parse_knobs(&knobs_text).unwrap_or_else(|e| { eprintln!("loop: knobs: {}", e); process::exit(2) });
-    let cfg = step::Config { knobs, knobs_text, cli_constraints: cons, outbox: outbox.as_ref().map(std::path::PathBuf::from), job_floor: 300 };
+    let goal = goal_file.as_ref().map(|p| struktura::ouroboros::mind::parse_goal_features(&read(p))).unwrap_or_default();
+    let cfg = step::Config { knobs, knobs_text, cli_constraints: cons, outbox: outbox.as_ref().map(std::path::PathBuf::from), job_floor: 300, goal };
     let t = step::turn(&ledger_text, &log_texts, &cfg);
     let g = req.as_ref().map(|p| gate(&read(p), &struktura::lab::analyze(&ledger_text).deploys, &model, t.lessons.band_pct));
     let num = |x: f64| if x.is_finite() { format!("{:.3}", x) } else { "null".into() };
@@ -5401,7 +5405,11 @@ fn cmd_loop(args: &[String]) {
             println!("   {:>2}. {:<16} {:<40} {:.2}{}  {}", r + 1, it.kind.as_str(), what, it.score, eff, it.why);
         }
         if !t.brain.is_empty() {
-            println!("  brain (learned from {} scored prediction(s)): expected information yield of each challenger's test", t.brain_episodes);
+            println!("  brain (learned from {} scored prediction(s){}): expected {} of each challenger's test", t.brain_episodes,
+                t.brain_goal_predictions.map(|n| format!("; {} prove a registered feature", n)).unwrap_or_default(),
+                if t.brain_goal_predictions.is_some() { "value toward the main goal" } else { "information yield" });
+            if t.brain_grown.is_empty() { println!("    grown senses: none (no candidate explained held-out mistakes well enough)"); }
+            for (n, s, g) in &t.brain_grown { println!("    grew sense \"{}\" after {} predictions (held-out error -{:.0}%)", s, n, 100.0 * g); }
             for (what, y) in t.brain.iter().take(4) {
                 if y.abstained { println!("    {:<14} abstained (evidence {:.1} too thin)", what, y.evidence); continue; }
                 println!("    {:<14} yield {:.2} (evidence {:.1}); like {}", what, y.expected, y.evidence, y.cites.join(", "));

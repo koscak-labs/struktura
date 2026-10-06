@@ -29,6 +29,37 @@ use super::knobs::{parse_knobs, Knob, BUILTIN};
 
 pub const D: usize = 9;
 pub type Situation = [f32; D];
+/// Growth slots: senses the mind may grow from its base features while replaying the ledger.
+pub const G: usize = 4;
+/// Brain situation size: base features plus growth slots.
+pub const DG: usize = D + G;
+/// Names of the base features, for describing grown senses.
+pub const BASE_NAMES: [&str; D] = ["relative", "ambition", "equivalence", "speed", "quality", "prior_effect", "times_measured", "decisive_rate", "1"];
+
+/// One row of the lab's feature registry (`~/.oura/features.tsv`): a feature on the path to prod
+/// and the predictions that prove it. This is the main goal the mind's reward is aimed at.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GoalFeature { pub feature: String, pub pred: String, pub required: Vec<String> }
+
+/// Parse the registry: `feature commit env needs pred required value flags` (tab-separated, `#` comments).
+pub fn parse_goal_features(text: &str) -> Vec<GoalFeature> {
+    text.lines().filter(|l| !l.trim_start().starts_with('#') && !l.trim().is_empty()).filter_map(|l| {
+        let c: Vec<&str> = l.split('\t').collect();
+        if c.len() < 6 { return None; }
+        let required = if c[5].trim() == "-" { Vec::new() } else { c[5].split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect() };
+        Some(GoalFeature { feature: c[0].trim().into(), pred: c[4].trim().into(), required })
+    }).collect()
+}
+
+fn describe(f: &crate::brain_grow::Feat) -> String {
+    use crate::brain_grow::Feat;
+    match *f {
+        Feat::Prod(i, j) => format!("{} x {}", BASE_NAMES[i as usize], BASE_NAMES[j as usize]),
+        Feat::Step(i, t) => format!("{} > {:.2}", BASE_NAMES[i as usize], t),
+        Feat::Gt(i, j) => format!("{} > {}", BASE_NAMES[i as usize], BASE_NAMES[j as usize]),
+        Feat::Off => "-".into(),
+    }
+}
 
 fn has(name: &str, words: &[&str]) -> bool {
     let n = name.to_ascii_lowercase();
@@ -107,7 +138,14 @@ fn knob_of<'a>(name: &str, knobs: &'a [Knob]) -> Option<&'a Knob> {
 }
 
 pub struct Mind {
-    brain: Box<Brain<256, D, 1>>,
+    brain: Box<Brain<256, DG, 1>>,
+    grower: crate::brain_grow::Grower<D, G>,
+    /// Senses grown while replaying the ledger: (after how many predictions, sense, held-out gain).
+    pub grown: Vec<(usize, String, f32)>,
+    /// Whether the reward was aimed at the lab's feature registry (main goal).
+    pub goal_aware: bool,
+    /// Scored predictions that prove a registered feature.
+    pub goal_predictions: usize,
     /// "pred::name" per memory slot, for citations.
     labels: Vec<String>,
     pub episodes: usize,
@@ -135,8 +173,20 @@ impl Mind {
 
     /// Learn from every scored prediction (latest verdict each, in time order), attributing each to
     /// one of `knobs` when its name names one of the knob's arms.
-    pub fn from_lab_knobs(lab: &LabReport, knobs: &[Knob]) -> Self {
-        let mut brain: Box<Brain<256, D, 1>> = Box::new(Brain::new(0.0, 1.0));
+    pub fn from_lab_knobs(lab: &LabReport, knobs: &[Knob]) -> Self { Self::from_lab_goal(lab, knobs, &[]) }
+
+    /// Like [`Mind::from_lab_knobs`], with the reward aimed at the main goal: when `goal` (the lab's
+    /// feature registry) is given, a prediction that proves a registered feature keeps its full
+    /// reward and every other prediction is discounted to 0.6 of it. While replaying, the mind may
+    /// grow up to G new senses from its base features, each only if it explains its mistakes on
+    /// held-out predictions (see [`crate::brain_grow`]).
+    pub fn from_lab_goal(lab: &LabReport, knobs: &[Knob], goal: &[GoalFeature]) -> Self {
+        let mut brain: Box<Brain<256, DG, 1>> = Box::new(Brain::new(0.0, 1.0));
+        let mut grower: crate::brain_grow::Grower<D, G> = crate::brain_grow::Grower::new(0x6D696E64);
+        grower.constant[D - 1] = true;
+        grower.every = 12;
+        let mut grown = Vec::new();
+        let mut goal_predictions = 0usize;
         let mut labels = vec![String::new(); 256];
         let band = lab.pair_band_pct.max(lab.floor_pct);
         let mut preds: Vec<&crate::lab::Prediction> = lab.predictions.iter()
@@ -151,11 +201,17 @@ impl Mind {
                 ("pass", Some(m)) if m > 3.0 * lab.floor_pct => 0.5,
                 _ => 1.0,
             };
+            let is_goal = goal.iter().any(|g| g.pred == p.pred && (g.required.is_empty() || g.required.iter().any(|r| r == &p.name)));
+            if is_goal { goal_predictions += 1; }
+            let reward = if goal.is_empty() || is_goal { reward } else { reward * 0.6 };
             let knob = knob_of(&p.name, knobs).map(|k| k.name.clone());
             let h = knob.as_ref().and_then(|k| history.iter().find(|(n, _)| n == k)).map(|(_, h)| *h).unwrap_or_default();
-            let x = situation_of(&p.op, &p.value, &p.name, band, &h);
-            if let Some(s) = brain.learn(&x, 0, reward) { labels[s] = format!("{}::{}", p.pred, p.name); }
+            let base = situation_of(&p.op, &p.value, &p.name, band, &h);
+            let x: [f32; DG] = grower.situation(&base);
+            let class = if reward == 0.0 { "fragile/void" } else if (p.verdict == "pass" && p.margin_pct.map(|m| m > 3.0 * lab.floor_pct).unwrap_or(false)) { "easy" } else { "decisive" };
+            if let Some(s) = brain.learn(&x, 0, reward) { labels[s] = format!("{}::{} ({}{})", p.pred, p.name, class, if is_goal { ", proves a feature" } else { "" }); }
             episodes += 1;
+            if let Some(g) = grower.after_learn(&mut brain) { if let Some(f) = g.adopted { grown.push((episodes, describe(&f), g.gain)); } }
             // Update the knob's history only after its situation was taken (no leakage).
             if let Some(k) = knob {
                 if let Some((_, h)) = history.iter_mut().find(|(n, _)| *n == k) {
@@ -167,7 +223,7 @@ impl Mind {
                 }
             }
         }
-        Mind { brain, labels, episodes, band_pct: band, history }
+        Mind { brain, grower, grown, goal_aware: !goal.is_empty(), goal_predictions, labels, episodes, band_pct: band, history }
     }
 
     /// History of `knob` over the whole ledger.
@@ -189,10 +245,11 @@ impl Mind {
     }
 
     pub fn estimate(&self, x: &Situation) -> Yield {
-        let d = self.brain.decide(x, &[true], 0);
+        let xx: [f32; DG] = self.grower.situation(x);
+        let d = self.brain.decide(&xx, &[true], 0);
         let cites = (0..d.n_cited as usize).take(3).filter_map(|k| {
             let s = d.cited[k] as usize;
-            self.brain.episode(s).map(|e| format!("{} ({})", self.labels[s], match e.reward { r if r >= 1.0 => "decisive", r if r >= 0.5 => "easy", _ => "fragile/void" }))
+            self.brain.episode(s).map(|_| self.labels[s].clone())
         }).collect();
         Yield { expected: (d.expected as f64).clamp(0.0, 1.0), evidence: d.evidence as f64, abstained: d.abstained, cites }
     }
@@ -228,6 +285,29 @@ mod tests {
         assert!(!ambitious.abstained && !timid.abstained);
         assert!(ambitious.expected > timid.expected + 0.3, "{:?} vs {:?}", ambitious, timid);
         assert!(!ambitious.cites.is_empty() && ambitious.cites[0].contains("tps-big"), "{:?}", ambitious.cites);
+    }
+
+    #[test]
+    fn goal_registry_parses_and_aims_the_reward() {
+        let reg = "# comment\nchunk64\t33d0f7d\tENV=1\t-\t1.tsv\t-\tnone\t-\ngqa2\tx\tE=2\t-\t2.tsv\tfast-at-64K,correct\tnone\t-\n";
+        let g = parse_goal_features(reg);
+        assert_eq!(g.len(), 2);
+        assert!(g[0].required.is_empty() && g[1].required == vec!["fast-at-64K".to_string(), "correct".to_string()]);
+        // Same evidence pattern for two metric families; only the speed ones prove a registered feature.
+        let mut rows = Vec::new();
+        for _ in 0..10 {
+            rows.push(("tps-fast-at-64K", ">%", "130 vs 100 (30.00%, need >% 10%)", "pass"));
+            rows.push(("quality-correct-x", ">%", "130 vs 100 (30.00%, need >% 10%)", "pass"));
+        }
+        let mut l = ledger(&rows);
+        // ledger() names pred files by row index; make every speed row belong to 2.tsv with the required name
+        l = l.lines().map(|line| if line.contains("tps-fast-at-64K") { line.replace(|c: char| false, "").replacen("\"pred\":\"", "\"pred\":\"2.tsv-", 1) } else { line.to_string() }).collect::<Vec<_>>().join("\n");
+        let lab = crate::lab::analyze(&l);
+        let goal = vec![GoalFeature { feature: "gqa2".into(), pred: "2.tsv".into(), required: vec![] }];
+        let plain = Mind::from_lab_goal(&lab, &[], &[]);
+        let aimed = Mind::from_lab_goal(&lab, &[], &goal);
+        assert!(aimed.goal_aware && !plain.goal_aware);
+        assert_eq!(plain.goal_predictions, 0);
     }
 
     #[test]
