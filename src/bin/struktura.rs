@@ -4746,6 +4746,17 @@ fn cmd_pulse(args: &[String]) {
         println!("  consecutive deploys get a bootstrap 95% CI verdict, stalls are flagged.");
         println!("  --min-effect  smallest believable effect, percent (default 1.16 = 2x lab calibration CV)");
         println!("  --cols seg,ctx,step,busy,tps   0-based columns (default 1,4,11,12,8)");
+        println!("  --metric token|step  judge ms per generated token (default; fair across drafter changes) or ms per decode step");
+        println!("  --deploys LEDGER  key deploys on the ledger's kind:\"deploy\" rows (a pid changes on every model reload);");
+        println!("     without it, segments are server children (pid:port) and no verdicts are issued");
+        println!("  --by-child  issue verdicts between server children anyway");
+        println!("  --model NAME  judge one model alias only (prod-pulse col 14)");
+        println!("  --churn-window S  seconds after a spawn / first request counted as cold (default 300)");
+        println!("  --spawns FILE  prod-pulse spawns.csv (ts,router_pid,alias,port): every reload, per alias / hour, cold-request tax");
+        println!("  --split TS  with --spawns: reload tax before vs after TS (e.g. a slot save/restore fix), bootstrap CI verdict");
+        println!("  --watch | --watch-once  live gate: newest --deploys row vs the one before, anytime-valid e-process");
+        println!("     (safe to re-check after every request); one JSON line per check; exit 0 faster/same, 1 slower, 3 pending/timeout");
+        println!("  --interval S (60)  --max-wait S (86400)  --alpha A (0.05)   for --watch");
         println!("  Exit: 0 = no regression, 1 = latest judged deploy is slower, 2 = error");
         process::exit(if args.len() < 3 { 2 } else { 0 });
     }
