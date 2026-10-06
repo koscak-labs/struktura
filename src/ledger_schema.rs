@@ -135,6 +135,8 @@ pub const SCHEMA: &[KindSchema] = &[
     nuwa("autogate", &[req("ts", Num)]),
     // Read by `lab` and the ouroboros knobs.
     nuwa("constraint", &[req("knob", Str), req("op", Str), req("value", Any)]),
+    // lab-q.sh, at submit (the leadership arbiter's source of truth for what was queued, and by whom).
+    nuwa("queued", &[req("job", Str), req("ts", Num), req("names", Arr), opt("pred_file", Str), opt("designed_by", Str)]),
     // ---- Fuxi: judging / learning (envelope only for now) ----
     fuxi("brain", &[]),
     fuxi("forecast", &[]),
@@ -498,13 +500,15 @@ mod tests {
 
 {"kind":"autogate","ts":11}
 {"v":1,"strand":"fuxi","kind":"heartbeat","ts":12}
+{"kind":"queued","ts":13,"job":"301-ub128","pred_file":"301.tsv","names":["ub128-beats-ub256-d100000"],"designed_by":"fuxi"}
 "#;
 
     #[test]
     fn good_ledger_is_clean() {
         let c = check(GOOD, true);
         assert_eq!(msgs(&c), Vec::<String>::new());
-        assert_eq!((c.lines, c.rows, c.unparseable, c.torn_tail), (13, 13, 0, false));
+        assert_eq!((c.lines, c.rows, c.unparseable, c.torn_tail), (14, 14, 0, false));
+        assert_eq!(c.kinds["queued"].rows, 1);
         assert_eq!(c.kinds["deploy"].rows, 2);
         assert_eq!(c.kinds["heartbeat"].strand, "fuxi");
     }

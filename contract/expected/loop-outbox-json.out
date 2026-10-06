@@ -2,53 +2,44 @@ $ struktura loop --ledger @FIX@/ledger.jsonl --outbox @OUT@ --json
 {"event":"agenda","kind":"remeasure","knob":"","observed_effect_pct":null,"pred":"lab-206.tsv::ttd-short-faster","rank":1,"samples":1,"score":1.832,"value":"","why":"fail by +0.29% inside the 1.73% single-run band: a re-run could flip it"}
 {"event":"agenda","kind":"remeasure","knob":"","observed_effect_pct":null,"pred":"lab-202.tsv::gqa2-5pct-at-64K","rank":2,"samples":1,"score":1.571,"value":"","why":"pass by +0.74% inside the 1.73% single-run band: a re-run could flip it"}
 {"event":"agenda","kind":"remeasure","knob":"","observed_effect_pct":null,"pred":"lab-201.tsv::noise-fresh-repeat","rank":3,"samples":1,"score":1.444,"value":"","why":"pass by +0.96% inside the 1.73% single-run band: a re-run could flip it"}
-{"event":"agenda","kind":"challenger","knob":"draft","observed_effect_pct":null,"pred":"","rank":4,"samples":0,"score":0.658,"value":"5","why":"never measured on code_tps; brain: yield 0.82"}
-{"event":"agenda","kind":"challenger","knob":"ub","observed_effect_pct":null,"pred":"","rank":5,"samples":0,"score":0.488,"value":"128","why":"never measured on d100000; brain: yield 0.48"}
-{"event":"agenda","kind":"settled","knob":"draft","observed_effect_pct":null,"pred":"","rank":6,"samples":0,"score":0.050,"value":"3","why":"a prediction naming it was FALSIFIED; not re-proposed"}
+{"event":"agenda","kind":"challenger","knob":"ub","observed_effect_pct":null,"pred":"","rank":4,"samples":0,"score":0.488,"value":"128","why":"never measured on d100000; brain: yield 0.48"}
+{"event":"agenda","kind":"settled","knob":"draft","observed_effect_pct":null,"pred":"","rank":5,"samples":0,"score":0.050,"value":"3","why":"a prediction naming it was FALSIFIED; not re-proposed"}
+{"event":"agenda","kind":"settled","knob":"draft","observed_effect_pct":null,"pred":"","rank":6,"samples":0,"score":0.050,"value":"5","why":"PROVEN: its prediction against 7 passed on 2 agreeing measurements, +2.41% past threshold (band 1.73%): a ship candidate, not re-measured"}
 {"event":"agenda","kind":"settled","knob":"draft","observed_effect_pct":null,"pred":"","rank":7,"samples":0,"score":0.050,"value":"9","why":"a prediction naming it was FALSIFIED; not re-proposed"}
 {"event":"agenda","kind":"needs-instrument","knob":"budget","observed_effect_pct":null,"pred":"","rank":8,"samples":0,"score":0.000,"value":"1500","why":"no job template measures pass_rate (workbench verified pass rate x time-to-done, paired by task)"}
 {"event":"agenda","kind":"needs-instrument","knob":"budget","observed_effect_pct":null,"pred":"","rank":9,"samples":0,"score":0.000,"value":"4000","why":"no job template measures pass_rate (workbench verified pass rate x time-to-done, paired by task)"}
 {"event":"agenda","kind":"needs-instrument","knob":"chunk","observed_effect_pct":null,"pred":"","rank":10,"samples":0,"score":0.000,"value":"0","why":"no job template measures sum_s (time-to-done of two overlapping streams (read+decode))"}
 {"event":"agenda","kind":"needs-instrument","knob":"chunk","observed_effect_pct":null,"pred":"","rank":11,"samples":0,"score":0.000,"value":"128","why":"no job template measures sum_s (time-to-done of two overlapping streams (read+decode))"}
 {"event":"agenda","kind":"needs-instrument","knob":"chunk","observed_effect_pct":null,"pred":"","rank":12,"samples":0,"score":0.000,"value":"248","why":"no job template measures sum_s (time-to-done of two overlapping streams (read+decode))"}
-{"abstained":false,"challenger":"draft=5","cites":["lab-210.tsv::draft5-beats-draft7-code_tps (decisive)","lab-213.tsv::draft3-beats-draft7-code_tps (decisive)","lab-211.tsv::draft9-beats-draft7-code_tps (decisive)"],"event":"brain","evidence":17.064,"yield":0.816}
 {"abstained":false,"challenger":"ub=128","cites":["lab-211.tsv::draft9-beats-draft7-code_tps (decisive)","lab-202.tsv::gqa2-5pct-at-64K (fragile/void)","lab-206.tsv::ttd-short-faster (fragile/void)"],"event":"brain","evidence":18.177,"yield":0.475}
-{"event":"design","manifest":{"band_pct":1.726,"calibration":1.091,"challenger":"5","cv_pct":0.623,"effect_source":"prior 3.0% x calibration min(1, 1.09)","est_min":8,"incumbent":"7","job":"lab-300-draft5","knob":"draft","lower_is_better":false,"metric":"code_tps","predicted_effect_pct":3.000,"runs_per_arm":2,"threshold_pct":1.726,"why":"never measured on code_tps; brain: yield 0.82"}}
-{"agenda":15,"band_pct":1.726,"calibration":1.091,"calibration_n":6,"cv_pct":0.623,"easy":1,"fragile":3,"id":"4768e4445b0839ad","recalled":false,"summary":true,"written":4}
+{"event":"design","manifest":{"band_pct":1.726,"calibration":1.091,"challenger":"128","cv_pct":0.623,"effect_source":"prior 3.0% x calibration min(1, 1.09)","est_min":10,"incumbent":"256","job":"lab-300-ub128","knob":"ub","lower_is_better":false,"metric":"d100000","predicted_effect_pct":3.000,"runs_per_arm":2,"threshold_pct":1.726,"why":"never measured on d100000; brain: yield 0.48"}}
+{"agenda":15,"band_pct":1.726,"calibration":1.091,"calibration_n":6,"cv_pct":0.623,"easy":1,"fragile":3,"id":"1273949fbdedd4ef","recalled":false,"summary":true,"written":4}
 --- exit 0
 --- file knowledge.jsonl
-{"band_pct":1.726,"calibration":1.091,"calibration_n":6,"challenger":"5","cv_pct":0.623,"emitted":"lab-300-draft5","fragile":["lab-206.tsv::ttd-short-faster","lab-202.tsv::gqa2-5pct-at-64K","lab-201.tsv::noise-fresh-repeat"],"id":"4768e4445b0839ad","incumbent":"7","kind":"decision","knob":"draft","ledger_rows":41,"metric":"code_tps","predicted_effect_pct":3.000,"runs_per_arm":2,"threshold_pct":1.726,"why":"never measured on code_tps; brain: yield 0.82"}
---- file lab-300-draft5.json
-{"band_pct":1.726,"calibration":1.091,"challenger":"5","cv_pct":0.623,"effect_source":"prior 3.0% x calibration min(1, 1.09)","est_min":8,"incumbent":"7","job":"lab-300-draft5","knob":"draft","lower_is_better":false,"metric":"code_tps","predicted_effect_pct":3.000,"runs_per_arm":2,"threshold_pct":1.726,"why":"never measured on code_tps; brain: yield 0.82"}
---- file lab-300-draft5.sh
+{"band_pct":1.726,"calibration":1.091,"calibration_n":6,"challenger":"128","cv_pct":0.623,"emitted":"lab-300-ub128","fragile":["lab-206.tsv::ttd-short-faster","lab-202.tsv::gqa2-5pct-at-64K","lab-201.tsv::noise-fresh-repeat"],"id":"1273949fbdedd4ef","incumbent":"256","kind":"decision","knob":"ub","ledger_rows":41,"metric":"d100000","predicted_effect_pct":3.000,"runs_per_arm":2,"threshold_pct":1.726,"why":"never measured on d100000; brain: yield 0.48"}
+--- file lab-300-ub128.json
+{"band_pct":1.726,"calibration":1.091,"challenger":"128","cv_pct":0.623,"effect_source":"prior 3.0% x calibration min(1, 1.09)","est_min":10,"incumbent":"256","job":"lab-300-ub128","knob":"ub","lower_is_better":false,"metric":"d100000","predicted_effect_pct":3.000,"runs_per_arm":2,"threshold_pct":1.726,"why":"never measured on d100000; brain: yield 0.48"}
+--- file lab-300-ub128.sh
 #!/usr/bin/env bash
-# LAB-META: est_min=8 value=3 out=logs/lab-300-draft5.out pred=lab-pred/lab-300-draft5.tsv
-# struktura loop lab-300-draft5: draft 5 (arm A) vs incumbent 7 (arm B) on code_tps (decode t/s on code with the DFlash drafter, thinking as in prod), 2 runs per arm
-# why: never measured on code_tps; brain: yield 0.82
+# LAB-META: est_min=10 value=2 out=logs/lab-300-ub128.out pred=lab-pred/lab-300-ub128.tsv
+# struktura loop lab-300-ub128: ub 128 (arm A) vs incumbent 256 (arm B) on d100000 (prefill t/s of a 2048-token chunk at 100K depth), 2 runs per arm
+# why: never measured on d100000; brain: yield 0.48
 set -uo pipefail
 source ~/lab-lib.sh
-OUT=~/logs/lab-300-draft5.out; : > "$OUT"
+OUT=~/logs/lab-300-ub128.out; : > "$OUT"
 med(){ sort -n | awk '{a[NR]=$1} END{if(NR==0){print "VOID"; exit} if(NR%2) print a[(NR+1)/2]; else print (a[NR/2]+a[NR/2+1])/2}'; }
-B=$(stage llama.cpp-alien2)
+D=$(stage llama.cpp-alien2)
 M=/home/phil/models/Qwen3.8-27B-Uncensored-IQ4_XS.gguf
-DF=/home/phil/qmodels/Qwen3.8-27B-DFlash2-Q4_K_M.gguf
-q(){ curl -s -m 300 localhost:$LAB_P/v1/chat/completions -H 'Content-Type: application/json' \
-     -d "$(jq -nc --arg c "$1" '{messages:[{role:"user",content:$c}],max_tokens:512,temperature:0.6}')" | jq -r '.timings.predicted_per_second // empty'; }
-for v in 7 5; do
-  SRV=~/logs/lab-300-draft5-srv-$v.log
-  $B/llama-server -m $M -ngl 99 -fa on --jinja -np 2 -c 262144 --kv-unified -ctk q4_0 -ctv q4_0 -ctkd q4_0 -ctvd q4_0 \
-    -md $DF -ngld 99 --spec-type draft-dflash --spec-draft-n-max $v -ub 256 --port $LAB_P --host 127.0.0.1 > $SRV 2>&1 & pid=$!
-  if ! up $pid; then printf 'arm\tdraft%s\tERROR server-died\n' "$v" | tee -a "$OUT"; continue; fi
-  if ! smoke $SRV >/dev/null; then printf 'arm\tdraft%s\tERROR smoke\n' "$v" | tee -a "$OUT"; kill $pid; wait $pid 2>/dev/null; continue; fi
+for v in 256 128; do
   for r in $(seq 1 2); do
-    t=$(q "Write a C++ function split_csv(const std::string&) that splits one CSV line into fields, handling quoted commas. Output only code.")
-    printf 'rep\tdraft%s\tcode_tps=%s\n' "$v" "${t:-FAIL}" | tee -a "$OUT"
+    x=$(LD_LIBRARY_PATH=$D timeout --foreground 900 $D/llama-bench -m $M -ngl 99 -fa 1 -ctk q4_0 -ctv q4_0 -b 2048 -ub $v -p 2048 -n 0 -d 0,32768,100000 -r 1 -o csv 2>/dev/null \
+        | awk -F, 'NR==1{for(i=1;i<=NF;i++){gsub(/"/,"",$i); h[$i]=i}} NR>1{gsub(/"/,""); printf "d%s=%d ", $h["n_depth"], $h["avg_ts"]}')
+    printf 'rep\tub%s\t%s\n' "$v" "${x:-FAIL}" | tee -a "$OUT"
   done
-  m=$(grep -P "^rep\tdraft$v\t" "$OUT" | grep -oP 'code_tps=\K[0-9.]+' | med)
-  printf 'arm\tdraft%s\tmedian code_tps=%s\n' "$v" "$m" | tee -a "$OUT"
-  kill $pid; wait $pid 2>/dev/null
+  m=$(grep -P "^rep\tub$v\t" "$OUT" | grep -oP 'd100000=\K[0-9.]+' | med)
+  printf 'arm\tub%s\tmedian d100000=%s\n' "$v" "$m" | tee -a "$OUT"
 done
-echo "### lab-300-draft5-DONE $(date +%T)" | tee -a "$OUT"
---- file lab-300-draft5.tsv
-# struktura loop lab-300-draft5: predicted 3.00% (prior 3.0% x calibration min(1, 1.09)), threshold 1.73% = predicted - one 1.73% band, 2 runs/arm
-draft5-beats-draft7-code_tps	^arm\tdraft5\tmedian code_tps=([\d.]+)	>%	^arm\tdraft7\tmedian code_tps=([\d.]+)@@1.73
+echo "### lab-300-ub128-DONE $(date +%T)" | tee -a "$OUT"
+--- file lab-300-ub128.tsv
+# struktura loop lab-300-ub128: predicted 3.00% (prior 3.0% x calibration min(1, 1.09)), threshold 1.73% = predicted - one 1.73% band, 2 runs/arm
+ub128-beats-ub256-d100000	^arm\tub128\tmedian d100000=([\d.]+)	>%	^arm\tub256\tmedian d100000=([\d.]+)@@1.73
