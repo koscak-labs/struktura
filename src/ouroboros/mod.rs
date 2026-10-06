@@ -57,11 +57,17 @@ pub fn observe(ledger: &str, logs: &[(String, String)]) -> Observation {
 }
 
 /// Median of the samples of (group, arm, metric) across all observed logs.
+/// Ungrouped arms also collect the `rep` group, where jobs emitted by the loop
+/// print their raw repeats (their `arm` group holds medians and is not counted
+/// again).
 pub fn arm_value(obs: &Observation, group: &str, arm: &str, metric: &str) -> Option<(f64, usize)> {
     let mut all: Vec<f64> = Vec::new();
+    let groups: &[&str] = if group.is_empty() { &["", "rep"] } else { &[group] };
     for (_, _, d) in &obs.logs {
-        if let Some(v) = d.values.get(&(group.to_string(), arm.to_string())).and_then(|m| m.get(metric)) {
-            all.extend_from_slice(v);
+        for g in groups {
+            if let Some(v) = d.values.get(&(g.to_string(), arm.to_string())).and_then(|m| m.get(metric)) {
+                all.extend_from_slice(v);
+            }
         }
     }
     if all.is_empty() { return None; }
