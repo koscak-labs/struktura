@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 
 use super::agenda::{agenda, Item, Kind};
-use super::design::{design, Design};
+use super::design::{design, live_of, Design};
 use super::knobs::{constraints, Constraint, Knob};
 use super::learn::{learn, Lessons};
 use super::memory::{decision_id, esc, fnv64, load, next_job_id, recalled, remember};
@@ -53,6 +53,8 @@ pub fn turn(ledger: &str, logs: &[(String, String)], cfg: &Config) -> Turn {
     let cons = constraints(&cfg.cli_constraints, &obs.lab.constraints);
     let mut ag = agenda(&obs, &lessons, &cfg.knobs, &cons);
     let cv = obs.lab.cal_cv_pct;
+    // the config prod runs now: designed jobs measure on it, so a proof transfers to the ship gate
+    let live = live_of(ledger);
     // The mind estimates each challenger's information yield from what similar past
     // predictions taught; it only re-orders challengers (the agenda's rules keep
     // re-measures first and never touch constraints or missing instruments).
@@ -60,7 +62,7 @@ pub fn turn(ledger: &str, logs: &[(String, String)], cfg: &Config) -> Turn {
     let mut brain_notes = Vec::new();
     for it in ag.iter_mut().filter(|i| i.kind == Kind::Challenger) {
         let k = cfg.knobs.iter().find(|k| k.name == it.knob).unwrap();
-        let thr = design(it, k, &lessons, cv, 0).map(|d| d.threshold_pct).unwrap_or(lessons.band_pct);
+        let thr = design(it, k, &lessons, cv, 0, live.as_ref()).map(|d| d.threshold_pct).unwrap_or(lessons.band_pct);
         let y = mind.estimate_challenger(k, thr, it.observed_effect_pct);
         if !y.abstained {
             it.score *= 0.5 + y.expected;
@@ -78,7 +80,7 @@ pub fn turn(ledger: &str, logs: &[(String, String)], cfg: &Config) -> Turn {
     let mut pick: Option<&Item> = None;
     for it in ag.iter().filter(|i| i.kind == Kind::Challenger) {
         let k = cfg.knobs.iter().find(|k| k.name == it.knob).unwrap();
-        match design(it, k, &lessons, cv, 0) {
+        match design(it, k, &lessons, cv, 0, live.as_ref()) {
             Ok(_) => { pick = Some(it); break; }
             Err(e) => skipped.push(format!("{} {}: {}", it.knob, it.value, e)),
         }
@@ -93,7 +95,7 @@ pub fn turn(ledger: &str, logs: &[(String, String)], cfg: &Config) -> Turn {
     let k = cfg.knobs.iter().find(|k| k.name == item.knob).unwrap().clone();
 
     let Some(outbox) = &cfg.outbox else {
-        t.design = design(&item, &k, &t.lessons, cv, cfg.job_floor).ok();
+        t.design = design(&item, &k, &t.lessons, cv, cfg.job_floor, live.as_ref()).ok();
         return t;
     };
     let mem = outbox.join("knowledge.jsonl");
@@ -102,7 +104,7 @@ pub fn turn(ledger: &str, logs: &[(String, String)], cfg: &Config) -> Turn {
         Some(Some(job)) => { t.recalled = true; job.strip_prefix("lab-").and_then(|r| r.split('-').next()).and_then(|n| n.parse().ok()).unwrap_or(cfg.job_floor) }
         _ => next_job_id(outbox, &rows, cfg.job_floor),
     };
-    let d = match design(&item, &k, &t.lessons, cv, job_id) { Ok(d) => d, Err(e) => { t.skipped.push(e); return t; } };
+    let d = match design(&item, &k, &t.lessons, cv, job_id, live.as_ref()) { Ok(d) => d, Err(e) => { t.skipped.push(e); return t; } };
     if !t.recalled {
         let _ = std::fs::create_dir_all(outbox);
         for (ext, body) in [("sh", &d.job), ("tsv", &d.pred), ("json", &d.manifest)] {

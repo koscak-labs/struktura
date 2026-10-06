@@ -28,7 +28,9 @@ set -uo pipefail
 source ~/lab-lib.sh
 OUT=~/logs/lab-300-ub128.out; : > "$OUT"
 med(){ sort -n | awk '{a[NR]=$1} END{if(NR==0){print "VOID"; exit} if(NR%2) print a[(NR+1)/2]; else print (a[NR/2]+a[NR/2+1])/2}'; }
-D=$(stage llama.cpp-alien2)
+# LIVE config (newest deploy row): srv-b: the proof is measured on what prod runs
+D=~/alien-bin/srv-b; B=$D
+[ -d "$D" ] || { echo "MISSING live binary $D" | tee -a "$OUT"; exit 2; }
 M=/home/phil/models/Qwen3.8-27B-Uncensored-IQ4_XS.gguf
 for v in 256 128; do
   for r in $(seq 1 2); do

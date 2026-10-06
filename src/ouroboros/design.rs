@@ -40,8 +40,7 @@ pub const PRIOR_EFFECT_PCT: f64 = 3.0;
 
 const MED: &str = "med(){ sort -n | awk '{a[NR]=$1} END{if(NR==0){print \"VOID\"; exit} if(NR%2) print a[(NR+1)/2]; else print (a[NR/2]+a[NR/2+1])/2}'; }";
 
-const UB: &str = r#"D=$(stage llama.cpp-alien2)
-M=/home/phil/models/Qwen3.8-27B-Uncensored-IQ4_XS.gguf
+const UB: &str = r#"M=/home/phil/models/Qwen3.8-27B-Uncensored-IQ4_XS.gguf
 for v in @INC@ @CH@; do
   for r in $(seq 1 @R@); do
     x=$(LD_LIBRARY_PATH=$D timeout --foreground 900 $D/llama-bench -m $M -ngl 99 -fa 1 -ctk q4_0 -ctv q4_0 -b 2048 -ub $v -p 2048 -n 0 -d 0,32768,100000 -r 1 -o csv 2>/dev/null \
@@ -53,15 +52,14 @@ for v in @INC@ @CH@; do
 done
 "#;
 
-const DRAFT: &str = r#"B=$(stage llama.cpp-alien2)
-M=/home/phil/models/Qwen3.8-27B-Uncensored-IQ4_XS.gguf
+const DRAFT: &str = r#"M=/home/phil/models/Qwen3.8-27B-Uncensored-IQ4_XS.gguf
 DF=/home/phil/qmodels/Qwen3.8-27B-DFlash2-Q4_K_M.gguf
 q(){ curl -s -m 300 localhost:$LAB_P/v1/chat/completions -H 'Content-Type: application/json' \
      -d "$(jq -nc --arg c "$1" '{messages:[{role:"user",content:$c}],max_tokens:512,temperature:0.6}')" | jq -r '.timings.predicted_per_second // empty'; }
 for v in @INC@ @CH@; do
   SRV=~/logs/@JOB@-srv-$v.log
   $B/llama-server -m $M -ngl 99 -fa on --jinja -np 2 -c 262144 --kv-unified -ctk q4_0 -ctv q4_0 -ctkd q4_0 -ctvd q4_0 \
-    -md $DF -ngld 99 --spec-type draft-dflash --spec-draft-n-max $v -ub 256 --port $LAB_P --host 127.0.0.1 > $SRV 2>&1 & pid=$!
+    -md $DF -ngld 99 --spec-type draft-dflash --spec-draft-n-max $v -ub @UB@ --port $LAB_P --host 127.0.0.1 > $SRV 2>&1 & pid=$!
   if ! up $pid; then printf 'arm\t@P@%s\tERROR server-died\n' "$v" | tee -a "$OUT"; continue; fi
   if ! smoke $SRV >/dev/null; then printf 'arm\t@P@%s\tERROR smoke\n' "$v" | tee -a "$OUT"; kill $pid; wait $pid 2>/dev/null; continue; fi
   for r in $(seq 1 @R@); do
@@ -74,6 +72,55 @@ for v in @INC@ @CH@; do
 done
 "#;
 
+/// The configuration prod runs now: the newest `kind:"deploy"` row (binary + env + allowlisted server
+/// flags). A proof measured on this config transfers to the ship gate, which re-measures on live; a proof
+/// measured on the repo HEAD build without live's env does not have to.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Live { pub binary: String, pub sha: String, pub env: String, pub flags: String }
+
+/// `NAME=value` tokens a bash script may `export` / pass verbatim: no quotes, spaces, `$` or backticks.
+fn shell_safe(tokens: &str, upper_names: bool) -> bool {
+    tokens.split_whitespace().all(|t| match t.split_once('=') {
+        Some((n, v)) => !n.is_empty() && n.chars().all(|c| if upper_names { c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_' } else { c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' })
+            && v.chars().all(|c| c.is_ascii_alphanumeric() || ".:_-".contains(c)),
+        None => false,
+    })
+}
+
+/// The newest deploy row of a lab ledger, if its binary, env and flags are shell-safe.
+pub fn live_of(ledger: &str) -> Option<Live> {
+    let mut best: Option<(f64, Live)> = None;
+    for line in ledger.lines() {
+        let Some(j) = crate::lab::parse_json(line) else { continue };
+        if j.str("kind") != Some("deploy") { continue; }
+        let ts = j.num("ts").unwrap_or(0.0);
+        let binary = j.str("binary").unwrap_or("").to_string();
+        let sha = binary.rsplit('-').next().filter(|s| s.len() >= 7 && s.chars().all(|c| c.is_ascii_hexdigit())).unwrap_or("").to_string();
+        let live = Live { binary, sha, env: j.str("env").unwrap_or("").to_string(), flags: j.str("flags").unwrap_or("").to_string() };
+        if best.as_ref().map(|(t, _)| ts >= *t).unwrap_or(true) { best = Some((ts, live)); }
+    }
+    let l = best?.1;
+    let bin_ok = !l.binary.is_empty() && l.binary.chars().all(|c| c.is_ascii_alphanumeric() || ".-_".contains(c));
+    (bin_ok && shell_safe(&l.env, true) && shell_safe(&l.flags, false)).then_some(l)
+}
+
+/// The first lines of a job: which build runs, with which env. Live when known, else the repo HEAD build.
+fn stage_prelude(live: Option<&Live>) -> String {
+    match live {
+        Some(l) => format!("# LIVE config (newest deploy row): {b}{e}{f}: the proof is measured on what prod runs\n\
+D=~/alien-bin/{b}; B=$D\n[ -d \"$D\" ] || {{ echo \"MISSING live binary $D\" | tee -a \"$OUT\"; exit 2; }}\n{x}",
+            b = l.binary, e = if l.env.is_empty() { String::new() } else { format!(" env {}", l.env) },
+            f = if l.flags.is_empty() { String::new() } else { format!(" flags {}", l.flags) },
+            x = if l.env.is_empty() { String::new() } else { format!("export {}\n", l.env) }),
+        None => "# no deploy row: repo HEAD build without live env (the ship gate re-measures on live)\nD=$(stage llama.cpp-alien2); B=$D\n".to_string(),
+    }
+}
+
+/// Knobs the feature factory can ship: (allowlisted server flag, the auto-gate's value line that measures this knob's metric).
+fn shippable(k: &Knob) -> Option<(&'static str, &'static str)> {
+    match k.name.as_str() { "draft" => Some(("spec-draft-n-max", "code_gain_permille")), _ => None }
+}
+
 fn template(id: &str) -> Option<(&'static str, u32, u32)> {
     // (body, fixed minutes, minutes per run per arm)
     match id { "ub" => Some((UB, 2, 2)), "draft" => Some((DRAFT, 4, 1)), _ => None }
@@ -84,7 +131,7 @@ pub fn arm_regex(k: &Knob, value: &str) -> String {
     format!("^arm\\t{}\\tmedian {}=([\\d.]+)", k.arm_of(value).1, k.metric)
 }
 
-pub fn design(item: &Item, k: &Knob, lessons: &Lessons, cv_pct: f64, job_id: u32) -> Result<Design, String> {
+pub fn design(item: &Item, k: &Knob, lessons: &Lessons, cv_pct: f64, job_id: u32, live: Option<&Live>) -> Result<Design, String> {
     // External lab template (`template=ext:<file>` in the knob file): a wrapper hands the arms to
     // ~/lab-templates/<file> on raven, which must print the same contract as built-in templates:
     // one `rep<TAB><arm><TAB><metric>=x` line per run and one `arm<TAB><arm><TAB>median <metric>=m` per arm.
@@ -113,12 +160,22 @@ pub fn design(item: &Item, k: &Knob, lessons: &Lessons, cv_pct: f64, job_id: u32
     let job_name = format!("lab-{}-{}{}", job_id, k.name, item.value);
     let prefix = match k.matcher.split_once(':') { Some(("prefix", p)) => p, Some(("group", _)) => "", _ => &k.name };
     let value_meta = ((item.score * 5.0).round() as i64).clamp(1, 10);
+    // The feature factory ships a PROVEN knob through an auto-gate (live vs live+knob, full regression suite,
+    // this claim re-measured on live). Only allowlisted flags, only with a known live sha; the claim must
+    // clear one single-run noise band (in permille), and never less than +1%.
+    let pred_name = format!("{}{}-beats-{}{}-{}", k.name, item.value, k.name, k.current, k.metric);
+    let feature = match (live, shippable(k)) {
+        (Some(l), Some((flag, value))) if !l.sha.is_empty() => format!("# LAB-FEATURE: name={}{} commit={} env=- flags={}={} required={} value={}>={}\n",
+            k.name, item.value, l.sha, flag, item.value, pred_name, value, ((lessons.band_pct * 10.0).ceil() as i64).max(10)),
+        _ => String::new(),
+    };
+    let ub = live.and_then(|l| l.flags.split_whitespace().find_map(|t| t.strip_prefix("ub="))).unwrap_or("256").to_string();
     let mut job = format!("#!/usr/bin/env bash\n# LAB-META: est_min={} value={} out=logs/{n}.out pred=lab-pred/{n}.tsv\n\
-# struktura loop {n}: {} {} (arm A) vs incumbent {} (arm B) on {} ({}), {} runs per arm\n\
-# why: {}\nset -uo pipefail\nsource ~/lab-lib.sh\nOUT=~/logs/{n}.out; : > \"$OUT\"\n{}\n",
-        est, value_meta, k.name, item.value, k.current, k.metric, k.what, runs, item.why, MED, n = job_name);
+{feat}# struktura loop {n}: {} {} (arm A) vs incumbent {} (arm B) on {} ({}), {} runs per arm\n\
+# why: {}\nset -uo pipefail\nsource ~/lab-lib.sh\nOUT=~/logs/{n}.out; : > \"$OUT\"\n{}\n{stage}",
+        est, value_meta, k.name, item.value, k.current, k.metric, k.what, runs, item.why, MED, n = job_name, feat = feature, stage = stage_prelude(live));
     job.push_str(&body.replace("@INC@", &k.current).replace("@CH@", &item.value).replace("@R@", &runs.to_string())
-        .replace("@P@", prefix).replace("@METRIC@", &k.metric).replace("@JOB@", &job_name));
+        .replace("@P@", prefix).replace("@METRIC@", &k.metric).replace("@JOB@", &job_name).replace("@UB@", &ub));
     job.push_str(&format!("echo \"### {}-DONE $(date +%T)\" | tee -a \"$OUT\"\n", job_name));
     let (a, b) = (arm_regex(k, &item.value), arm_regex(k, &k.current));
     let op = if k.lower_is_better { "<%" } else { ">%" };
@@ -156,11 +213,11 @@ mod tests {
         let k = crate::ouroboros::knobs::parse_knobs("knob chunk 0 32 64 128 current=64 metric=sum_s dir=lower match=group:contend alias=0:stock template=ext:contend.sh").unwrap().remove(0);
         let it = Item { kind: Kind::Challenger, knob: "chunk".into(), value: "32".into(), pred: None, score: 0.6, observed_effect_pct: None, samples: 0, why: "test".into() };
         let ls = crate::ouroboros::learn::Lessons { calibration: 1.0, calibration_n: 0, fragile: Vec::new(), easy: 0, band_pct: 1.6 };
-        let d = design(&it, &k, &ls, 0.578, 301).expect("designs");
+        let d = design(&it, &k, &ls, 0.578, 301, None).expect("designs");
         assert!(d.job.contains("TPL=~/lab-templates/contend.sh") && d.job.contains("MISSING template"), "{}", d.job);
         assert!(d.job.contains("ARMS=\"32 64\"") && d.job.contains("PREFIX=\"\""), "{}", d.job);
         assert!(d.pred.contains("^arm\\t32\\tmedian sum_s=") && d.pred.contains("<%"), "{}", d.pred);
-        assert!(design(&it, &crate::ouroboros::knobs::parse_knobs("knob chunk 32 64 current=64 metric=sum_s template=ext:../x.sh").unwrap().remove(0), &ls, 0.578, 301).is_err(), "path traversal refused");
+        assert!(design(&it, &crate::ouroboros::knobs::parse_knobs("knob chunk 32 64 current=64 metric=sum_s template=ext:../x.sh").unwrap().remove(0), &ls, 0.578, 301, None).is_err(), "path traversal refused");
     }
     use crate::ouroboros::knobs::{parse_knobs, BUILTIN};
 
@@ -175,12 +232,12 @@ mod tests {
 
     #[test]
     fn power_sized_threshold_inside_one_band() {
-        let d = design(&item("ub", "128", Some(6.2)), &knob("ub"), &lessons(1.0), 0.578, 300).unwrap();
+        let d = design(&item("ub", "128", Some(6.2)), &knob("ub"), &lessons(1.0), 0.578, 300, None).unwrap();
         assert!((d.predicted_effect_pct - 6.2).abs() < 1e-9);
         assert!((d.threshold_pct - 4.6).abs() < 1e-9, "{}", d.threshold_pct);
         assert_eq!(d.runs_per_arm, crate::power::runs_needed(0.578, 6.2, 0.05, 0.8).clamp(2, 8));
         // Unmeasured: prior 3% x calibration 0.5 = 1.5% -> raised to one band; threshold never below the band.
-        let d = design(&item("ub", "128", None), &knob("ub"), &lessons(0.5), 0.578, 301).unwrap();
+        let d = design(&item("ub", "128", None), &knob("ub"), &lessons(0.5), 0.578, 301, None).unwrap();
         assert!((d.predicted_effect_pct - 1.60).abs() < 1e-9 && (d.threshold_pct - 1.60).abs() < 1e-9);
         assert_eq!(d.runs_per_arm, 3, "1.6% at CV 0.578% needs 3 runs per arm");
     }
@@ -188,7 +245,7 @@ mod tests {
     #[test]
     fn pred_regexes_match_exactly_the_summary_lines() {
         let k = knob("ub");
-        let d = design(&item("ub", "128", Some(3.0)), &k, &lessons(1.0), 0.578, 302).unwrap();
+        let d = design(&item("ub", "128", Some(3.0)), &k, &lessons(1.0), 0.578, 302, None).unwrap();
         let sample = "rep\tub256\td0=2816 d32768=2163 d100000=1397\nrep\tub256\td0=2820 d32768=2160 d100000=1401\narm\tub256\tmedian d100000=1399\n\
 rep\tub128\td0=2700 d32768=2100 d100000=1350\nrep\tub128\td0=2710 d32768=2101 d100000=1352\narm\tub128\tmedian d100000=1351\n";
         let line = d.pred.lines().find(|l| !l.starts_with('#')).unwrap();
@@ -206,13 +263,13 @@ rep\tub128\td0=2700 d32768=2100 d100000=1350\nrep\tub128\td0=2710 d32768=2101 d1
     #[test]
     fn tautology_and_missing_instrument_refused() {
         assert!(check_pred("x\t^arm\\tub256\\tmedian d=([\\d.]+)\t>%\t^arm\\tub256\\tmedian d=([\\d.]+)@@2\n").is_err());
-        assert!(design(&item("chunk", "32", Some(40.0)), &knob("chunk"), &lessons(1.0), 0.578, 303).is_err());
-        assert!(design(&item("budget", "4000", None), &knob("budget"), &lessons(1.0), 0.578, 304).is_err());
+        assert!(design(&item("chunk", "32", Some(40.0)), &knob("chunk"), &lessons(1.0), 0.578, 303, None).is_err());
+        assert!(design(&item("budget", "4000", None), &knob("budget"), &lessons(1.0), 0.578, 304, None).is_err());
     }
 
     #[test]
     fn emitted_job_is_lab_shaped() {
-        let d = design(&item("draft", "5", None), &knob("draft"), &lessons(1.0), 0.578, 305).unwrap();
+        let d = design(&item("draft", "5", None), &knob("draft"), &lessons(1.0), 0.578, 305, None).unwrap();
         assert!(d.job.starts_with("#!/usr/bin/env bash\n# LAB-META: est_min="));
         assert!(d.job.contains("source ~/lab-lib.sh") && d.job.contains("set -uo pipefail"));
         assert!(d.job.contains("up $pid") && d.job.contains("smoke $SRV"), "server jobs use the up/smoke gates");
@@ -220,6 +277,41 @@ rep\tub128\td0=2700 d32768=2100 d100000=1350\nrep\tub128\td0=2710 d32768=2101 d1
         assert!(!d.job.contains("2>&1 |") && !d.job.contains("build/bin/llama"), "lint R2/R3");
         assert!(d.job.contains("--spec-draft-n-max $v") && d.job.contains("for v in 7 5"));
         assert!(d.manifest.contains("\"metric\":\"code_tps\""));
+    }
+    #[test]
+    fn live_config_is_the_newest_deploy_and_must_be_shell_safe() {
+        let l = "{\"kind\":\"deploy\",\"ts\":10,\"binary\":\"llama.cpp-alien2-78f60c2\",\"env\":\"ALIEN_PREFILL_CHUNK=64\"}\n\
+                 {\"kind\":\"deploy\",\"ts\":20,\"binary\":\"llama.cpp-alien2-5a3cf82\",\"env\":\"ALIEN_PREFILL_CHUNK=64 ALIEN_PAR_ACCEPT=1\",\"flags\":\"ub=512 spec-draft-n-max=7\"}\n";
+        let live = live_of(l).unwrap();
+        assert_eq!((live.binary.as_str(), live.sha.as_str(), live.flags.as_str()), ("llama.cpp-alien2-5a3cf82", "5a3cf82", "ub=512 spec-draft-n-max=7"));
+        // anything a shell would interpret is refused: no live config, the job falls back to HEAD
+        for bad in ["\"env\":\"X=$(rm -rf ~)\"", "\"env\":\"lower=1\"", "\"env\":\"A=1;B\"", "\"flags\":\"ub=512 `x`\""] {
+            let row = format!("{{\"kind\":\"deploy\",\"ts\":30,\"binary\":\"b-1234567\",{}}}\n", bad);
+            assert!(live_of(&row).is_none(), "{}", bad);
+        }
+        assert!(live_of("{\"kind\":\"deploy\",\"ts\":1,\"binary\":\"../evil\"}").is_none());
+        assert!(live_of("").is_none());
+    }
+
+    #[test]
+    fn jobs_run_on_live_and_draft_wins_carry_a_lab_feature_line() {
+        let live = Live { binary: "llama.cpp-alien2-5a3cf82".into(), sha: "5a3cf82".into(),
+            env: "ALIEN_PREFILL_CHUNK=64 ALIEN_PAR_ACCEPT=1".into(), flags: "ub=512 spec-draft-n-max=7".into() };
+        let d = design(&item("draft", "5", None), &knob("draft"), &lessons(1.0), 0.578, 305, Some(&live)).unwrap();
+        assert!(d.job.contains("D=~/alien-bin/llama.cpp-alien2-5a3cf82; B=$D\n"), "{}", d.job);
+        assert!(d.job.contains("export ALIEN_PREFILL_CHUNK=64 ALIEN_PAR_ACCEPT=1\n"));
+        assert!(!d.job.contains("stage llama.cpp-alien2"), "never the HEAD build when live is known");
+        assert!(d.job.contains("-ub 512 --port"), "the draft server runs live's ub");
+        let band = lessons(1.0).band_pct;
+        let want = format!("# LAB-FEATURE: name=draft5 commit=5a3cf82 env=- flags=spec-draft-n-max=5 required=draft5-beats-draft7-code_tps value=code_gain_permille>={}\n",
+            ((band * 10.0).ceil() as i64).max(10));
+        assert!(d.job.contains(&want), "{}", d.job);
+        assert!(d.pred.contains("draft5-beats-draft7-code_tps\t"), "the required name is the job's own prediction");
+        // ub: not shippable yet (the gate measures no prefill gain) -> no LAB-FEATURE line; no live -> HEAD build
+        let u = design(&item("ub", "128", None), &knob("ub"), &lessons(1.0), 0.578, 306, Some(&live)).unwrap();
+        assert!(!u.job.contains("LAB-FEATURE"));
+        let h = design(&item("draft", "5", None), &knob("draft"), &lessons(1.0), 0.578, 307, None).unwrap();
+        assert!(h.job.contains("D=$(stage llama.cpp-alien2); B=$D") && !h.job.contains("LAB-FEATURE") && h.job.contains("-ub 256 --port"));
     }
 }
 
@@ -234,7 +326,8 @@ mod prior_tests {
         let k = parse_knobs(BUILTIN).unwrap().into_iter().find(|k| k.name == "draft").unwrap();
         let it = Item { kind: Kind::Challenger, knob: "draft".into(), value: "5".into(), pred: None, score: 0.5, observed_effect_pct: None, samples: 0, why: "t".into() };
         let ls = |c| Lessons { calibration: c, calibration_n: 19, fragile: vec![], easy: 0, band_pct: 1.6 };
-        assert!((design(&it, &k, &ls(3.0), 0.578, 1).unwrap().predicted_effect_pct - 3.0).abs() < 1e-9, "factor 3 must not inflate");
-        assert!((design(&it, &k, &ls(0.6), 0.578, 1).unwrap().predicted_effect_pct - 1.8).abs() < 1e-9, "factor 0.6 shrinks");
+        assert!((design(&it, &k, &ls(3.0), 0.578, 1, None).unwrap().predicted_effect_pct - 3.0).abs() < 1e-9, "factor 3 must not inflate");
+        assert!((design(&it, &k, &ls(0.6), 0.578, 1, None).unwrap().predicted_effect_pct - 1.8).abs() < 1e-9, "factor 0.6 shrinks");
     }
+
 }

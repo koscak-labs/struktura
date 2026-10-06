@@ -525,7 +525,7 @@ mod tests {
         let mut ys = Vec::new();
         for it in ag.iter().filter(|i| i.kind == super::super::agenda::Kind::Challenger) {
             let k = knobs.iter().find(|k| k.name == it.knob).unwrap();
-            let thr = super::super::design::design(it, k, &lessons, obs.lab.cal_cv_pct, 0).map(|d| d.threshold_pct).unwrap_or(lessons.band_pct);
+            let thr = super::super::design::design(it, k, &lessons, obs.lab.cal_cv_pct, 0, None).map(|d| d.threshold_pct).unwrap_or(lessons.band_pct);
             let y = m.estimate_challenger(k, thr, it.observed_effect_pct);
             std::println!("live: {}={} yield {:.3} (evidence {:.1}, knob history n={} decisive={}) cites {:?}",
                 it.knob, it.value, y.expected, y.evidence, m.history(&it.knob).n, m.history(&it.knob).decisive, y.cites);
