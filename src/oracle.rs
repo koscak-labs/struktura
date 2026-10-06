@@ -152,6 +152,14 @@ pub struct Backtest {
     pub base_brier: f64,
     /// 1 - brier / base_brier (positive = better than the base rate).
     pub skill: f64,
+    /// Job-weighted (a job = one prediction file within one scoring burst): mean Brier inside each job,
+    /// then the mean over jobs, for the oracle and the base rate alike. Names of one job share one load,
+    /// one reading, one draw: they are not independent evidence, so an 11-name gate must not outvote a 1-name job.
+    pub n_jobs: usize,
+    pub brier_jobs: f64,
+    pub base_brier_jobs: f64,
+    /// Job key of each forecast (parallel to `forecasts`).
+    pub jobs: Vec<String>,
     /// Per window of `w` forecasts: (first, last, oracle brier, base brier).
     pub windows: Vec<(usize, usize, f64, f64)>,
     /// Calibration bins over p: (lo, hi, n, mean p, pass rate).
@@ -168,6 +176,7 @@ pub fn backtest(ledger: &str, gap: f64, window: usize, nbins: usize) -> Backtest
     let mut o = Oracle::new();
     let mut ci = 0;
     let mut bt = Backtest::default();
+    let mut gi = 0usize;
     let mut i = 0;
     while i < rows.len() {
         let mut j = i + 1;
@@ -177,9 +186,11 @@ pub fn backtest(ledger: &str, gap: f64, window: usize, nbins: usize) -> Backtest
         for r in &rows[i..j] {
             let (p, basis) = o.forecast(&r.key(), &r.name, &r.op);
             bt.forecasts.push((r.ts, r.key(), p, base, r.pass, basis));
+            bt.jobs.push(std::format!("{}#{}", gi, r.pred));
         }
         for r in &rows[i..j] { o.learn(r); }
         i = j;
+        gi += 1;
     }
     let sq = |p: f64, y: bool| { let t = if y { 1.0 } else { 0.0 }; (p - t) * (p - t) };
     bt.n = bt.forecasts.len();
@@ -187,6 +198,15 @@ pub fn backtest(ledger: &str, gap: f64, window: usize, nbins: usize) -> Backtest
     bt.brier = bt.forecasts.iter().map(|f| sq(f.2, f.4)).sum::<f64>() / bt.n as f64;
     bt.base_brier = bt.forecasts.iter().map(|f| sq(f.3, f.4)).sum::<f64>() / bt.n as f64;
     bt.skill = if bt.base_brier > 0.0 { 1.0 - bt.brier / bt.base_brier } else { 0.0 };
+    let mut per: BTreeMap<String, (f64, f64, usize)> = BTreeMap::new();
+    for (f, jk) in bt.forecasts.iter().zip(&bt.jobs) {
+        let e = per.entry(jk.clone()).or_insert((0.0, 0.0, 0));
+        e.0 += sq(f.2, f.4); e.1 += sq(f.3, f.4); e.2 += 1;
+    }
+    let nj = per.len().max(1) as f64;
+    bt.n_jobs = per.len();
+    bt.brier_jobs = per.values().map(|(a, _, n)| a / *n as f64).sum::<f64>() / nj;
+    bt.base_brier_jobs = per.values().map(|(_, b, n)| b / *n as f64).sum::<f64>() / nj;
     let w = window.max(1);
     for (k, ch) in bt.forecasts.chunks(w).enumerate() {
         let n = ch.len() as f64;
@@ -355,5 +375,19 @@ mod tests {
         assert_eq!((r[1].1.as_str(), r[1].3), ("void", None), "void is resolved but never scored");
         let already = fx + &std::format!("{{\"kind\":\"score\",\"target\":\"pass\",\"id\":\"{id0}\"}}\n");
         assert_eq!(resolve(&already, &l).len(), 1, "a scored id is never scored twice");
+    }
+
+    #[test]
+    fn job_weighting_gives_each_job_one_vote() {
+        // job A: 9 easy names scored together (all pass); job B: 1 name, much later, that fails
+        let mut l = cal(1, 200.0) + &cal(2, 202.0);
+        for k in 0..9u32 { l += &pred(100 + k, "a.tsv", &std::format!("cand-ok-{k}"), "1 vs 1 (0.0%, need >% 1%)", "pass"); }
+        l += &pred(1000, "b.tsv", "big-claim", "1 vs 1 (0.0%, need >% 1%)", "fail");
+        let b = backtest(&l, 30.0, 10, 5);
+        assert_eq!((b.n, b.n_jobs), (10, 2));
+        let per_name = b.forecasts.iter().map(|f| { let y = if f.4 { 1.0 } else { 0.0 }; (f.2 - y) * (f.2 - y) }).collect::<Vec<_>>();
+        let job_a = per_name[..9].iter().sum::<f64>() / 9.0;
+        assert!((b.brier_jobs - (job_a + per_name[9]) / 2.0).abs() < 1e-12, "mean over jobs of the mean inside each job");
+        assert!((b.brier - per_name.iter().sum::<f64>() / 10.0).abs() < 1e-12);
     }
 }

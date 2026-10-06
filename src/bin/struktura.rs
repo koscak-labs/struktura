@@ -6140,11 +6140,12 @@ fn cmd_oracle(args: &[String]) {
         for (first, last, br, base) in &b.windows { println!("{{\"event\":\"window\",\"first\":{},\"last\":{},\"brier\":{:.4},\"base_brier\":{:.4}}}", first, last, br, base); }
         for (lo, hi, n, mp, rate) in &b.bins { println!("{{\"event\":\"bin\",\"lo\":{:.2},\"hi\":{:.2},\"n\":{},\"mean_p\":{:.4},\"pass_rate\":{:.4}}}", lo, hi, n, mp, rate); }
         for (basis, n, br, bb) in &b.by_basis { println!("{{\"event\":\"basis\",\"basis\":\"{}\",\"n\":{},\"brier\":{:.4},\"base_brier\":{:.4}}}", basis, n, br, bb); }
-        println!("{{\"summary\":true,\"n\":{},\"brier\":{:.4},\"base_brier\":{:.4},\"skill\":{:.4},\"beats_base_by\":{:.4}}}", b.n, b.brier, b.base_brier, b.skill, b.base_brier - b.brier);
+        println!("{{\"summary\":true,\"n\":{},\"brier\":{:.4},\"base_brier\":{:.4},\"skill\":{:.4},\"beats_base_by\":{:.4},\"jobs\":{},\"brier_jobs\":{:.4},\"base_brier_jobs\":{:.4},\"beats_base_by_jobs\":{:.4}}}", b.n, b.brier, b.base_brier, b.skill, b.base_brier - b.brier, b.n_jobs, b.brier_jobs, b.base_brier_jobs, b.base_brier_jobs - b.brier_jobs);
         return;
     }
     println!("oracle backtest: {} scored predictions, each forecast from strictly earlier rows", b.n);
     println!("  Brier {:.4} vs base-rate {:.4}: skill {:+.3} (beats base by {:+.4})", b.brier, b.base_brier, b.skill, b.base_brier - b.brier);
+    println!("  job-weighted over {} jobs (each job one vote; the arbiter's primary): Brier {:.4} vs base {:.4} (beats base by {:+.4})", b.n_jobs, b.brier_jobs, b.base_brier_jobs, b.base_brier_jobs - b.brier_jobs);
     for (basis, n, br, bb) in &b.by_basis { println!("  source {:<18} n={:<4} Brier {:.4}  base on the same rows {:.4}", basis, n, br, bb); }
     println!("  windows of {}:", window);
     for (first, last, br, base) in &b.windows { println!("    rows {:>3}-{:<3} Brier {:.4}  base {:.4}  {}", first, last, br, base, if br < base { "better" } else { "worse" }); }
