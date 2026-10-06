@@ -436,6 +436,37 @@ $ struktura redblue
 
 The run is deterministic (seeded; two runs gave byte-identical output) and takes about 100 s.
 
+## ⚖️ A/B: did the level change?
+
+`compare` measures a change in structure (α), not in level. Two runs of a benchmark can differ by +80% in median step time and have the same α (on the files below, `compare` reports `shift=-0.006 HEALTHY`). `struktura ab` compares the level of B against A:
+
+- the median of each arm (`--stat mean` or `trimmed` for a 20% trimmed mean), and the percent difference;
+- a 95% percentile-bootstrap interval of that difference, each arm resampled independently, seeded (`--seed`, `--resamples`);
+- Mann-Whitney U (two-sided, normal approximation, tie-corrected) and Cliff's delta.
+
+The verdict is `B HIGHER` / `B LOWER` when the interval excludes 0 and the difference is at least `--min-effect` percent (default 1), `EQUIVALENT` when the whole interval is inside ±min-effect, and `INCONCLUSIVE` otherwise. `--lower-is-better` says `B BETTER` / `B WORSE` instead. `--json` prints one object.
+
+Synthetic step times (`examples/ab_demo_data.rs`: Pareto-tailed, 3% stalls of 2-6x; excess kurtosis 38 and 51), B generated 1.79x slower than A:
+
+```
+<!-- example:ab -->
+$ struktura ab data/ab_a_synthetic.csv data/ab_b_synthetic.csv --col step_ms --lower-is-better
+
+  STRUKTURA - A/B level comparison (B against A)
+  ================================================
+  A  data/ab_a_synthetic.csv  n=229  median 74.5200
+  B  data/ab_b_synthetic.csv  n=222  median 132.5395
+  ------------------------------------------------
+  difference:    +77.86%  95% CI [+74.36%, +80.85%]
+                 (percentile bootstrap, 10000 resamples, seed 0)
+  Mann-Whitney:  U=48931.0  z=+16.99  p=9.65e-65  (two-sided)
+  Cliff's delta: +0.925  (P(b > a) - P(b < a))
+  >>> B WORSE (95% CI excludes 0 and |effect| >= 1%)
+<!-- /example -->
+```
+
+How often it is wrong, on the same kind of data without stalls (`cargo run --release --example ab_null_rate`, 1,000 pairs per n): with A and B from the same distribution it called a direction in 2.4-4.7% of pairs from n = 5 to 200. Without a floor the bootstrap called one in 10.7% at n = 3 and 6.8% at n = 4, so below 5 values per arm the verdict is always `INCONCLUSIVE`, and below 10 the output carries a warning. A real +10% shift was called `B HIGHER` in 31% of pairs at n = 5, 55% at n = 10, 93% at n = 30 and 100% from n = 100; it was called `B LOWER` in at most 0.1%. `EQUIVALENT` needs an interval narrower than ±min-effect: on two 300-value heavy-tailed runs from the same distribution the median interval was [-2.2%, +1.0%], which is `INCONCLUSIVE` at the default 1% and `EQUIVALENT` with `--min-effect 3`. The values in each arm are treated as exchangeable; a drift within a run (warm-up, a leak) makes the interval too narrow.
+
 ## 🎮 Commands
 
 | command | what it does |
@@ -445,6 +476,7 @@ The run is deterministic (seeded; two runs gave byte-identical output) and takes
 | `check <file>` | one-shot DFA analysis |
 | `prove <file>` | bootstrap CI on α plus a shuffle test for structure |
 | `compare <a> <b>` | α shift between two signals, with a z-score |
+| `ab <a> <b>` | level A/B of two samples: median % change with a bootstrap CI, Mann-Whitney, Cliff's delta |
 | `scan <file>` | auto-classify, trend and health in one pass |
 | `demo` | bearing fault on CWRU data |
 | `voyager` | Voyager 1 magnetometer, 2021 vs 2022 |

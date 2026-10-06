@@ -350,7 +350,8 @@ fn main() {
         println!("    struktura text <file.txt>                  Writing rhythm");
         println!("    struktura market <prices.csv>              Financial regime detection");
         println!("    struktura rhythm <timestamps.csv>          Event timing (heartbeat/git/IoT)");
-        println!("    struktura compare <a.csv> <b.csv>         Compare two signals");
+        println!("    struktura compare <a.csv> <b.csv>         Compare two signals (structure: DFA alpha)");
+        println!("    struktura ab <a.csv> <b.csv>              A/B level: median % change, bootstrap CI, Mann-Whitney");
         println!("    struktura copilot-compare <file.csv>      DFA vs boolean threshold (side-by-side)");
         println!("    struktura bench                           Full benchmark with all fault types");
         println!("    struktura benchmark-faults                 F1 scores across 6 telemetry fault types");
@@ -366,6 +367,7 @@ fn main() {
         "check" => cmd_check(&args),
         "prove" => cmd_prove(&args),
         "compare" => cmd_compare(&args),
+        "ab" => cmd_ab(&args),
         "stamp" => cmd_stamp(&args),
         "bench" => cmd_bench(),
         "report" => cmd_report(&args),
@@ -690,6 +692,160 @@ fn cmd_compare(args: &[String]) {
     } else {
         println!("  >>> {}{}\x1b[0m", color, label);
     }
+    println!();
+}
+
+const AB_USAGE: &str = "Usage: struktura ab <a.csv> <b.csv> [--col N|name] [--stat median|mean|trimmed] [--resamples N] [--seed S] [--min-effect PCT] [--lower-is-better] [--json]";
+
+fn json_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// JSON number; exponent form for tiny magnitudes (a p-value of 1e-65 would
+/// otherwise print 65 zeros).
+fn json_num(x: f64) -> String {
+    if x != 0.0 && x.abs() < 1e-4 { format!("{:e}", x) } else { format!("{}", x) }
+}
+
+fn fmt_p(p: f64) -> String {
+    if p >= 0.001 { format!("{:.4}", p) } else { format!("{:.2e}", p) }
+}
+
+/// Level A/B of two samples (B against A): bootstrap CI of the percent
+/// difference of a robust statistic, Mann-Whitney U, Cliff's delta.
+fn cmd_ab(args: &[String]) {
+    use struktura::ab::{ab_compare, AbConfig, AbVerdict, Statistic, MIN_N_VERDICT, SMALL_N};
+    let mut files: Vec<String> = Vec::new();
+    let mut cfg = AbConfig::default();
+    let (mut json, mut lower_is_better) = (false, false);
+    let bad = |flag: &str, v: &str| -> ! {
+        eprintln!("Error: invalid value for {}: {}", flag, v);
+        eprintln!("{}", AB_USAGE);
+        process::exit(1);
+    };
+    let mut i = 2;
+    while i < args.len() {
+        let a = args[i].as_str();
+        let val = args.get(i + 1).map(|s| s.as_str());
+        match (a, val) {
+            ("--json", _) => { json = true; i += 1; }
+            ("--lower-is-better", _) => { lower_is_better = true; i += 1; }
+            ("--help" | "-h", _) => {
+                println!("{}", AB_USAGE);
+                println!("  Is B's level higher, lower or the same as A's? For benchmark A/B runs");
+                println!("  (latencies, step times, throughput), heavy tails welcome.");
+                println!("  --stat         median (default), mean, or trimmed (20% each end)");
+                println!("  --resamples N  bootstrap resamples (default 10000)");
+                println!("  --seed S       bootstrap seed (default 0); same seed, same interval");
+                println!("  --min-effect   smallest change in % worth calling, and the equivalence margin (default 1)");
+                println!("  --lower-is-better  say B BETTER / B WORSE instead of B LOWER / B HIGHER");
+                println!("  Verdict: B HIGHER/LOWER when the 95% CI of the % difference excludes 0 and the");
+                println!("  effect is >= min-effect; EQUIVALENT when the CI is inside +-min-effect;");
+                println!("  INCONCLUSIVE otherwise, and always below {} values per arm.", MIN_N_VERDICT);
+                process::exit(0);
+            }
+            ("--col", Some(_)) => { i += 2; } // read by resolve_col
+            ("--stat", Some(v)) => { cfg.statistic = Statistic::parse(v).unwrap_or_else(|| bad(a, v)); i += 2; }
+            ("--resamples", Some(v)) => {
+                cfg.resamples = v.parse().ok().filter(|&n: &usize| n >= 1).unwrap_or_else(|| bad(a, v));
+                i += 2;
+            }
+            ("--seed", Some(v)) => { cfg.seed = v.parse().unwrap_or_else(|_| bad(a, v)); i += 2; }
+            ("--min-effect", Some(v)) => {
+                cfg.min_effect_pct = v.trim_end_matches('%').parse().ok()
+                    .filter(|m: &f64| m.is_finite() && *m >= 0.0).unwrap_or_else(|| bad(a, v));
+                i += 2;
+            }
+            (s, _) if s == "-" || !s.starts_with('-') => { files.push(s.to_string()); i += 1; }
+            (s, _) => bad("option", s),
+        }
+    }
+    if files.len() != 2 {
+        eprintln!("{}", AB_USAGE);
+        process::exit(1);
+    }
+
+    let mut warnings: Vec<String> = Vec::new();
+    let mut load = |path: &str, arm: char| -> Vec<f64> {
+        let mut v = read_csv(path);
+        let before = v.len();
+        v.retain(|x| x.is_finite());
+        if v.len() < before {
+            warnings.push(format!("{}: dropped {} non-finite value(s)", arm, before - v.len()));
+        }
+        v
+    };
+    let data_a = load(&files[0], 'A');
+    let data_b = load(&files[1], 'B');
+    let r = ab_compare(&data_a, &data_b, &cfg).unwrap_or_else(|e| {
+        eprintln!("Error: {}", e);
+        process::exit(1);
+    });
+    if r.small_sample() {
+        warnings.push(format!("fewer than {} values in an arm (A n={}, B n={}): the bootstrap interval is optimistic at small n", SMALL_N, r.n_a, r.n_b));
+    }
+    let mw = r.mann_whitney;
+    let decisive = matches!(r.verdict, AbVerdict::Higher | AbVerdict::Lower);
+    if decisive && mw.p_value < 0.05 && (mw.cliffs_delta > 0.0) != (r.diff_pct > 0.0) {
+        warnings.push(format!("the {} and Mann-Whitney point in opposite directions: the distributions differ in shape, not just level", cfg.statistic.name()));
+    }
+    let m = cfg.min_effect_pct;
+    let reason = match r.verdict {
+        AbVerdict::Higher | AbVerdict::Lower => format!("95% CI excludes 0 and |effect| >= {}%", m),
+        AbVerdict::Equivalent => format!("95% CI inside +-{}%", m),
+        AbVerdict::Inconclusive if r.n_a < MIN_N_VERDICT || r.n_b < MIN_N_VERDICT =>
+            format!("fewer than {} values in an arm", MIN_N_VERDICT),
+        AbVerdict::Inconclusive if r.ci_low_pct > 0.0 || r.ci_high_pct < 0.0 =>
+            format!("95% CI excludes 0, but |effect| < {}% and the CI reaches beyond +-{}%", m, m),
+        AbVerdict::Inconclusive => format!("95% CI includes 0 and reaches beyond +-{}%", m),
+    };
+    let label = r.verdict.label(lower_is_better);
+
+    if json {
+        let warn_json: Vec<String> = warnings.iter().map(|w| json_str(w)).collect();
+        println!(
+            "{{\"a\":{{\"file\":{},\"n\":{},\"stat\":{}}},\"b\":{{\"file\":{},\"n\":{},\"stat\":{}}},\"statistic\":\"{}\",\"diff_pct\":{},\"ci95_pct\":[{},{}],\"resamples\":{},\"resamples_used\":{},\"seed\":{},\"min_effect_pct\":{},\"mann_whitney\":{{\"u_b\":{},\"z\":{},\"p\":{}}},\"cliffs_delta\":{},\"lower_is_better\":{},\"verdict\":\"{}\",\"reason\":{},\"warnings\":[{}]}}",
+            json_str(&files[0]), r.n_a, r.stat_a, json_str(&files[1]), r.n_b, r.stat_b,
+            cfg.statistic.name(), r.diff_pct, r.ci_low_pct, r.ci_high_pct, cfg.resamples, r.resamples_used,
+            cfg.seed, m, mw.u_b, mw.z, json_num(mw.p_value), mw.cliffs_delta, lower_is_better, label,
+            json_str(&reason), warn_json.join(",")
+        );
+        return;
+    }
+
+    let color = match (r.verdict, lower_is_better) {
+        (AbVerdict::Equivalent, _) => "\x1b[32m",
+        (AbVerdict::Inconclusive, _) => "\x1b[33m",
+        (AbVerdict::Lower, true) => "\x1b[32;1m",
+        (AbVerdict::Higher, true) => "\x1b[31;1m",
+        _ => "\x1b[36;1m",
+    };
+    let stat = cfg.statistic.name();
+    println!();
+    println!("  \x1b[1mSTRUKTURA\x1b[0m - A/B level comparison (B against A)");
+    println!("  ================================================");
+    println!("  A  {}  n={}  {} {:.4}", files[0], r.n_a, stat, r.stat_a);
+    println!("  B  {}  n={}  {} {:.4}", files[1], r.n_b, stat, r.stat_b);
+    println!("  ------------------------------------------------");
+    println!("  difference:    {:+.2}%  95% CI [{:+.2}%, {:+.2}%]", r.diff_pct, r.ci_low_pct, r.ci_high_pct);
+    println!("                 (percentile bootstrap, {} resamples, seed {})", cfg.resamples, cfg.seed);
+    println!("  Mann-Whitney:  U={:.1}  z={:+.2}  p={}  (two-sided)", mw.u_b, mw.z, fmt_p(mw.p_value));
+    println!("  Cliff's delta: {:+.3}  (P(b > a) - P(b < a))", mw.cliffs_delta);
+    for w in &warnings {
+        println!("  \x1b[33mwarning:\x1b[0m {}", w);
+    }
+    println!("  >>> {}{}\x1b[0m ({})", color, label, reason);
     println!();
 }
 
