@@ -53,11 +53,19 @@ pub fn observed_effect(obs: &Observation, k: &Knob, value: &str) -> Option<(f64,
 pub fn agenda(obs: &Observation, lessons: &Lessons, knobs: &[Knob], cons: &[Constraint]) -> Vec<Item> {
     let band = lessons.band_pct;
     let mut items = Vec::new();
+    // a fragile verdict scored before the latest deploy measured a config that is no longer live:
+    // re-running its job now answers a different question, so it is stale, not a re-measure
+    let last_deploy = obs.lab.deploys.iter().map(|(t, _)| *t).fold(f64::NEG_INFINITY, f64::max);
     for f in &lessons.fragile {
-        items.push(Item { kind: Kind::Remeasure, knob: String::new(), value: String::new(),
+        let mut it = Item { kind: Kind::Remeasure, knob: String::new(), value: String::new(),
             pred: Some((f.pred.clone(), f.name.clone())), score: 2.0 - (f.margin_pct.abs() / band).min(1.0),
             observed_effect_pct: None, samples: 1,
-            why: format!("{} by {:+.2}% inside the {:.2}% single-run band: a re-run could flip it", f.verdict, f.margin_pct, band) });
+            why: format!("{} by {:+.2}% inside the {:.2}% single-run band: a re-run could flip it", f.verdict, f.margin_pct, band) };
+        if f.ts < last_deploy {
+            it.kind = Kind::Settled; it.score = 0.05;
+            it.why = format!("STALE: {} by {:+.2}% was measured before the deploy at {:.0}; its config is no longer live, so a re-run answers an old question", f.verdict, f.margin_pct, last_deploy);
+        }
+        items.push(it);
     }
     let mut grown_from: Vec<(String, String, String)> = Vec::new();
     for k in knobs {
@@ -251,6 +259,23 @@ mod tests {
         assert_eq!(a[0].kind, Kind::Remeasure);
         assert_eq!(a[0].pred, Some(("130.tsv".into(), "gqa2-5pct-at-64K".into())));
         assert!(a[0].score > a.iter().filter(|i| i.kind == Kind::Challenger).map(|i| i.score).fold(0.0, f64::max));
+    }
+
+    #[test]
+    fn a_deploy_makes_older_fragile_verdicts_stale() {
+        let frag = |ts: u32| format!("{{\"kind\":\"prediction\",\"ts\":{},\"pred\":\"130.tsv\",\"name\":\"gqa2-5pct-at-64K\",\"value\":\"1658 vs 1568 (5.74%, need >% 5%)\",\"op\":\">%\",\"threshold\":\"arm B\",\"verdict\":\"pass\"}}\n", ts);
+        let deploy = "{\"kind\":\"deploy\",\"ts\":50,\"binary\":\"llama-new\"}\n";
+        // scored before the deploy: the config it measured is gone
+        let (o, k) = setup(&(frag(1) + deploy));
+        let a = agenda(&o, &learn(&o), &k, &constraints(&[], &[]));
+        let it = a.iter().find(|i| i.pred.is_some()).unwrap();
+        assert_eq!(it.kind, Kind::Settled, "{}", it.why);
+        assert!(it.why.starts_with("STALE") && it.score < 0.1);
+        assert!(a[0].kind != Kind::Remeasure, "a stale re-measure no longer leads the agenda");
+        // scored after the deploy: still a live re-measure
+        let (o, k) = setup(&(deploy.to_string() + &frag(60)));
+        let a = agenda(&o, &learn(&o), &k, &constraints(&[], &[]));
+        assert_eq!(a[0].kind, Kind::Remeasure);
     }
 
     #[test]

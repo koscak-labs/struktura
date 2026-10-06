@@ -15,7 +15,8 @@
 use super::Observation;
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Fragile { pub pred: String, pub name: String, pub verdict: String, pub margin_pct: f64 }
+/// `ts`: when it was scored; a fragile verdict older than the latest deploy measured a config that is no longer live.
+pub struct Fragile { pub pred: String, pub name: String, pub verdict: String, pub margin_pct: f64, pub ts: f64 }
 
 #[derive(Clone, Debug)]
 pub struct Lessons {
@@ -55,7 +56,7 @@ pub fn learn(obs: &Observation) -> Lessons {
         }
         if let Some(m) = p.margin_pct {
             if m.abs() < obs.band_pct && crate::lab::band_applies(&p.name, &p.value) {
-                fragile.push(Fragile { pred: p.pred.clone(), name: p.name.clone(), verdict: p.verdict.clone(), margin_pct: m });
+                fragile.push(Fragile { pred: p.pred.clone(), name: p.name.clone(), verdict: p.verdict.clone(), margin_pct: m, ts: p.ts });
             }
         }
     }
