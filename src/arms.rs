@@ -44,7 +44,7 @@ pub fn lower_is_better(metric: &str, dir: Direction) -> bool {
         Direction::Higher => false,
         Direction::Lower => true,
         Direction::Auto => metric.to_ascii_lowercase().split(|c: char| !c.is_ascii_alphanumeric())
-            .any(|t| matches!(t, "secs" | "sec" | "seconds" | "ms" | "us" | "time" | "lat" | "latency" | "wall" | "dur" | "duration" | "elapsed" | "ttft" | "gen" | "tokens" | "tok" | "cost")),
+            .any(|t| matches!(t, "secs" | "sec" | "seconds" | "ms" | "us" | "time" | "lat" | "latency" | "wall" | "dur" | "duration" | "elapsed" | "ttft" | "gen" | "tokens" | "tok" | "cost" | "attempts" | "turns")),
     }
 }
 

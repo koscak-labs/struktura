@@ -410,6 +410,7 @@ fn main() {
         "case" => cmd_case(&args),
         "replay" => cmd_replay(&args),
         "pulse" => cmd_pulse(&args),
+        "brain" => cmd_brain(&args),
         "arms" => cmd_arms(&args),
         "lab" => cmd_lab(&args),
         "power" => cmd_power(&args),
@@ -5442,4 +5443,66 @@ fn pulse_load(path: &str, archive: Option<&str>) -> String {
     }
     eprintln!("pulse: archive {}: +{} new rows, {} total", a, added, merged.lines().count());
     merged
+}
+
+fn cmd_brain(args: &[String]) {
+    use struktura::brain::Brain;
+    if args.get(2).map(|s| s.as_str()) != Some("demo") {
+        println!("struktura brain demo   native decision brain (no heap, no model weights to ship): memory + linear model,");
+        println!("                       learning a rover fault-response policy online from its own outcomes, with an ablation");
+        println!("  Library: struktura::brain::Brain<N, D, A>: decide(situation, allowed, safe_default) / learn(situation, action, reward)");
+        process::exit(if args.len() < 3 { 2 } else { 0 });
+    }
+    let names = ["ignore", "recalibrate", "quarantine", "safe-mode"];
+    // World A: thresholds. World B: interactions a linear model cannot represent.
+    let truth_a = |x: &[f32; 4]| -> u8 { if x[2] > 0.8 { 3 } else if x[1] > 0.6 { 2 } else if x[0] > 0.6 { 1 } else { 0 } };
+    let truth_b = |x: &[f32; 4]| -> u8 {
+        if x[2] > 0.6 && x[0] > 0.6 { 3 }              // hot AND drifting: thermal runaway
+        else if x[1] > 0.6 && x[2] < 0.4 { 2 }         // spike while cool: sensor fault
+        else if (x[0] > 0.5) != (x[1] > 0.5) { 1 }     // drift XOR spike: recalibrate
+        else { 0 } };
+    let mut s = 0x9E3779B97F4A7C15u64;
+    let mut rnd = move || { s ^= s << 13; s ^= s >> 7; s ^= s << 17; ((s >> 40) as f32) / (1u64 << 24) as f32 };
+    let steps = 4000usize;
+    let sit: Vec<[f32; 4]> = (0..steps).map(|_| [rnd(), rnd(), rnd(), 1.0]).collect();
+    fn run<const N: usize>(sit: &[[f32; 4]], truth: &dyn Fn(&[f32; 4]) -> u8, use_model: bool) -> (f32, f32, usize) {
+        let mut br: Brain<N, 4, 4> = Brain::new(0.3, 0.5);
+        br.use_model = use_model;
+        let (mut early, mut late) = (0usize, 0usize);
+        for (t, x) in sit.iter().enumerate() {
+            let d = br.decide(x, &[true; 4], 3);
+            let a = if d.abstained && t < 400 { (t % 4) as u8 } else { d.action };
+            let ok = a == truth(x);
+            if t < 1000 && ok { early += 1; }
+            if t >= sit.len() - 1000 && ok { late += 1; }
+            let r = if ok { 1.0 } else if a == 3 { 0.2 } else { 0.0 };
+            br.learn(x, a, r);
+        }
+        (early as f32 / 10.0, late as f32 / 10.0, core::mem::size_of::<Brain<N, 4, 4>>())
+    }
+    println!("struktura brain demo: rover fault response, {} situations [drift, spike, temperature], 4 actions ({})", steps, names.join(", "));
+    println!("  right-action rate, first 1000 / last 1000 decisions (learning online from its own outcomes):");
+    for (wname, truth) in [("A: thresholds", &truth_a as &dyn Fn(&[f32; 4]) -> u8), ("B: interactions", &truth_b as &dyn Fn(&[f32; 4]) -> u8)] {
+        let base = sit[steps - 1000..].iter().filter(|x| truth(x) == 0).count() as f32 / 10.0;
+        let (f0, f1, fsz) = run::<256>(&sit, truth, true);
+        let (m0, m1, msz) = run::<0>(&sit, truth, true);
+        let (k0, k1, _) = run::<256>(&sit, truth, false);
+        println!("  world {}", wname);
+        println!("    {:<28} {:>5.1}% -> {:>5.1}%   {} B", "memory + model (N=256)", f0, f1, fsz);
+        println!("    {:<28} {:>5.1}% -> {:>5.1}%   {} B", "model only (N=0)", m0, m1, msz);
+        println!("    {:<28} {:>5.1}% -> {:>5.1}%", "memory only (no model)", k0, k1);
+        println!("    {:<28}          {:>5.1}%", "baseline: always ignore", base);
+    }
+    let x = [0.2f32, 0.9, 0.3, 1.0];
+    let mut br: Brain<256, 4, 4> = Brain::new(0.0, 0.5);
+    for (t, s) in sit.iter().enumerate() { let a = (t % 4) as u8; br.learn(s, a, if a == truth_b(s) { 1.0 } else if a == 3 { 0.2 } else { 0.0 }); }
+    let d = br.decide(&x, &[true; 4], 3);
+    println!("  example (world B): drift 0.2 spike 0.9 temp 0.3 -> {} (expected reward {:.2}, evidence {:.1})", names[d.action as usize], d.expected, d.evidence);
+    for k in 0..(d.n_cited as usize).min(3) {
+        if let Some(e) = br.episode(d.cited[k] as usize) {
+            println!("    cites memory #{}: drift {:.2} spike {:.2} temp {:.2} -> {} got {:.1}", d.cited[k], e.key[0], e.key[1], e.key[2], names[e.action as usize], e.reward);
+        }
+    }
+    let blocked = br.decide(&x, &[true, true, false, true], 3);
+    println!("  same situation, quarantine not allowed -> {} (abstained {})", names[blocked.action as usize], blocked.abstained);
 }
