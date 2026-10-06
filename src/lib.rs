@@ -1748,3 +1748,5 @@ pub mod arms;
 pub mod lab;
 #[cfg(feature = "std")]
 pub mod power;
+#[cfg(feature = "std")]
+pub mod ouroboros;
