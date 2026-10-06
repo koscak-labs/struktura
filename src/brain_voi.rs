@@ -235,7 +235,7 @@ mod tests {
     fn reward(x: &[f32; 4], a: u8) -> f32 { if a == truth(x) { 1.0 } else if a == 3 { 0.2 } else { 0.0 } }
 
     #[derive(Clone, Copy, PartialEq)]
-    enum Policy { AlwaysAct, AlwaysProbe, Voi }
+    enum Policy { AlwaysAct, AlwaysProbe, Voi, VoiClean }
 
     /// Net reward per step over the last half, and the probe rate there.
     fn run(policy: Policy, cost: f32, noise: f32, seed: u64) -> (f32, f32) {
@@ -253,7 +253,7 @@ mod tests {
             let (probed, d) = match policy {
                 Policy::AlwaysAct => (false, br.decide(&noisy, &allowed, 3)),
                 Policy::AlwaysProbe => (true, decide_after_probe(&br, &clean, &allowed, 3)),
-                Policy::Voi => match decide_or_probe(&br, &noisy, &allowed, 3, cost, &obs_sd) {
+                Policy::Voi | Policy::VoiClean => match decide_or_probe(&br, &noisy, &allowed, 3, cost, &obs_sd) {
                     Choice::Act(d) => (false, d),
                     Choice::Probe(_) => (true, decide_after_probe(&br, &clean, &allowed, 3)),
                 },
@@ -261,7 +261,9 @@ mod tests {
             let a = if d.abstained && t < 400 { (t % 4) as u8 } else { d.action };
             let seen = if probed { clean } else { noisy };
             let rw = reward(&clean, a);
-            br.learn(&seen, a, rw);
+            // VoiClean: learning hygiene. An outcome paired with a noisy reading teaches a blurred
+            // boundary (errors in variables), so only probed, clean situations are learned from.
+            if policy != Policy::VoiClean || probed { br.learn(&seen, a, rw); }
             if t >= steps / 2 {
                 n += 1;
                 net += rw - if probed { cost } else { 0.0 };
@@ -313,6 +315,29 @@ mod tests {
     fn falsifier_ambiguous_world_within_002_of_always_probe() {
         let (_, probe, voi, _) = compare(0.3, 0.1);
         assert!(voi >= probe - 0.02, "ambiguous world: VOI {} vs probe {}", voi, probe);
+    }
+
+    /// Learning hygiene (added after the ambiguous-world failure, so it is a NEW, separately
+    /// reported protocol, not a pass of the original criterion): VOI that learns only from probed
+    /// (clean) situations. Bar: within 0.02 of always-probe in the ambiguous world and still
+    /// better than both baselines in the mixed world.
+    #[test]
+    fn voi_with_learning_hygiene() {
+        // The original seeds AND five fresh ones never used while building it.
+        for seeds in [[11u64, 23, 37, 41, 59], [101, 103, 107, 109, 113]] {
+        for (noise, label) in [(0.1f32, "mixed"), (0.3, "ambiguous")] {
+            let (mut act, mut probe, mut clean, mut rate) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+            for &s in &seeds {
+                act += run(Policy::AlwaysAct, 0.1, noise, s).0;
+                probe += run(Policy::AlwaysProbe, 0.1, noise, s).0;
+                let (v, r) = run(Policy::VoiClean, 0.1, noise, s); clean += v; rate += r;
+            }
+            let k = seeds.len() as f32;
+            std::println!("  {} world: always-act {:.3}  always-probe {:.3}  VOI+hygiene {:.3} (probes {:.0}%)", label, act / k, probe / k, clean / k, 100.0 * rate / k);
+            if label == "ambiguous" { assert!(clean / k >= probe / k - 0.02, "ambiguous: {} vs probe {}", clean / k, probe / k); }
+            else { assert!(clean > act && clean > probe, "mixed: {} vs act {} / probe {}", clean / k, act / k, probe / k); }
+        }
+        }
     }
 
     #[test]

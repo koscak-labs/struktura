@@ -19,11 +19,9 @@
 //!    [`Brain::learn`] returns). Decisions use the model plus a memory
 //!    correction from the K nearest episodes **of the current regime only**.
 //!
-//! The model-only prediction is not exposed by the core, so it is recovered
-//! from [`Brain::estimates`] under the core's own local approximation that the
-//! model predicts the same value at nearby neighbours as at `x`:
-//! `expected = (p + S) / (W + 1)` gives `p = expected * (W + 1) - S`, where `W`,
-//! `S` are the similarity weights and weighted rewards of the core's neighbours.
+//! The model-only prediction comes from [`Brain::predict`], so the current-regime
+//! memory correction is computed exactly as the core does it (residual of each
+//! neighbour against the model at the neighbour's own situation).
 //!
 //! No heap, bounded loops, deterministic. `size_of::<Regime<256>>()` is 2 bytes
 //! per memory slot plus ~40 bytes.
@@ -105,7 +103,6 @@ impl<const N: usize> Regime<N> {
     /// Model + current-regime memory estimate for every action.
     pub fn estimates<const D: usize, const A: usize>(&self, br: &Brain<N, D, A>, x: &[f32; D]) -> [RegimeEstimate; A] {
         let core = br.estimates(x);
-        let (slots, d2, n) = br.neighbours(x);
         // K nearest episodes of the current regime (bounded scan of memory).
         let mut cs = [0u16; K];
         let mut cd = [f32::INFINITY; K];
@@ -124,25 +121,17 @@ impl<const N: usize> Regime<N> {
         }
         let mut out = [RegimeEstimate { expected: 0.0, width: 0.0, evidence: 0.0, same_regime: 0 }; A];
         for a in 0..A {
-            // Core neighbours of this action: recover the model-only prediction p.
-            let (mut w_all, mut s_all) = (0.0f32, 0.0f32);
-            for k in 0..n {
-                if let Some(e) = br.episode(slots[k] as usize) {
-                    if e.action as usize != a { continue; }
-                    let w = 1.0 / (1.0 + d2[k]);
-                    w_all += w; s_all += w * e.reward;
-                }
-            }
-            let p = core[a].expected * (w_all + 1.0) - s_all;
+            // Exact model-only prediction from the core (same residual correction as Brain::estimate).
+            let p = br.predict(a as u8, x);
             let (mut w_cur, mut wres, mut m) = (0.0f32, 0.0f32, 0u8);
             for k in 0..cn {
                 if let Some(e) = br.episode(cs[k] as usize) {
                     if e.action as usize != a { continue; }
                     let w = 1.0 / (1.0 + cd[k]);
-                    w_cur += w; wres += w * (e.reward - p); m += 1;
+                    w_cur += w; wres += w * (e.reward - br.predict(a as u8, &e.key)); m += 1;
                 }
             }
-            let pulls = (core[a].evidence - w_all).max(0.0);
+            let pulls = if br.use_model { br.pulls(a) as f32 } else { 0.0 };
             out[a] = RegimeEstimate { expected: p + wres / (w_cur + 1.0), width: core[a].width, evidence: pulls + w_cur, same_regime: m };
         }
         out
