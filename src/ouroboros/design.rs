@@ -118,7 +118,9 @@ D=~/alien-bin/{b}; B=$D\n[ -d \"$D\" ] || {{ echo \"MISSING live binary $D\" | t
 
 /// Knobs the feature factory can ship: (allowlisted server flag, the auto-gate's value line that measures this knob's metric).
 fn shippable(k: &Knob) -> Option<(&'static str, &'static str)> {
-    match k.name.as_str() { "draft" => Some(("spec-draft-n-max", "code_gain_permille")), _ => None }
+    // ub: the gate prints prefill_gain_permille AND keeps every decode-at-depth guard (gate 404: ub512 +5.9%
+    // prefill but -11% decode at 32K/64K through DFlash acceptance must, and does, fail)
+    match k.name.as_str() { "draft" => Some(("spec-draft-n-max", "code_gain_permille")), "ub" => Some(("ub", "prefill_gain_permille")), _ => None }
 }
 
 fn template(id: &str) -> Option<(&'static str, u32, u32)> {
@@ -307,9 +309,11 @@ rep\tub128\td0=2700 d32768=2100 d100000=1350\nrep\tub128\td0=2710 d32768=2101 d1
             ((band * 10.0).ceil() as i64).max(10));
         assert!(d.job.contains(&want), "{}", d.job);
         assert!(d.pred.contains("draft5-beats-draft7-code_tps\t"), "the required name is the job's own prediction");
-        // ub: not shippable yet (the gate measures no prefill gain) -> no LAB-FEATURE line; no live -> HEAD build
+        // ub claims prefill (the gate also guards decode at depth); no live -> HEAD build, no feature line
         let u = design(&item("ub", "128", None), &knob("ub"), &lessons(1.0), 0.578, 306, Some(&live)).unwrap();
-        assert!(!u.job.contains("LAB-FEATURE"));
+        assert!(u.job.contains("# LAB-FEATURE: name=ub128 commit=5a3cf82 env=- flags=ub=128 required=ub128-beats-ub256-d100000 value=prefill_gain_permille>="), "{}", u.job);
+        let c = design(&item("chunk", "32", None), &crate::ouroboros::knobs::parse_knobs("knob chunk 32 64 current=64 metric=sum_s template=ext:c.sh").unwrap().remove(0), &lessons(1.0), 0.578, 308, Some(&live)).unwrap();
+        assert!(!c.job.contains("LAB-FEATURE"), "not an allowlisted flag: never a feature line");
         let h = design(&item("draft", "5", None), &knob("draft"), &lessons(1.0), 0.578, 307, None).unwrap();
         assert!(h.job.contains("D=$(stage llama.cpp-alien2); B=$D") && !h.job.contains("LAB-FEATURE") && h.job.contains("-ub 256 --port"));
     }
