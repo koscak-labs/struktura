@@ -153,6 +153,10 @@ fn rolled_back_gate<'a>(obs: &'a Observation, pred: &str, ts: f64) -> Option<(&'
     for &r in &obs.lab.rollbacks {
         if r <= ts { continue; }
         let Some(bad) = live_config(obs, r - 1e-6) else { continue };
+        // only gates scored for THIS deploy: after the one before it (a binary can ship twice with other flags,
+        // and the gate of its first, healthy ship must not be quarantined by a later rollback)
+        let since = live_config(obs, bad.0 - 1e-6).map(|c| c.0).unwrap_or(f64::NEG_INFINITY);
+        if ts <= since { continue; }
         if obs.lab.gates.iter().any(|(g, b)| g == pred && *b == bad.1) { return Some((bad.1.as_str(), r)); }
     }
     None
@@ -334,7 +338,13 @@ mod tests {
         assert_eq!(gate_item(&top(base.clone() + &frag + link + new)).kind, Kind::Settled, "stale on the new config");
         assert_eq!(gate_item(&top(base.clone() + &frag + link)).kind, Kind::Remeasure);
         // an unlinked gate is not quarantined by a rollback (falls back to the config rule: old is live)
-        assert_eq!(gate_item(&top(base + &frag + new + back)).kind, Kind::Remeasure);
+        assert_eq!(gate_item(&top(base.clone() + &frag + new + back)).kind, Kind::Remeasure);
+        // the gate of a healthy first ship of a binary survives a later rollback of the same binary with other flags
+        let first = "{\"kind\":\"deploy\",\"ts\":20,\"binary\":\"llama.cpp-new\",\"env\":\"X=1\",\"flags\":\"c=1\"}\n";
+        let again = "{\"kind\":\"deploy\",\"ts\":80,\"binary\":\"llama.cpp-new\",\"env\":\"X=1\",\"flags\":\"c=2\"}\n";
+        let undo = "{\"kind\":\"deploy\",\"ts\":90,\"binary\":\"llama.cpp-new\",\"env\":\"X=1\",\"flags\":\"c=1\",\"rollback\":true}\n";
+        let it = gate_item(&top(base + &frag + link + first + again + undo));
+        assert!(!it.why.starts_with("QUARANTINED"), "scored at 10, before the deploy at 20 that preceded the rolled-back one: {}", it.why);
     }
 
     #[test]
