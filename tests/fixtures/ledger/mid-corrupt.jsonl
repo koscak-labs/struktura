@@ -1,0 +1,6 @@
+{"kind":"window","ts":1000,"event":"up"}
+{"kind":"cal","ts":1010,"ok":true,"load_s":3.5,"dur_s":60,"code":{"tps":100.0},"prose":{"tps":90.0}}
+{"kind":"job","job":"001-baseline.sh","start":1100,"end":1400,"rc":0}
+{"kind":"job","job":"003-next.sh","sta
+{"kind":"job","job":"002-variant.sh","start":1400,"end":1500,"rc":1}
+{"kind":"prediction","ts":1500,"pred":"001.tsv","name":"tps-gain","value":"104 vs 100 (4.00%, need >% 2%)","op":">%","threshold":"arm B","verdict":"pass"}

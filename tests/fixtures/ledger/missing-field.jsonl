@@ -1,0 +1,5 @@
+{"kind":"window","ts":1000,"event":"up"}
+{"kind":"job","job":"001-baseline.sh","start":1100,"end":1400}
+{"kind":"prediction","ts":1500,"pred":"001.tsv","name":"acc","value":"0.9","verdict":1}
+{"kind":"deploy","ts":1800,"binary":"lab-runner"}
+{"v":1,"strand":"fuxi","kind":"forecast"}

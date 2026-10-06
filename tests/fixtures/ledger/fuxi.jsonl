@@ -1,0 +1,7 @@
+{"v":1,"strand":"fuxi","kind":"heartbeat","ts":3000}
+{"v":1,"strand":"fuxi","kind":"brain","ts":3001,"state":"warm"}
+{"v":1,"strand":"fuxi","kind":"forecast","ts":3002,"target":"tps","p50":101.5}
+{"v":1,"strand":"fuxi","kind":"score","ts":3003,"forecast_ts":3002,"hit":true}
+{"v":1,"strand":"fuxi","kind":"judge","ts":3004,"verdict":"keep"}
+{"v":1,"strand":"fuxi","kind":"contract","ts":3005,"terms":{"min_gain_pct":2}}
+{"v":1,"strand":"fuxi","kind":"gym","ts":3006,"episode":1}

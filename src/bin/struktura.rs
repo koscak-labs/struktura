@@ -413,6 +413,7 @@ fn main() {
         "brain" => cmd_brain(&args),
         "arms" => cmd_arms(&args),
         "lab" => cmd_lab(&args),
+        "ledger-check" => cmd_ledger_check(&args),
         "power" => cmd_power(&args),
         "loop" => cmd_loop(&args),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
@@ -5192,6 +5193,54 @@ fn cmd_arms(args: &[String]) {
         if r.dominant.is_empty() { println!("  no dominant arm (needs: never loses, never inconclusive, wins at least once)"); }
         for (g, a) in &r.dominant { println!("  DOMINANT: {}", name(g, a)); }
     }
+}
+
+fn ledger_check_usage() -> &'static str {
+    "struktura ledger-check <file|->... [--json] [--strict] [--schema]\n\
+     \x20 Validate append-only JSON-lines lab ledgers against the shared schema table (Nuwa lab kinds\n\
+     \x20 and Fuxi kinds, the latter inside the {v:1,strand:\"fuxi\",kind,ts} envelope).\n\
+     \x20 Missing / ill-typed required field or a corrupt line mid-file: ERROR (cites the line).\n\
+     \x20 Unknown kind: WARN (ERROR with --strict). Incomplete last line with no trailing newline: WARN (torn tail).\n\
+     \x20 --json    one JSON object instead of text\n\
+     \x20 --strict  unknown kinds are errors\n\
+     \x20 --schema  print the schema table as TSV (kind, field, type, required, known) and exit\n\
+     \x20 exit: 0 ok (warnings allowed), 1 errors, 2 usage / IO"
+}
+
+fn cmd_ledger_check(args: &[String]) {
+    use struktura::ledger_schema as ls;
+    let (mut json, mut strict, mut schema) = (false, false, false);
+    let mut paths: Vec<&str> = Vec::new();
+    for a in &args[2..] {
+        match a.as_str() {
+            "--json" => json = true,
+            "--strict" => strict = true,
+            "--schema" => schema = true,
+            "-h" | "--help" => { println!("{}", ledger_check_usage()); return; }
+            o if o.starts_with('-') && o != "-" => {
+                eprintln!("ledger-check: unknown option {}\n{}", o, ledger_check_usage());
+                process::exit(2);
+            }
+            p => paths.push(p),
+        }
+    }
+    if schema { print!("{}", ls::schema_tsv()); return; }
+    if paths.is_empty() { eprintln!("{}", ledger_check_usage()); process::exit(2); }
+    let mut checks = Vec::new();
+    for p in paths {
+        let bytes = if p == "-" {
+            use std::io::Read;
+            let mut b = Vec::new();
+            std::io::stdin().read_to_end(&mut b).map(|_| b)
+        } else {
+            fs::read(p)
+        };
+        let bytes = bytes.unwrap_or_else(|e| { eprintln!("ledger-check: {}: {}", p, e); process::exit(2); });
+        checks.push((p.to_string(), ls::check(&String::from_utf8_lossy(&bytes), strict)));
+    }
+    print!("{}", if json { ls::render_json(&checks, strict, 20) } else { ls::render_text(&checks, strict, 20) });
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+    process::exit(if ls::status(&checks) == "error" { 1 } else { 0 });
 }
 
 fn cmd_lab(args: &[String]) {

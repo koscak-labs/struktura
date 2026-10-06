@@ -1,0 +1,4 @@
+{"kind":"window","ts":1000,"event":"up"}
+{"kind":"cal","ts":1010,"ok":true,"load_s":3.5,"dur_s":60,"code":{"tps":100.0},"prose":{"tps":90.0}}
+{"kind":"job","job":"001-baseline.sh","start":1100,"end":1400,"rc":0}
+{"kind":"job","job":"003-next.sh","sta

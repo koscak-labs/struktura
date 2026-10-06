@@ -1747,6 +1747,8 @@ pub mod arms;
 #[cfg(feature = "std")]
 pub mod lab;
 #[cfg(feature = "std")]
+pub mod ledger_schema;
+#[cfg(feature = "std")]
 pub mod power;
 #[cfg(feature = "std")]
 pub mod ouroboros;
