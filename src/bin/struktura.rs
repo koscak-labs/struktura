@@ -6257,17 +6257,22 @@ fn arms_splits(data: &struktura::arms::ArmData, splits: &[(String, String)], pai
         }
         for (i, p) in sel.iter().enumerate() {
             let h = p_holm(i);
+            // pre-registered direction: the FIRST arm named in --pairs a:b is the one claimed better
+            let claim = pairs.iter().find(|(x, y)| (*x == p.a && *y == p.b) || (*x == p.b && *y == p.a)).map(|(x, _)| x.clone());
+            let p_one = claim.as_ref().map(|c| struktura::arms::sign_test_one_sided(if *c == p.a { p.n_discordant - p.n_favour_b } else { p.n_favour_b }, p.n_discordant));
             let decisive = h.map(|h| h < 0.05).unwrap_or(p.p_value < 0.05) && matches!(p.outcome, Outcome::AWins | Outcome::BWins);
             let winner = match p.outcome { Outcome::AWins => p.a.as_str(), Outcome::BWins => p.b.as_str(), _ => "" };
             if json {
-                println!("{{\"event\":\"split_pair\",\"split\":\"{}\",\"metric\":\"{}\",\"a\":\"{}\",\"b\":\"{}\",\"a_median\":{},\"b_median\":{},\"delta_pct\":{},\"n_discordant\":{},\"p_value\":{},\"p_holm\":{},\"decisive\":{},\"winner\":\"{}\"}}",
+                println!("{{\"event\":\"split_pair\",\"split\":\"{}\",\"metric\":\"{}\",\"a\":\"{}\",\"b\":\"{}\",\"a_median\":{},\"b_median\":{},\"delta_pct\":{},\"n_discordant\":{},\"p_value\":{},\"p_holm\":{},\"decisive\":{},\"winner\":\"{}\",\"n_favour_b\":{},\"claim\":{},\"p_one_sided\":{}}}",
                     name, p.metric, p.a, p.b, num(p.a_median), num(p.b_median), num(p.delta_pct), p.n_discordant, num(p.p_value),
-                    h.map(num).unwrap_or_else(|| "null".into()), decisive, if decisive { winner } else { "" });
+                    h.map(num).unwrap_or_else(|| "null".into()), decisive, if decisive { winner } else { "" }, p.n_favour_b,
+                    claim.as_ref().map(|c| format!("\"{}\"", c)).unwrap_or_else(|| "null".into()), p_one.map(num).unwrap_or_else(|| "null".into()));
             } else {
                 let what = if p.metric.starts_with("pass_rate") { format!("{:.0}% vs {:.0}%", 100.0 * p.a_median, 100.0 * p.b_median) } else { format!("{:+.1}% (b vs a)", p.delta_pct) };
                 let verdict = if decisive { format!("DECISIVE: {}", winner) } else if p.n_discordant > 0 && p.n_discordant < 6 && p.metric.starts_with("pass_rate") { "underpowered (< 6 discordant)".to_string() } else { "not decided".to_string() };
-                println!("  {:<28} {:>10} vs {:<10} {:<16} disc {:>2}  p={:.4}{}  {}", p.metric, p.a, p.b, what, p.n_discordant, p.p_value,
-                    h.map(|h| format!(" p_holm={:.4}", h)).unwrap_or_default(), verdict);
+                let one = match (&claim, p_one) { (Some(c), Some(q)) => format!(" p_one({}>)={:.4}", c, q), _ => String::new() };
+                println!("  {:<28} {:>10} vs {:<10} {:<16} disc {:>2}  p={:.4}{}{}  {}", p.metric, p.a, p.b, what, p.n_discordant, p.p_value,
+                    h.map(|h| format!(" p_holm={:.4}", h)).unwrap_or_default(), one, verdict);
             }
         }
     }

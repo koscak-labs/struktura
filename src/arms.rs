@@ -68,6 +68,8 @@ pub struct Pair {
     /// Paired pass/fail only: tasks where exactly one arm passed, and the exact
     /// two-sided sign-test p-value on them (NaN for other evidence).
     pub n_discordant: usize,
+    /// Of the discordant tasks, how many favour `b` (the rest favour `a`); 0 for unpaired evidence.
+    pub n_favour_b: usize,
     pub p_value: f64,
 }
 
@@ -200,6 +202,17 @@ pub fn holm(p: &[f64]) -> Vec<f64> {
     out
 }
 
+/// Exact ONE-sided sign test for a pre-registered direction: P(at least `k` of `n` discordant
+/// tasks favour the claimed arm | no difference). Use it only when the direction was fixed before
+/// the data (a one-sided test chosen after looking is a two-sided test at double the alpha).
+pub fn sign_test_one_sided(k: usize, n: usize) -> f64 {
+    if n == 0 || k == 0 { return 1.0; }
+    let mut c = 1.0f64; // C(n, 0)
+    let mut below = 0.0f64; // P(X <= k-1) * 2^n
+    for i in 0..k { if i > 0 { c = c * (n - i + 1) as f64 / i as f64; } below += c; }
+    (1.0 - below / 2f64.powi(n as i32)).clamp(0.0, 1.0)
+}
+
 /// Exact two-sided sign test: P(at most `k` of `n` discordant tasks favour the
 /// less successful arm | no difference), doubled, capped at 1.
 pub fn sign_test_p(k: usize, n: usize) -> f64 {
@@ -248,7 +261,7 @@ pub fn rank(data: &ArmData, min_effect_pct: f64, dir: Direction, n_boot: usize, 
                     else { Outcome::Inconclusive };
                 pairs.push(Pair { group: ka.0.clone(), metric: metric.clone(), a: ka.1.clone(), b: kb.1.clone(),
                     a_median: a_med, b_median: b_med, delta_pct: delta, ci_low: lo, ci_high: hi, evidence, outcome,
-                    n_discordant: 0, p_value: f64::NAN });
+                    n_discordant: 0, n_favour_b: 0, p_value: f64::NAN });
             }
             // Pass/fail tasks: paired by task (both arms ran the same tasks). Per task, an arm's
             // score is its pass rate over repeats; only tasks where the arms differ carry evidence.
@@ -267,7 +280,7 @@ pub fn rank(data: &ArmData, min_effect_pct: f64, dir: Direction, n_boot: usize, 
                 let (ra, rb) = (ra / tasks.len() as f64, rb / tasks.len() as f64);
                 pairs.push(Pair { group: ka.0.clone(), metric: format!("pass_rate({} tasks)", tasks.len()), a: ka.1.clone(), b: kb.1.clone(),
                     a_median: ra, b_median: rb, delta_pct: 100.0 * (rb - ra), ci_low: f64::NAN, ci_high: f64::NAN,
-                    evidence: Evidence::Paired, outcome, n_discordant: n, p_value: p });
+                    evidence: Evidence::Paired, outcome, n_discordant: n, n_favour_b: b_better, p_value: p });
             }
             // Paired numeric metrics (time-to-done etc. on passing samples): per task the ratio of
             // medians; a task favours an arm only if the ratio clears the noise floor.
@@ -293,7 +306,7 @@ pub fn rank(data: &ArmData, min_effect_pct: f64, dir: Direction, n_boot: usize, 
                 let gm = 100.0 * ((logs.iter().sum::<f64>() / logs.len() as f64).exp() - 1.0);
                 pairs.push(Pair { group: ka.0.clone(), metric: format!("{}({} tasks, paired)", base, logs.len()), a: ka.1.clone(), b: kb.1.clone(),
                     a_median: f64::NAN, b_median: f64::NAN, delta_pct: gm, ci_low: f64::NAN, ci_high: f64::NAN,
-                    evidence: Evidence::Paired, outcome, n_discordant: n, p_value: p });
+                    evidence: Evidence::Paired, outcome, n_discordant: n, n_favour_b: b_better, p_value: p });
             }
         }
     }
@@ -442,5 +455,18 @@ some free text = not a metric line\n";
         // never below the raw p, never above Bonferroni
         let p = [0.002, 0.0063, 0.25, 1.0, 0.34];
         for (h, p) in holm(&p).iter().zip(p) { assert!(*h >= p && *h <= (5.0 * p).min(1.0)); }
+    }
+
+    #[test]
+    fn one_sided_sign_test_is_the_upper_tail() {
+        // 5 of 5 one way: 1/32; two-sided doubles it
+        assert!((sign_test_one_sided(5, 5) - 1.0 / 32.0).abs() < 1e-12);
+        assert!((sign_test_p(0, 5) - 2.0 / 32.0).abs() < 1e-12);
+        // 7 of 10: P(X >= 7) = (120 + 45 + 10 + 1) / 1024
+        assert!((sign_test_one_sided(7, 10) - 176.0 / 1024.0).abs() < 1e-12);
+        // the claimed arm losing 3 of 10: P(X >= 3) is large, not p_two / 2
+        assert!((sign_test_one_sided(3, 10) - (1.0 - 56.0 / 1024.0)).abs() < 1e-12);
+        assert_eq!(sign_test_one_sided(0, 10), 1.0);
+        assert_eq!(sign_test_one_sided(3, 0), 1.0);
     }
 }
