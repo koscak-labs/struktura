@@ -96,6 +96,10 @@ pub struct Oracle {
     keys: BTreeMap<String, (usize, usize, Option<f64>, bool)>,
     feats: BTreeMap<String, (usize, usize)>,
     cal: Vec<f64>,
+    /// BM25 kin (Leviathan-style recall): forecast from the most RELEVANT earlier predictions instead of
+    /// averaging every one that shares a word. Off by default; adopted only by a pre-registered backtest.
+    pub bm25: bool,
+    hist: Vec<(String, bool)>,
 }
 
 impl Oracle {
@@ -121,6 +125,7 @@ impl Oracle {
         let kin: Vec<f64> = features(name, op).iter().filter_map(|f| self.feats.get(f))
             .map(|(n, p)| (*p as f64 + KIN_PRIOR * base) / (*n as f64 + KIN_PRIOR)).collect();
         let kin_p = if kin.is_empty() { None } else { Some(kin.iter().sum::<f64>() / kin.len() as f64) };
+        let kin_p = if self.bm25 { self.bm25_kin(name, op, base) } else { kin_p };
         let (p, basis) = match self.keys.get(key) {
             Some((_, _, Some(m), true)) => (phi(*m / (self.band() / 1.959964).max(1e-9)), "remeasure-margin"),
             // own history shrunk with the same prior strength as kin: the lab re-runs a failed claim AFTER a fix,
@@ -131,7 +136,22 @@ impl Oracle {
         (p.clamp(P_MIN, 1.0 - P_MIN), basis)
     }
 
+    /// BM25 over earlier predictions (name + operator), top 8, weights relative to the best match,
+    /// shrunk to the base rate with the same prior strength as kin.
+    fn bm25_kin(&self, name: &str, op: &str, base: f64) -> Option<f64> {
+        if self.hist.is_empty() { return None; }
+        let recs = self.hist.iter().enumerate().map(|(i, (t, _))| crate::recall::Record { id: std::format!("{}", i), group: String::new(), ts: 0.0, title: t.clone(), text: String::new() }).collect();
+        let ix = crate::recall::Index::build(recs);
+        let hits: Vec<(usize, f64)> = ix.scores(&std::format!("{} {}", name, op), |_| true).into_iter().take(8).collect();
+        let top = hits.first()?.1;
+        if top <= 0.0 { return None; }
+        let (mut w, mut wy) = (0.0, 0.0);
+        for (i, s) in hits { let x = s / top; w += x; if self.hist[i].1 { wy += x; } }
+        Some((wy + KIN_PRIOR * base) / (w + KIN_PRIOR))
+    }
+
     pub fn learn(&mut self, r: &Scored) {
+        self.hist.push((std::format!("{} {}", r.name.replace('-', " "), r.op), r.pass));
         self.n += 1;
         self.pass += r.pass as usize;
         let m = margin(&r.op, &r.value, &r.threshold);
@@ -171,9 +191,12 @@ pub struct Backtest {
 }
 
 /// Replay `ledger` in time order; each group of rows scored within `gap` s is forecast before it is learned.
-pub fn backtest(ledger: &str, gap: f64, window: usize, nbins: usize) -> Backtest {
+pub fn backtest(ledger: &str, gap: f64, window: usize, nbins: usize) -> Backtest { backtest_mode(ledger, gap, window, nbins, false) }
+
+/// The backtest with the kin source chosen: `bm25` = Leviathan-style relevant-record kin.
+pub fn backtest_mode(ledger: &str, gap: f64, window: usize, nbins: usize, bm25: bool) -> Backtest {
     let (rows, cal) = read(ledger);
-    let mut o = Oracle::new();
+    let mut o = Oracle::new(); o.bm25 = bm25;
     let mut ci = 0;
     let mut bt = Backtest::default();
     let mut gi = 0usize;

@@ -427,6 +427,7 @@ fn main() {
         "twins" => cmd_twins(&args),
         "oracle" => cmd_oracle(&args),
         "errclass" => cmd_errclass(&args),
+        "recall" => cmd_recall(&args),
         "lab" => cmd_lab(&args),
         "ledger-check" => cmd_ledger_check(&args),
         "power" => cmd_power(&args),
@@ -6146,7 +6147,7 @@ fn cmd_twins(args: &[String]) {
 }
 
 fn cmd_oracle(args: &[String]) {
-    use struktura::oracle::{backtest, forecast_id, pending, resolve, trained};
+    use struktura::oracle::{backtest_mode, forecast_id, pending, resolve, trained};
     if args.len() < 3 || args[2] == "--help" {
         println!("struktura oracle --ledger L [--gap 30] [--window 10] [--bins 5] [--json]      prequential backtest");
         println!("struktura oracle --ledger L --queued [--designed-by-only fuxi]               p_pass forecast rows for queued predictions");
@@ -6170,6 +6171,7 @@ fn cmd_oracle(args: &[String]) {
             "--queued" => queued = true,
             "--resolve" => { i += 1; resolve_path = args.get(i).cloned(); }
             "--json" => json = true,
+            "--kin-bm25" => {}
             o => { eprintln!("oracle: unknown option {}", o); process::exit(2); }
         }
         i += 1;
@@ -6194,7 +6196,7 @@ fn cmd_oracle(args: &[String]) {
         }
         return;
     }
-    let b = backtest(&text, gap, window, bins);
+    let b = backtest_mode(&text, gap, window, bins, args.iter().any(|a| a == "--kin-bm25"));
     if json {
         for (first, last, br, base) in &b.windows { println!("{{\"event\":\"window\",\"first\":{},\"last\":{},\"brier\":{:.4},\"base_brier\":{:.4}}}", first, last, br, base); }
         for (lo, hi, n, mp, rate) in &b.bins { println!("{{\"event\":\"bin\",\"lo\":{:.2},\"hi\":{:.2},\"n\":{},\"mean_p\":{:.4},\"pass_rate\":{:.4}}}", lo, hi, n, mp, rate); }
@@ -6313,4 +6315,52 @@ fn cmd_errclass(args: &[String]) {
     }
     if json { println!("{{\"summary\":true,\"groups\":{},\"rows\":{},\"bad_rows\":{}}}", c.by_group.len(), c.by_group.keys().map(|g| c.total(g)).sum::<usize>(), bad); }
     else if bad > 0 { eprintln!("errclass: {} unreadable row(s) skipped", bad); }
+}
+
+fn cmd_recall(args: &[String]) {
+    use struktura::recall::{card, records_from, Index};
+    if args.len() < 3 || args[2] == "--help" {
+        println!("struktura recall --ledger L [--instincts F] [-g GROUP] [-n 5] [--max-chars 400] [--json] words...");
+        println!("  Ask the lab's history in plain words; get the few cited records that answer it (BM25, title terms x2),");
+        println!("  as short capped cards, instead of reading the ledger. -g scopes to a group (a knob like ub/draft, or");
+        println!("  deploy/job/daemon/instinct); no match there falls back to other groups, labelled OTHER.");
+        println!("  Every answer says 'shown N of M'. Inspired by Leviathan (elstongun/leviathan); std-only, no SQLite.");
+        process::exit(if args.len() < 3 { 2 } else { 0 });
+    }
+    let (mut ledger, mut inst, mut group, mut n, mut maxc, mut json) = (None::<String>, None::<String>, None::<String>, 5usize, 400usize, false);
+    let mut words: Vec<String> = Vec::new();
+    let mut i = 2;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--ledger" => { i += 1; ledger = args.get(i).cloned(); }
+            "--instincts" => { i += 1; inst = args.get(i).cloned(); }
+            "-g" | "--group" => { i += 1; group = args.get(i).cloned(); }
+            "-n" => { i += 1; n = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(n); }
+            "--max-chars" => { i += 1; maxc = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(maxc); }
+            "--json" => json = true,
+            w => words.push(w.to_string()),
+        }
+        i += 1;
+    }
+    let Some(lp) = ledger else { eprintln!("recall: --ledger L is required"); process::exit(2) };
+    if words.is_empty() { eprintln!("recall: ask something (words after the options)"); process::exit(2); }
+    let read = |p: &str| std::fs::read_to_string(p).unwrap_or_else(|e| { eprintln!("recall: {}: {}", p, e); process::exit(2) });
+    let ltext = read(&lp);
+    let itext = inst.as_deref().map(read);
+    let ix = Index::build(records_from(&ltext, itext.as_deref()));
+    let q = words.join(" ");
+    let (hits, m, inside) = ix.search(&q, group.as_deref(), n);
+    let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', " ");
+    if json {
+        for (rank, (k, s)) in hits.iter().enumerate() {
+            let r = &ix.records[*k];
+            println!("{{\"rank\":{},\"id\":\"{}\",\"group\":\"{}\",\"ts\":{},\"score\":{:.3},\"in_group\":{},\"title\":\"{}\",\"text\":\"{}\"}}",
+                rank + 1, esc(&r.id), esc(&r.group), r.ts as u64, s, inside, esc(&r.title), esc(&r.text.chars().take(maxc).collect::<String>()));
+        }
+        println!("{{\"summary\":true,\"query\":\"{}\",\"shown\":{},\"matches\":{},\"records\":{},\"in_group\":{}}}", esc(&q), hits.len(), m, ix.records.len(), inside);
+        return;
+    }
+    let scope = match (&group, inside) { (Some(g), true) => format!(" · group {}", g), (Some(g), false) => format!(" · no match in group {}: OTHER groups", g), _ => String::new() };
+    println!("struktura recall · \"{}\"{} · shown {} of {} · {} records indexed", q, scope, hits.len(), m, ix.records.len());
+    for (rank, (k, s)) in hits.iter().enumerate() { println!("{}", card(&ix.records[*k], rank + 1, *s, maxc)); }
 }

@@ -1755,6 +1755,8 @@ pub mod oracle;
 #[cfg(feature = "std")]
 pub mod errclass;
 #[cfg(feature = "std")]
+pub mod recall;
+#[cfg(feature = "std")]
 pub mod power;
 #[cfg(feature = "std")]
 pub mod ouroboros;
