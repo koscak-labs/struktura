@@ -5693,6 +5693,7 @@ fn cmd_brain(args: &[String]) {
         println!("                       learning a rover fault-response policy online from its own outcomes, with an ablation");
         println!("struktura brain grok   grokking falsifier: (a + b) mod 7 from a fixed training set, brain + compression vs without");
         println!("                       [--seed N] [--fourier] [--json] [--every K] [--all = the 5 pre-registered seeds, summary]");
+        println!("                       --v2: cycle v2 (validation-slice grokking probe, Hebbian growth, PRESS compression; arm C = grow-only diagnostic)");
         println!("struktura brain gym [--seed N] [--only NAME[,NAME..]] [--json] [--list]");
         println!("                       re-run the brain modules' pre-registered falsifiers on fresh seeds (default seed: days");
         println!("                       since the UNIX epoch); exit 3 only if an expected-pass trial failed (a flip)");
@@ -5758,6 +5759,7 @@ fn cmd_brain_grok(args: &[String]) {
     use struktura::brain_grok::{self as g, Encoding, GrokTrial, Size};
     let opt = |k: &str| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned();
     let flag = |k: &str| args.iter().any(|a| a == k);
+    if flag("--v2") { cmd_brain_grok2(args); return; }
     let json = flag("--json");
     let enc = if flag("--fourier") { Encoding::Fourier } else { Encoding::OneHot };
     let every = opt("--every").and_then(|v| v.parse::<usize>().ok()).unwrap_or(1).max(1);
@@ -5823,6 +5825,72 @@ fn cmd_brain_grok(args: &[String]) {
     println!("    A: {}", feats(&r.grown_a));
     println!("    B: {}", feats(&r.grown_b));
     println!("  (A model / B model = held-out accuracy of the linear model alone, memory not consulted: a diagnostic, not part of the verdict)");
+    println!("  seed {}: {}", seed, if t.pass { "PASS" } else { "FAIL" });
+}
+
+/// `struktura brain grok --v2`: the grokking falsifier v2 (cycle v2, validation-slice probe).
+fn cmd_brain_grok2(args: &[String]) {
+    use struktura::brain_grok::{Encoding, Size};
+    use struktura::brain_grok2::{self as g, GrokTrial2};
+    let opt = |k: &str| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned();
+    let flag = |k: &str| args.iter().any(|a| a == k);
+    let json = flag("--json");
+    let enc = if flag("--fourier") { Encoding::Fourier } else { Encoding::OneHot };
+    let every = opt("--every").and_then(|v| v.parse::<usize>().ok()).unwrap_or(1).max(1);
+    let seed = match opt("--seed") {
+        None => g::FRESH_SEEDS[0],
+        Some(v) => v.parse::<u64>().unwrap_or_else(|_| { eprintln!("brain grok --v2: --seed needs an integer"); process::exit(2) }),
+    };
+    let sz = |s: &Size| format!("{}/{}", s.memories, s.senses);
+    let ep = |e: Option<u16>| e.map(|v| v.to_string()).unwrap_or_else(|| "none".into());
+    let ej = |e: Option<u16>| e.map(|v| v.to_string()).unwrap_or_else(|| "null".into());
+    let trial_json = |t: &GrokTrial2| format!(
+        "{{\"seed\":{},\"encoding\":\"{}\",\"plateau_epoch\":{},\"jump_epoch\":{},\"jump_b\":{},\"jump_c\":{},\"heldout_a\":{:.4},\"heldout_b\":{:.4},\"heldout_c\":{:.4},\"train_a\":{:.4},\"train_b\":{:.4},\"val_a\":{:.4},\"val_b\":{:.4},\"size_plateau\":\"{}\",\"size_before\":\"{}\",\"size_after\":\"{}\",\"base_before\":{},\"base_after\":{},\"size_b\":\"{}\",\"base_b\":{},\"tier_a\":{},\"tier_b\":{},\"groks_a\":{},\"groks_b\":{},\"pass\":{}}}",
+        t.seed, t.encoding.name(), ej(t.plateau_epoch), ej(t.jump_epoch), ej(t.jump_b), ej(t.jump_c), t.heldout_a, t.heldout_b, t.heldout_c, t.train_a, t.train_b, t.val_a, t.val_b,
+        sz(&t.size_plateau), sz(&t.size_before), sz(&t.size_after), t.base_before, t.base_after, sz(&t.size_b), t.base_b, t.tier_a, t.tier_b, t.groks_a, t.groks_b, t.pass);
+    let header = format!("(a + b) mod 7, {} senses; {} of 20 training pairs learned, {} held out as the cycle's validation slice; 29 test pairs; 300 epochs",
+        enc.name(), g::N_FIT, g::N_VAL);
+    if flag("--all") {
+        let trials: [GrokTrial2; 5] = std::thread::scope(|s| g::FRESH_SEEDS.map(|sd| s.spawn(move || g::trial(sd, enc))).map(|h| h.join().unwrap()));
+        let n = trials.iter().filter(|t| t.pass).count();
+        let verdict = if n >= struktura::brain_grok::PASS_SEEDS { "PASS" } else { "FAIL" };
+        if json {
+            let v: Vec<String> = trials.iter().map(trial_json).collect();
+            println!("{{\"world\":\"(a+b) mod 7\",\"version\":2,\"encoding\":\"{}\",\"trials\":[{}],\"passed\":{},\"verdict\":\"{}\"}}", enc.name(), v.join(","), n, verdict);
+            return;
+        }
+        println!("struktura brain grok --v2 --all: {}", header);
+        println!("  pre-registered (unchanged rule): A rises >= 30 pts within 10 epochs after >= 10 epochs of train >= 0.95, sustained; B has no jump and ends >= 15 pts below A; PASS iff >= 4/5 fresh seeds");
+        println!("  {:>5} | {:>7} {:>5} {:>6} {:>6} | {:>6} {:>6} {:>6} | {:>9} {:>9} {:>9} {:>7} | {:>9} {:>6} | {:>5} {:>5} | pass", "seed", "plateau", "jump", "B jump", "C jump", "held A", "held B", "held C", "size plat", "size pre", "size post", "base A", "size B", "base B", "grokA", "grokB");
+        for t in trials.iter() {
+            println!("  {:>5} | {:>7} {:>5} {:>6} {:>6} | {:>6.3} {:>6.3} {:>6.3} | {:>9} {:>9} {:>9} {:>7} | {:>9} {:>6} | {:>5} {:>5} | {}", t.seed, ep(t.plateau_epoch), ep(t.jump_epoch), ep(t.jump_b), ep(t.jump_c),
+                t.heldout_a, t.heldout_b, t.heldout_c, sz(&t.size_plateau), sz(&t.size_before), sz(&t.size_after), format!("{}->{}", t.base_before, t.base_after), sz(&t.size_b), t.base_b, t.groks_a, t.groks_b, if t.pass { "PASS" } else { "fail" });
+        }
+        println!("  sizes = memories in use / active grown senses; base = base senses in the model; held = test accuracy, mean of the last 10 epochs; C = grow-only diagnostic");
+        println!("verdict v2 ({}): {}/5 seeds pass -> {}", enc.name(), n, verdict);
+        return;
+    }
+    let r = g::run(seed, enc);
+    let t = r.verdict();
+    if json {
+        let rows: Vec<String> = r.curve[..r.epochs].iter().enumerate().map(|(i, e)| format!(
+            "{{\"epoch\":{},\"a\":{{\"train\":{:.4},\"val\":{:.4},\"held\":{:.4},\"mem\":{},\"senses\":{},\"base\":{},\"tier\":{},\"groks\":{}}},\"b\":{{\"train\":{:.4},\"val\":{:.4},\"held\":{:.4},\"mem\":{},\"senses\":{},\"base\":{},\"tier\":{},\"groks\":{}}},\"c\":{{\"held\":{:.4},\"senses\":{}}}}}",
+            i + 1, e.a.train, e.a.val, e.a.held, e.a.mem, e.a.senses, e.a.base, e.a.tier, e.a.groks, e.b.train, e.b.val, e.b.held, e.b.mem, e.b.senses, e.b.base, e.b.tier, e.b.groks, e.c.held, e.c.senses)).collect();
+        println!("{{\"world\":\"(a+b) mod 7\",\"version\":2,\"encoding\":\"{}\",\"seed\":{},\"epochs\":[{}],\"verdict\":{}}}", enc.name(), seed, rows.join(","), trial_json(&t));
+        return;
+    }
+    println!("struktura brain grok --v2: {} (seed {})", header, seed);
+    println!("  arm A = cycle v2 with compression; B = the same cycle, compression off; C = grow-only (diagnostic)");
+    println!("  {:>5} | {:>6} {:>6} {:>6} {:>4} {:>4} {:>4} {:>4} {:>4} | {:>6} {:>6} {:>4} {:>4} {:>4} | {:>6} {:>4}", "epoch", "A trn", "A val", "A held", "mem", "sens", "base", "tier", "grok", "B trn", "B held", "sens", "base", "grok", "C held", "sens");
+    for (i, e) in r.curve[..r.epochs].iter().enumerate() {
+        if (i + 1) % every != 0 && i + 1 != r.epochs && i != 0 { continue; }
+        println!("  {:>5} | {:>6.3} {:>6.3} {:>6.3} {:>4} {:>4} {:>4} {:>4} {:>4} | {:>6.3} {:>6.3} {:>4} {:>4} {:>4} | {:>6.3} {:>4}", i + 1, e.a.train, e.a.val, e.a.held, e.a.mem, e.a.senses, e.a.base, e.a.tier, e.a.groks,
+            e.b.train, e.b.held, e.b.senses, e.b.base, e.b.groks, e.c.held, e.c.senses);
+    }
+    println!("  A: plateau from epoch {}, jump completed at {} | B jump {} | C jump {}", ep(t.plateau_epoch), ep(t.jump_epoch), ep(t.jump_b), ep(t.jump_c));
+    println!("  held-out (mean last 10 epochs): A {:.3}  B {:.3}  C {:.3}   chance {:.3}", t.heldout_a, t.heldout_b, t.heldout_c, 1.0 / 7.0);
+    let feats = |v: &[struktura::brain_grow::Feat]| { let s: Vec<String> = v.iter().filter(|f| **f != struktura::brain_grow::Feat::Off).map(|f| format!("{:?}", f)).collect(); if s.is_empty() { "none".to_string() } else { s.join(" ") } };
+    for (name, gr) in ["A", "B", "C"].iter().zip(r.grown.iter()) { println!("  grown senses {}: {}", name, feats(gr)); }
     println!("  seed {}: {}", seed, if t.pass { "PASS" } else { "FAIL" });
 }
 
