@@ -1759,3 +1759,4 @@ pub mod brain_fleet;
 pub mod brain_recorder;
 pub mod brain_voi;
 pub mod brain_features;
+pub mod brain_sslora;
