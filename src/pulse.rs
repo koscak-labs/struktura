@@ -123,6 +123,9 @@ pub struct Incident {
 pub struct PulseReport {
     pub rows: usize,
     pub slope_ms_per_kctx: f64,
+    /// The within-deploy fit came out negative (cost cannot fall with context:
+    /// the traffic mix is leaking into it), so the slope was set to 0.
+    pub slope_clamped: bool,
     pub segments: Vec<Segment>,
     pub comparisons: Vec<Comparison>,
     pub incidents: Vec<Incident>,
@@ -215,6 +218,8 @@ pub fn analyze(rows: &[Row], min_effect_pct: f64, n_boot: usize, seed: u64) -> P
         for (k, &i) in idx.iter().enumerate() { keep[i] = (adj[k] - m) / sd <= OUTLIER_Z; }
     }
     b = fit_ctx_slope(rows, &segs, &keep);
+    let slope_clamped = b < 0.0;
+    if slope_clamped { b = 0.0; }
 
     let mut segments = Vec::new();
     let mut solo_adj: Vec<Vec<f64>> = Vec::new();
@@ -292,7 +297,62 @@ pub fn analyze(rows: &[Row], min_effect_pct: f64, n_boot: usize, seed: u64) -> P
         prev = Some(j);
     }
 
-    PulseReport { rows: rows.len(), slope_ms_per_kctx: b, segments, comparisons, incidents }
+    PulseReport { rows: rows.len(), slope_ms_per_kctx: b, slope_clamped, segments, comparisons, incidents }
+}
+
+/// One request for the model-churn view: which server child served it, when
+/// it started (unix seconds), and how long its prompt took to read.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ChurnRow {
+    pub child: u64,
+    pub start: u64,
+    pub prompt_s: f64,
+}
+
+/// Cold-cache tax of model reloads: requests served within `window_s` of a
+/// child's first observed request re-read their prompts from scratch.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Churn {
+    /// Server children (model instances) that served at least one request.
+    pub children: usize,
+    pub span_h: f64,
+    pub cold_n: usize,
+    pub warm_n: usize,
+    pub cold_median_s: f64,
+    pub warm_median_s: f64,
+    pub cold_mean_s: f64,
+    pub warm_mean_s: f64,
+    pub cold_total_s: f64,
+    /// Prompt seconds above what the same number of warm requests would cost
+    /// on average (cold total - cold_n x warm mean).
+    pub excess_s: f64,
+}
+
+pub fn churn(rows: &[ChurnRow], window_s: u64) -> Churn {
+    let mut first: Vec<(u64, u64)> = Vec::new();
+    for r in rows {
+        match first.iter_mut().find(|(c, _)| *c == r.child) {
+            Some(e) => { if r.start < e.1 { e.1 = r.start; } }
+            None => first.push((r.child, r.start)),
+        }
+    }
+    let (mut cold, mut warm) = (Vec::new(), Vec::new());
+    for r in rows {
+        let t0 = first.iter().find(|(c, _)| *c == r.child).map(|e| e.1).unwrap_or(r.start);
+        if r.start.saturating_sub(t0) <= window_s { cold.push(r.prompt_s) } else { warm.push(r.prompt_s) }
+    }
+    let lo = rows.iter().map(|r| r.start).min().unwrap_or(0);
+    let hi = rows.iter().map(|r| r.start).max().unwrap_or(0);
+    let cold_total: f64 = cold.iter().sum();
+    let warm_total: f64 = warm.iter().sum();
+    let (cn, wn) = (cold.len(), warm.len());
+    let cm = if cold.is_empty() { f64::NAN } else { median(&mut cold) };
+    let wm = if warm.is_empty() { f64::NAN } else { median(&mut warm) };
+    let warm_mean = if wn > 0 { warm_total / wn as f64 } else { f64::NAN };
+    let cold_mean = if cn > 0 { cold_total / cn as f64 } else { f64::NAN };
+    let excess = if warm_mean.is_finite() { (cold_total - cn as f64 * warm_mean).max(0.0) } else { f64::NAN };
+    Churn { children: first.len(), span_h: (hi - lo) as f64 / 3600.0, cold_n: cn, warm_n: wn,
+        cold_median_s: cm, warm_median_s: wm, cold_mean_s: cold_mean, warm_mean_s: warm_mean, cold_total_s: cold_total, excess_s: excess }
 }
 
 #[cfg(test)]
@@ -375,6 +435,35 @@ mod tests {
         let b = analyze(&synth(0.5, 0.5), 1.16, 300, 9);
         assert_eq!(a.comparisons[0].ci_low, b.comparisons[0].ci_low);
         assert_eq!(a.comparisons[0].ci_high, b.comparisons[0].ci_high);
+    }
+
+    #[test]
+    fn negative_context_slope_is_clamped_and_flagged() {
+        let mut rng = Rng(5);
+        let rows: Vec<Row> = (0..200).map(|i| {
+            let ctx = rng.below(100) as f64;
+            let ms = 50.0 - 0.2 * ctx + (rng.below(100) as f64 / 100.0);
+            Row { seg: if i < 100 { 1 } else { 2 }, ctx_k: ctx, busy: 0.0, ms, tps: 1000.0 / ms, mlen: f64::NAN }
+        }).collect();
+        let r = analyze(&rows, 1.16, 200, 4);
+        assert!(r.slope_clamped);
+        assert_eq!(r.slope_ms_per_kctx, 0.0);
+    }
+
+    #[test]
+    fn churn_counts_cold_window_and_excess() {
+        let mut rows = Vec::new();
+        for child in 0..3u64 {
+            let t0 = 1000 + child * 3600;
+            rows.push(ChurnRow { child, start: t0, prompt_s: 20.0 });        // cold: full re-read
+            rows.push(ChurnRow { child, start: t0 + 60, prompt_s: 18.0 });   // still in window
+            for k in 1..6 { rows.push(ChurnRow { child, start: t0 + 600 + k * 60, prompt_s: 1.0 }); }
+        }
+        let c = churn(&rows, 300);
+        assert_eq!(c.children, 3);
+        assert_eq!((c.cold_n, c.warm_n), (6, 15));
+        assert_eq!(c.warm_median_s, 1.0);
+        assert!((c.excess_s - (3.0 * 38.0 - 6.0)).abs() < 1e-9, "{:?}", c);
     }
 
     #[test]
