@@ -409,6 +409,7 @@ fn main() {
         "investigate" => cmd_investigate(&args),
         "case" => cmd_case(&args),
         "replay" => cmd_replay(&args),
+        "pulse" => cmd_pulse(&args),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -4732,4 +4733,94 @@ mod tests {
         assert_eq!(header, vec!["time", "mode", "motor_current"]);
         assert_eq!(schema.measurement_indices(), vec![2]);
     }
+}
+
+fn cmd_pulse(args: &[String]) {
+    use struktura::pulse::{analyze, Row};
+    if args.len() < 3 || args[2] == "--help" {
+        println!("struktura pulse <req.csv> [--min-effect PCT] [--boot N] [--seed S] [--json]");
+        println!("  Judge serving deploys from per-request timing rows (prod-pulse.sh req.csv format):");
+        println!("  end_ts,pid,slot,start_ts,ctx,prompt_n,prompt_tps,gen_n,gen_tps,acc,mlen,step_ms,busy_frac");
+        println!("  Step time is adjusted for context depth and slot contention (within-deploy fit),");
+        println!("  consecutive deploys get a bootstrap 95% CI verdict, stalls are flagged.");
+        println!("  --min-effect  smallest believable effect, percent (default 1.16 = 2x lab calibration CV)");
+        println!("  --cols seg,ctx,step,busy,tps   0-based columns (default 1,4,11,12,8)");
+        println!("  Exit: 0 = no regression, 1 = latest judged deploy is slower, 2 = error");
+        process::exit(if args.len() < 3 { 2 } else { 0 });
+    }
+    let (mut min_effect, mut boot, mut seed, mut json, mut per_step) = (1.16f64, 2000usize, 42u64, false, false);
+    let mut cols = [1usize, 4, 11, 12, 8];
+    let mut i = 3;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--min-effect" => { i += 1; min_effect = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(min_effect); }
+            "--boot" => { i += 1; boot = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(boot); }
+            "--seed" => { i += 1; seed = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(seed); }
+            "--cols" => { i += 1; if let Some(v) = args.get(i) {
+                let p: Vec<usize> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                if p.len() == 5 { cols.copy_from_slice(&p); } else { eprintln!("--cols needs 5 indices"); process::exit(2); } } }
+            "--metric" => { i += 1; match args.get(i).map(|s| s.as_str()) { Some("token") => per_step = false, Some("step") => per_step = true, _ => { eprintln!("--metric token|step"); process::exit(2); } } }
+            "--json" => json = true,
+            other => { eprintln!("pulse: unknown option {}", other); process::exit(2); }
+        }
+        i += 1;
+    }
+    let text = match std::fs::read_to_string(&args[2]) { Ok(t) => t, Err(e) => { eprintln!("pulse: {}: {}", args[2], e); process::exit(2); } };
+    let mut rows = Vec::new();
+    let mut skipped = 0usize;
+    for line in text.lines() {
+        let f: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
+        let get = |k: usize| f.get(k).and_then(|v| v.parse::<f64>().ok());
+        match (f.get(cols[0]).and_then(|v| v.parse::<u64>().ok()), get(cols[1]), get(cols[2]), get(cols[3]), get(cols[4])) {
+            (Some(seg), Some(ctx), Some(step), Some(busy), Some(tps)) if step > 0.0 && tps > 0.0 =>
+                rows.push(Row { seg, ctx_k: ctx / 1000.0, busy, ms: if per_step { step } else { 1000.0 / tps }, tps }),
+            _ => skipped += 1,
+        }
+    }
+    if rows.len() < 2 { eprintln!("pulse: need at least 2 timing rows ({} skipped)", skipped); process::exit(2); }
+    let r = analyze(&rows, min_effect, boot, seed);
+    use struktura::pulse::Verdict;
+    let regressed = ["solo", "contention"].iter().any(|k| r.comparisons.iter().rev()
+        .find(|c| c.kind == *k && c.verdict != Verdict::Insufficient)
+        .map(|c| c.verdict == Verdict::Slower).unwrap_or(false));
+    let num = |x: f64| if x.is_finite() { format!("{:.2}", x) } else { "null".to_string() };
+    let metric = if per_step { "step" } else { "token" };
+    if json {
+        for s in &r.segments {
+            println!("{{\"event\":\"segment\",\"seg\":{},\"first_row\":{},\"n\":{},\"solo_n\":{},\"busy_n\":{},\"level_ms\":{},\"contention_pct\":{},\"median_ms\":{},\"median_tps\":{},\"median_ctx_k\":{},\"busy_share\":{}}}",
+                s.seg, s.first_row + 1, s.n, s.solo_n, s.busy_n, num(s.level_ms), num(s.contention_pct), num(s.median_ms), num(s.median_tps), num(s.median_ctx_k), num(s.busy_share));
+        }
+        for c in &r.comparisons {
+            println!("{{\"event\":\"deploy\",\"kind\":\"{}\",\"from\":{},\"to\":{},\"delta\":{},\"ci_low\":{},\"ci_high\":{},\"verdict\":\"{}\"}}",
+                c.kind, c.from, c.to, num(c.delta), num(c.ci_low), num(c.ci_high), c.verdict.as_str());
+        }
+        for x in &r.incidents {
+            println!("{{\"event\":\"incident\",\"row\":{},\"seg\":{},\"ms\":{},\"expected_ms\":{},\"z\":{}}}",
+                x.row + 1, x.seg, num(x.ms), num(x.expected_ms), num(x.z));
+        }
+        println!("{{\"summary\":true,\"metric\":\"{}\",\"rows\":{},\"skipped\":{},\"ms_per_kctx\":{},\"min_effect_pct\":{},\"segments\":{},\"incidents\":{},\"regressed\":{}}}",
+            metric, r.rows, skipped, num(r.slope_ms_per_kctx), num(min_effect), r.segments.len(), r.incidents.len(), regressed);
+    } else {
+        println!("struktura pulse: {} requests, {} deploys, metric = ms per {} ({} rows skipped)", r.rows, r.segments.len(), metric, skipped);
+        println!("  context cost (fitted inside deploys, solo requests): +{:.3} ms per 1K tokens of context", r.slope_ms_per_kctx);
+        println!("  {:>10} {:>5} {:>5} {:>5} {:>9} {:>11} {:>8} {:>8} {:>6}", "deploy", "row", "solo", "busy", "solo_ms", "contention", "raw_ms", "raw_tps", "ctx_K");
+        for s in &r.segments {
+            let cont = if s.contention_pct.is_finite() { format!("{:+.0}%", s.contention_pct) } else { "-".to_string() };
+            println!("  {:>10} {:>5} {:>5} {:>5} {:>9.2} {:>11} {:>8.2} {:>8.1} {:>6.0}", s.seg, s.first_row + 1, s.solo_n, s.busy_n, s.level_ms, cont, s.median_ms, s.median_tps, s.median_ctx_k);
+        }
+        println!("  verdicts need the whole 95% CI beyond +-{:.2} (solo: % of earlier deploy; contention: percentage points):", min_effect);
+        for c in &r.comparisons {
+            if c.verdict == Verdict::Insufficient { continue; }
+            let unit = if c.kind == "solo" { "%" } else { "pp" };
+            println!("    {:<10} {} -> {}: {:+.1}{} [{:+.1}, {:+.1}]  {}", c.kind, c.from, c.to, c.delta, unit, c.ci_low, c.ci_high, c.verdict.as_str().to_uppercase());
+        }
+        let insufficient = r.comparisons.iter().filter(|c| c.verdict == Verdict::Insufficient).count();
+        if insufficient > 0 { println!("    ({} deploy(s) too short to judge: < {} solo rows)", insufficient, struktura::pulse::MIN_SEG_ROWS); }
+        println!("  incidents (> {} robust sd AND > {}x expected): {}", struktura::pulse::INCIDENT_Z, struktura::pulse::INCIDENT_RATIO, r.incidents.len());
+        for x in r.incidents.iter().take(15) {
+            println!("    row {:>5} deploy {}: {:.1} ms vs {:.1} expected (z {:.0})", x.row + 1, x.seg, x.ms, x.expected_ms, x.z);
+        }
+        if r.incidents.len() > 15 { println!("    ... {} more (use --json)", r.incidents.len() - 15); }
+    }
+    process::exit(if regressed { 1 } else { 0 });
 }

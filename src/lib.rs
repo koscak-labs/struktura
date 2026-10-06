@@ -1741,3 +1741,4 @@ pub mod case;
 pub mod replay;
 #[cfg(feature = "std")]
 pub mod report;
+pub mod pulse;
