@@ -4749,7 +4749,9 @@ fn cmd_pulse(args: &[String]) {
         process::exit(if args.len() < 3 { 2 } else { 0 });
     }
     let (mut min_effect, mut boot, mut seed, mut json, mut per_step) = (1.16f64, 2000usize, 42u64, false, false);
-    let mut cols = [1usize, 4, 11, 12, 8];
+    // seg, ctx, step_ms, busy, tps, start_ts, mlen (prod-pulse.sh req.csv)
+    let mut cols = [1usize, 4, 11, 12, 8, 3, 10];
+    let mut deploys_path: Option<String> = None;
     let mut i = 3;
     while i < args.len() {
         match args[i].as_str() {
@@ -4758,7 +4760,8 @@ fn cmd_pulse(args: &[String]) {
             "--seed" => { i += 1; seed = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(seed); }
             "--cols" => { i += 1; if let Some(v) = args.get(i) {
                 let p: Vec<usize> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
-                if p.len() == 5 { cols.copy_from_slice(&p); } else { eprintln!("--cols needs 5 indices"); process::exit(2); } } }
+                if p.len() == 5 || p.len() == 7 { cols[..p.len()].copy_from_slice(&p); } else { eprintln!("--cols needs 5 or 7 indices"); process::exit(2); } } }
+            "--deploys" => { i += 1; deploys_path = args.get(i).cloned(); }
             "--metric" => { i += 1; match args.get(i).map(|s| s.as_str()) { Some("token") => per_step = false, Some("step") => per_step = true, _ => { eprintln!("--metric token|step"); process::exit(2); } } }
             "--json" => json = true,
             other => { eprintln!("pulse: unknown option {}", other); process::exit(2); }
@@ -4766,18 +4769,57 @@ fn cmd_pulse(args: &[String]) {
         i += 1;
     }
     let text = match std::fs::read_to_string(&args[2]) { Ok(t) => t, Err(e) => { eprintln!("pulse: {}: {}", args[2], e); process::exit(2); } };
+    // Deploy boundaries from a lab ledger: JSON lines with "kind":"deploy" and a unix "ts".
+    // A server process id changes on every model reload, so it is not a deploy; the ledger is.
+    let mut deploys: Vec<(u64, String)> = Vec::new();
+    if let Some(p) = &deploys_path {
+        let led = match std::fs::read_to_string(p) { Ok(t) => t, Err(e) => { eprintln!("pulse: {}: {}", p, e); process::exit(2); } };
+        for l in led.lines().filter(|l| l.replace(' ', "").contains("\"kind\":\"deploy\"")) {
+            let field = |k: &str| -> Option<String> {
+                let key = format!("\"{}\":", k);
+                let at = l.find(&key)? + key.len();
+                let rest = l[at..].trim_start();
+                if let Some(s) = rest.strip_prefix('"') { s.find('"').map(|e| s[..e].to_string()) }
+                else { Some(rest.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect()) }
+            };
+            if let Some(ts) = field("ts").and_then(|t| t.parse::<f64>().ok()) {
+                let mut label = field("binary").unwrap_or_else(|| "deploy".to_string());
+                if let Some(c) = field("chunk") { label.push_str(&format!(" chunk={}", c)); }
+                deploys.push((ts as u64, label));
+            }
+        }
+        deploys.sort();
+        if deploys.is_empty() { eprintln!("pulse: no kind:\"deploy\" rows with a ts in {}", p); process::exit(2); }
+    }
     let mut rows = Vec::new();
+    let mut starts: Vec<u64> = Vec::new();
     let mut skipped = 0usize;
     for line in text.lines() {
         let f: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
         let get = |k: usize| f.get(k).and_then(|v| v.parse::<f64>().ok());
         match (f.get(cols[0]).and_then(|v| v.parse::<u64>().ok()), get(cols[1]), get(cols[2]), get(cols[3]), get(cols[4])) {
-            (Some(seg), Some(ctx), Some(step), Some(busy), Some(tps)) if step > 0.0 && tps > 0.0 =>
-                rows.push(Row { seg, ctx_k: ctx / 1000.0, busy, ms: if per_step { step } else { 1000.0 / tps }, tps }),
+            (Some(seg), Some(ctx), Some(step), Some(busy), Some(tps)) if step > 0.0 && tps > 0.0 => {
+                rows.push(Row { seg, ctx_k: ctx / 1000.0, busy, ms: if per_step { step } else { 1000.0 / tps }, tps,
+                    mlen: get(cols[6]).unwrap_or(f64::NAN) });
+                starts.push(get(cols[5]).unwrap_or(0.0) as u64);
+            }
             _ => skipped += 1,
         }
     }
     if rows.len() < 2 { eprintln!("pulse: need at least 2 timing rows ({} skipped)", skipped); process::exit(2); }
+    let mut labels: Vec<(u64, String)> = Vec::new();
+    if !deploys.is_empty() {
+        // Segment = the last deploy at or before the request's start; 0 = before the first known deploy.
+        let mut idx: Vec<usize> = (0..rows.len()).collect();
+        idx.sort_by_key(|&k| starts[k]);
+        rows = idx.iter().map(|&k| {
+            let mut r = rows[k];
+            r.seg = deploys.iter().rev().find(|(ts, _)| *ts <= starts[k]).map(|(ts, _)| *ts).unwrap_or(0);
+            r
+        }).collect();
+        labels.push((0, "before first ledger deploy".to_string()));
+        labels.extend(deploys.iter().cloned());
+    }
     let r = analyze(&rows, min_effect, boot, seed);
     use struktura::pulse::Verdict;
     let regressed = ["solo", "contention"].iter().any(|k| r.comparisons.iter().rev()
@@ -4785,10 +4827,11 @@ fn cmd_pulse(args: &[String]) {
         .map(|c| c.verdict == Verdict::Slower).unwrap_or(false));
     let num = |x: f64| if x.is_finite() { format!("{:.2}", x) } else { "null".to_string() };
     let metric = if per_step { "step" } else { "token" };
+    let label_of = |seg: u64| labels.iter().find(|(t, _)| *t == seg).map(|(_, l)| l.replace('"', "'")).unwrap_or_default();
     if json {
         for s in &r.segments {
-            println!("{{\"event\":\"segment\",\"seg\":{},\"first_row\":{},\"n\":{},\"solo_n\":{},\"busy_n\":{},\"level_ms\":{},\"contention_pct\":{},\"median_ms\":{},\"median_tps\":{},\"median_ctx_k\":{},\"busy_share\":{}}}",
-                s.seg, s.first_row + 1, s.n, s.solo_n, s.busy_n, num(s.level_ms), num(s.contention_pct), num(s.median_ms), num(s.median_tps), num(s.median_ctx_k), num(s.busy_share));
+            println!("{{\"event\":\"segment\",\"seg\":{},\"first_row\":{},\"n\":{},\"solo_n\":{},\"busy_n\":{},\"level_ms\":{},\"contention_pct\":{},\"solo_mlen\":{},\"label\":\"{}\",\"median_ms\":{},\"median_tps\":{},\"median_ctx_k\":{},\"busy_share\":{}}}",
+                s.seg, s.first_row + 1, s.n, s.solo_n, s.busy_n, num(s.level_ms), num(s.contention_pct), num(s.solo_mlen), label_of(s.seg), num(s.median_ms), num(s.median_tps), num(s.median_ctx_k), num(s.busy_share));
         }
         for c in &r.comparisons {
             println!("{{\"event\":\"deploy\",\"kind\":\"{}\",\"from\":{},\"to\":{},\"delta\":{},\"ci_low\":{},\"ci_high\":{},\"verdict\":\"{}\"}}",
@@ -4803,10 +4846,14 @@ fn cmd_pulse(args: &[String]) {
     } else {
         println!("struktura pulse: {} requests, {} deploys, metric = ms per {} ({} rows skipped)", r.rows, r.segments.len(), metric, skipped);
         println!("  context cost (fitted inside deploys, solo requests): +{:.3} ms per 1K tokens of context", r.slope_ms_per_kctx);
-        println!("  {:>10} {:>5} {:>5} {:>5} {:>9} {:>11} {:>8} {:>8} {:>6}", "deploy", "row", "solo", "busy", "solo_ms", "contention", "raw_ms", "raw_tps", "ctx_K");
+        println!("  {:>10} {:>5} {:>5} {:>5} {:>9} {:>11} {:>5} {:>8} {:>8} {:>6}", "deploy", "row", "solo", "busy", "solo_ms", "contention", "mlen", "raw_ms", "raw_tps", "ctx_K");
         for s in &r.segments {
             let cont = if s.contention_pct.is_finite() { format!("{:+.0}%", s.contention_pct) } else { "-".to_string() };
-            println!("  {:>10} {:>5} {:>5} {:>5} {:>9.2} {:>11} {:>8.2} {:>8.1} {:>6.0}", s.seg, s.first_row + 1, s.solo_n, s.busy_n, s.level_ms, cont, s.median_ms, s.median_tps, s.median_ctx_k);
+            println!("  {:>10} {:>5} {:>5} {:>5} {:>9.2} {:>11} {:>5.2} {:>8.2} {:>8.1} {:>6.0}", s.seg, s.first_row + 1, s.solo_n, s.busy_n, s.level_ms, cont, s.solo_mlen, s.median_ms, s.median_tps, s.median_ctx_k);
+        }
+        if !labels.is_empty() {
+            println!("  deploys keyed on ledger kind:\"deploy\" rows (deploy = its unix ts):");
+            for s in &r.segments { println!("    {:>10} = {}", s.seg, label_of(s.seg)); }
         }
         println!("  verdicts need the whole 95% CI beyond +-{:.2} (solo: % of earlier deploy; contention: percentage points):", min_effect);
         for c in &r.comparisons {

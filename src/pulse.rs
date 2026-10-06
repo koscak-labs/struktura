@@ -54,6 +54,10 @@ pub struct Row {
     pub ms: f64,
     /// Generated tokens per second (reported, not modelled).
     pub tps: f64,
+    /// Mean accepted draft length (tokens per step), NaN when unknown.
+    /// ms per token = ms per step / mlen, so this separates drafter or content
+    /// effects from per-step hardware cost. Reported, not modelled.
+    pub mlen: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -84,6 +88,8 @@ pub struct Segment {
     /// How much slower a request runs while the other slot is busy, percent
     /// of `level_ms` (NaN when there are too few busy rows).
     pub contention_pct: f64,
+    /// Median accepted draft length over solo requests (NaN when unknown).
+    pub solo_mlen: f64,
     pub median_ms: f64,
     pub median_tps: f64,
     pub median_ctx_k: f64,
@@ -234,8 +240,9 @@ pub fn analyze(rows: &[Row], min_effect_pct: f64, n_boot: usize, seed: u64) -> P
         let mut st: Vec<f64> = (s..e).map(|i| rows[i].ms).collect();
         let mut tp: Vec<f64> = (s..e).map(|i| rows[i].tps).collect();
         let mut cx: Vec<f64> = (s..e).map(|i| rows[i].ctx_k).collect();
+        let mut ml: Vec<f64> = (s..e).filter(|&i| solo[i] && rows[i].mlen.is_finite()).map(|i| rows[i].mlen).collect();
         segments.push(Segment { seg: rows[s].seg, first_row: s, n: e - s, solo_n: sa.len(), busy_n: ba.len(),
-            level_ms: level, contention_pct, median_ms: median(&mut st), median_tps: median(&mut tp),
+            level_ms: level, contention_pct, solo_mlen: median(&mut ml), median_ms: median(&mut st), median_tps: median(&mut tp),
             median_ctx_k: median(&mut cx), busy_share: ba.len() as f64 / (e - s) as f64 });
         solo_adj.push(sa);
         busy_adj.push(ba);
@@ -306,7 +313,7 @@ mod tests {
             let noise = rng.below(100) as f64 / 100.0 - 0.5;
             let mut ms = (level + 0.25 * ctx) * (1.0 + pen * busy) + noise;
             if i == 150 { ms += 300.0; }
-            rows.push(Row { seg, ctx_k: ctx, busy, ms, tps: 1000.0 / ms });
+            rows.push(Row { seg, ctx_k: ctx, busy, ms, tps: 1000.0 / ms, mlen: 3.0 });
         }
         rows
     }
@@ -354,7 +361,7 @@ mod tests {
         let rows: Vec<Row> = (0..200).map(|i| {
             let ctx = 20.0 + rng.below(20) as f64;
             let ms = 50.0 + 0.25 * ctx + (rng.below(100) as f64 / 100.0 - 0.5);
-            Row { seg: if i < 100 { 1 } else { 2 }, ctx_k: ctx, busy: 0.0, ms, tps: 1000.0 / ms }
+            Row { seg: if i < 100 { 1 } else { 2 }, ctx_k: ctx, busy: 0.0, ms, tps: 1000.0 / ms, mlen: f64::NAN }
         }).collect();
         let r = analyze(&rows, 1.16, 500, 3);
         let v = kind(&r, "solo")[0].verdict;
