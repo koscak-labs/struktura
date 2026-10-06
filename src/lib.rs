@@ -1767,3 +1767,5 @@ pub mod brain_prune;
 pub mod brain_genome;
 pub mod brain_neuromod;
 pub mod brain_hebb;
+#[cfg(feature = "std")]
+pub mod brain_gym;

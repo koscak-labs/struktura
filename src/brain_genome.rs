@@ -289,11 +289,14 @@ impl<const P: usize> Population<P> {
     }
 }
 
-#[cfg(test)]
-mod tests {
+/// The falsifier's rover world, run and evolution protocol, shared by the tests and the brain gym
+/// (`crate::brain_gym`).
+#[cfg(feature = "std")]
+pub mod falsify {
     use super::*;
     use crate::brain::Brain;
     use crate::brain_grow::Grower;
+    use std::vec::Vec;
 
     struct Lcg(u64);
     impl Lcg { fn f(&mut self) -> f32 { self.0 ^= self.0 << 13; self.0 ^= self.0 >> 7; self.0 ^= self.0 << 17; ((self.0 >> 40) as f32) / (1u64 << 24) as f32 } }
@@ -306,7 +309,7 @@ mod tests {
     }
 
     /// Prequential right-action rate (each decision scored before its outcome is learned).
-    fn run(p: &Phenotype, seed: u64, steps: usize, shift: f32) -> f32 {
+    pub fn run(p: &Phenotype, seed: u64, steps: usize, shift: f32) -> f32 {
         let mut r = Lcg(seed);
         let mut br: Brain<128, 8, 4> = Brain::new(p.explore, p.min_evidence);
         br.half_life = p.half_life.max(1);
@@ -328,6 +331,53 @@ mod tests {
         }
         ok as f32 / steps as f32
     }
+
+    /// One evolution run of the falsifier: 8 genomes x 12 generations on one 1500-decision
+    /// training stream (`evo_seed ^ 0x5EED`), elite fitness per generation in `curve`.
+    #[derive(Clone, Copy, Debug)]
+    pub struct EvoRun { pub evo_seed: u64, pub train_default: f32, pub curve: [f32; 12], pub best: Genome, pub held: f32 }
+
+    impl EvoRun {
+        /// Elitism: the elite's fitness never decreases across generations.
+        pub fn elitist(&self) -> bool {
+            let mut last = f32::NEG_INFINITY;
+            self.curve.iter().all(|&e| { let ok = e >= last; last = e; ok })
+        }
+    }
+
+    /// The falsifier: default held-out rate, and one [`EvoRun`] per evolution seed.
+    #[derive(Clone, Debug)]
+    pub struct Report { pub default_held: f32, pub runs: Vec<EvoRun> }
+
+    impl Report {
+        pub fn wins(&self) -> usize { self.runs.iter().filter(|r| r.held > self.default_held).count() }
+        /// The pre-registered verdict: elitism in every run, and the evolved phenotype beats the
+        /// defaults on the held-out world in at least 2/3 of the runs (2 of 3 in the test).
+        pub fn holds(&self) -> bool { self.runs.iter().all(EvoRun::elitist) && 3 * self.wins() >= 2 * self.runs.len() }
+    }
+
+    pub fn falsifier(held_seeds: &[u64], evo_seeds: &[u64]) -> Report {
+        let held = |p: &Phenotype| held_seeds.iter().map(|&s| run(p, s, 2500, 0.05)).sum::<f32>() / held_seeds.len() as f32;
+        let default_held = held(&Phenotype::DEFAULT);
+        let mut runs = Vec::new();
+        for &evo_seed in evo_seeds {
+            let train_seed = evo_seed ^ 0x5EED;
+            let mut f = |p: &Phenotype| run(p, train_seed, 1500, 0.0);
+            let mut pop: Population<8> = Population::new(&Phenotype::DEFAULT, evo_seed);
+            let mut curve = [0.0f32; 12];
+            for c in curve.iter_mut() { *c = pop.step(&mut f); }
+            let best = pop.genomes[pop.best()];
+            let train_default = run(&Phenotype::DEFAULT, train_seed, 1500, 0.0);
+            runs.push(EvoRun { evo_seed, train_default, curve, best, held: held(&best.express()) });
+        }
+        Report { default_held, runs }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::falsify::{falsifier, run};
 
     #[test]
     fn genome_roundtrip_and_reading_frame() {
@@ -375,33 +425,27 @@ mod tests {
     #[ignore = "FAILED as pre-registered: evolution on ONE training stream overfits it (train +4..+9 pts) and loses on the held-out world in 0/3 runs (0.761 / 0.755 / 0.762 vs default 0.763); see multi_stream_selection"]
     fn falsifier_evolved_genome_beats_defaults_on_a_held_out_world() {
         let held_seeds = [201u64, 203, 207, 209, 211, 223];
-        let held = |p: &Phenotype| held_seeds.iter().map(|&s| run(p, s, 2500, 0.05)).sum::<f32>() / held_seeds.len() as f32;
-        let default_held = held(&Phenotype::DEFAULT);
+        let rep = falsifier(&held_seeds, &[11u64, 23, 37]);
+        let default_held = rep.default_held;
         let mut wins = 0;
-        for evo_seed in [11u64, 23, 37] {
-            let train_seed = evo_seed ^ 0x5EED;
-            let mut f = |p: &Phenotype| run(p, train_seed, 1500, 0.0);
-            let mut pop: Population<8> = Population::new(&Phenotype::DEFAULT, evo_seed);
+        for r in &rep.runs {
             let mut last = f32::NEG_INFINITY;
-            let mut curve = [0.0f32; 12];
-            for g in 0..12 {
-                let e = pop.step(&mut f);
+            for (g, &e) in r.curve.iter().enumerate() {
                 assert!(e >= last, "elitism: elite fitness fell from {} to {} at generation {}", last, e, g);
-                last = e; curve[g] = e;
+                last = e;
             }
-            let best = pop.genomes[pop.best()];
+            let (best, curve, ph) = (r.best, r.curve, r.held);
             let p = best.express();
-            let train_default = run(&Phenotype::DEFAULT, train_seed, 1500, 0.0);
-            let ph = held(&p);
             let mut letters = [0u8; MAX_CODONS * 3];
             let n = best.letters(&mut letters);
             std::println!("genome evo seed {}: train default {:.3} -> elite {:.3} (curve {:.3} .. {:.3}); held-out default {:.3} vs evolved {:.3}",
-                evo_seed, train_default, last, curve[0], curve[11], default_held, ph);
+                r.evo_seed, r.train_default, last, curve[0], curve[11], default_held, ph);
             std::println!("  evolved DNA ({} codons): {}", best.len, core::str::from_utf8(&letters[..n]).unwrap());
             std::println!("  evolved phenotype: {:?}", p);
             if ph > default_held { wins += 1; }
         }
         std::println!("held-out wins vs defaults: {}/3", wins);
+        assert_eq!(rep.holds(), wins >= 2, "the gym verdict agrees with the test");
         assert!(wins >= 2, "evolved genomes beat the defaults on the held-out world in only {}/3 runs", wins);
     }
 }
@@ -418,12 +462,12 @@ mod follow_up {
     #[ignore = "also FAILS (recorded, 210 s): 3-stream selection, held-out 0.756 / 0.754 / 0.762 vs default 0.763, 0/3 wins"]
     fn multi_stream_selection() {
         let held_seeds = [201u64, 203, 207, 209, 211, 223];
-        let held = |p: &Phenotype| held_seeds.iter().map(|&s| super::tests_api::run(p, s, 2500, 0.05)).sum::<f32>() / held_seeds.len() as f32;
+        let held = |p: &Phenotype| held_seeds.iter().map(|&s| super::falsify::run(p, s, 2500, 0.05)).sum::<f32>() / held_seeds.len() as f32;
         let default_held = held(&Phenotype::DEFAULT);
         let mut wins = 0;
         for evo_seed in [11u64, 23, 37] {
             let streams = [evo_seed ^ 0x5EED, evo_seed ^ 0xA11CE, evo_seed ^ 0xB0B];
-            let mut f = |p: &Phenotype| streams.iter().map(|&s| super::tests_api::run(p, s, 1000, 0.0)).sum::<f32>() / 3.0;
+            let mut f = |p: &Phenotype| streams.iter().map(|&s| super::falsify::run(p, s, 1000, 0.0)).sum::<f32>() / 3.0;
             let mut pop: Population<8> = Population::new(&Phenotype::DEFAULT, evo_seed);
             let mut last = f32::NEG_INFINITY;
             for _ in 0..12 { let e = pop.step(&mut f); assert!(e >= last); last = e; }
@@ -433,41 +477,5 @@ mod follow_up {
             if ph > default_held { wins += 1; }
         }
         std::println!("multi-stream held-out wins vs defaults: {}/3", wins);
-    }
-}
-
-/// The rover-world run shared by the tests (prequential right-action rate).
-#[cfg(test)]
-mod tests_api {
-    use super::Phenotype;
-    use crate::brain::Brain;
-    use crate::brain_grow::Grower;
-    struct Lcg(u64);
-    impl Lcg { fn f(&mut self) -> f32 { self.0 ^= self.0 << 13; self.0 ^= self.0 >> 7; self.0 ^= self.0 << 17; ((self.0 >> 40) as f32) / (1u64 << 24) as f32 } }
-    fn truth(x: &[f32; 4], shift: f32) -> u8 {
-        let (t6, t4, t5) = (0.6 + shift, 0.4 + shift, 0.5 + shift);
-        if x[2] > t6 && x[0] > t6 { 3 } else if x[1] > t6 && x[2] < t4 { 2 } else if (x[0] > t5) != (x[1] > t5) { 1 } else { 0 }
-    }
-    pub fn run(p: &Phenotype, seed: u64, steps: usize, shift: f32) -> f32 {
-        let mut r = Lcg(seed);
-        let mut br: Brain<128, 8, 4> = Brain::new(p.explore, p.min_evidence);
-        br.half_life = p.half_life.max(1);
-        let mut gr: Grower<4, 4> = Grower::new(seed ^ 0xD1A);
-        gr.constant[3] = true;
-        gr.every = p.grow_every.max(1);
-        gr.min_gain = p.grow_min_gain;
-        gr.set_limit(p.grow_limit as usize);
-        let mut ok = 0usize;
-        for t in 0..steps {
-            let base = [r.f(), r.f(), r.f(), 1.0];
-            let x: [f32; 8] = gr.situation(&base);
-            let d = br.decide(&x, &[true; 4], 3);
-            let a = if d.abstained && t < 200 { (t % 4) as u8 } else { d.action };
-            let right = a == truth(&base, shift);
-            if right { ok += 1; }
-            br.learn(&x, a, if right { 1.0 } else if a == 3 { 0.2 } else { 0.0 });
-            gr.after_learn(&mut br);
-        }
-        ok as f32 / steps as f32
     }
 }

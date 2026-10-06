@@ -181,8 +181,9 @@ impl<const A: usize> Shield<A> {
     }
 }
 
-#[cfg(test)]
-mod tests {
+/// The falsifiers' rover traverse, shared by the tests and the brain gym (`crate::brain_gym`).
+#[cfg(feature = "std")]
+pub mod falsify {
     use super::*;
 
     struct Lcg(u64);
@@ -200,7 +201,7 @@ mod tests {
     // mean there is still 0.864 > 0.8 for driving slow, so a mean-maximising brain keeps
     // driving fast on the patch: rare-catastrophe risk that averages hide;
     // 3 safe-mode (0.05).
-    const IRREV: [bool; 4] = [false, false, true, false];
+    pub const IRREV: [bool; 4] = [false, false, true, false];
     fn danger(x: &[f32; 3]) -> bool { x[0] > 0.8 && x[1] > 0.8 }
     fn outcome(x: &[f32; 3], a: u8, r: &mut Lcg) -> f32 {
         let noise = (r.f() - 0.5) * 0.1;
@@ -212,12 +213,12 @@ mod tests {
         }
     }
 
-    struct Run { reward: f32, catastrophes: u32, risky_picks: u32, picks: [u32; 4] }
+    pub struct Run { pub reward: f32, pub catastrophes: u32, pub risky_picks: u32, pub picks: [u32; 4] }
 
     /// Ground test campaign (`ground` situations; a quarter on the patch the team worried
     /// about; every action tried on and off it), then `n` live decisions. Both brains see the
     /// same campaign and the same terrain.
-    fn traverse(shielded: bool, risk_budget: f32, ground: usize, n: usize, world_seed: u64, terrain_seed: u64) -> Run {
+    pub fn traverse(shielded: bool, risk_budget: f32, ground: usize, n: usize, world_seed: u64, terrain_seed: u64) -> Run {
         let mut br: Brain<256, 3, 4> = Brain::new(0.3, 0.5);
         let mut sh: Shield<4> = Shield::new(IRREV);
         sh.catastrophe = -2.0;
@@ -247,22 +248,42 @@ mod tests {
         run
     }
 
-    /// Eight seeds, unshielded vs shielded on identical worlds.
-    /// Returns (unshielded catastrophes, shielded, max shielded per seed, regret %).
-    fn campaign(risk_budget: f32, ground: usize, label: &str) -> (u32, u32, u32, f32) {
+    /// The tests' eight (world, terrain) seed pairs.
+    pub fn test_seeds() -> [(u64, u64); 8] { core::array::from_fn(|k| (100 + k as u64 * 7, 900 + k as u64 * 13)) }
+
+    /// Unshielded vs shielded on identical worlds, one (world, terrain) seed pair each.
+    /// Returns (unshielded catastrophes, shielded, max shielded per seed, regret %);
+    /// `label` = Some(..) prints the per-seed table.
+    pub fn campaign(risk_budget: f32, ground: usize, seeds: &[(u64, u64)], label: Option<&str>) -> (u32, u32, u32, f32) {
         let (mut pc, mut sc, mut smax, mut pr, mut sr) = (0u32, 0u32, 0u32, 0.0f32, 0.0f32);
-        std::println!("{} (ground campaign {} trials, risk budget {}):", label, ground, risk_budget);
-        for k in 0..8u64 {
-            let (ws, ts) = (100 + k * 7, 900 + k * 13);
+        if let Some(label) = label { std::println!("{} (ground campaign {} trials, risk budget {}):", label, ground, risk_budget); }
+        for (k, &(ws, ts)) in seeds.iter().enumerate() {
             let p = traverse(false, risk_budget, ground, 3000, ws, ts);
             let s = traverse(true, risk_budget, ground, 3000, ws, ts);
-            std::println!("  seed {}: unshielded catastrophes {:>2} risky {:>3} reward {:>7.1} | shielded catastrophes {:>2} risky {:>3} reward {:>7.1}",
-                k, p.catastrophes, p.risky_picks, p.reward, s.catastrophes, s.risky_picks, s.reward);
+            if label.is_some() {
+                std::println!("  seed {}: unshielded catastrophes {:>2} risky {:>3} reward {:>7.1} | shielded catastrophes {:>2} risky {:>3} reward {:>7.1}",
+                    k, p.catastrophes, p.risky_picks, p.reward, s.catastrophes, s.risky_picks, s.reward);
+            }
             pc += p.catastrophes; sc += s.catastrophes; smax = smax.max(s.catastrophes); pr += p.reward; sr += s.reward;
         }
         let regret = 100.0 * (pr - sr) / pr;
-        std::println!("  total: unshielded {} catastrophes, shielded {} (max {} per seed); shield regret {:+.2}%", pc, sc, smax, regret);
+        if label.is_some() { std::println!("  total: unshielded {} catastrophes, shielded {} (max {} per seed); shield regret {:+.2}%", pc, sc, smax, regret); }
         (pc, sc, smax, regret)
+    }
+
+    /// The certified falsifier's verdict on a campaign result (the test's asserts).
+    pub fn certified_holds(pc: u32, sc: u32, regret: f32) -> bool { pc > 0 && sc == 0 && regret <= 10.0 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::falsify::{certified_holds, test_seeds, traverse, IRREV};
+
+    /// Eight seeds, unshielded vs shielded on identical worlds.
+    /// Returns (unshielded catastrophes, shielded, max shielded per seed, regret %).
+    fn campaign(risk_budget: f32, ground: usize, label: &str) -> (u32, u32, u32, f32) {
+        falsify::campaign(risk_budget, ground, &test_seeds(), Some(label))
     }
 
     #[test]
@@ -286,6 +307,7 @@ mod tests {
         assert!(pc > 0, "the falsifier needs the unshielded brain to lose rovers");
         assert_eq!(sc, 0, "zero catastrophic outcomes over 8 x 3000 live decisions");
         assert!(regret <= 10.0, "regret {:.2}% over the 10% budget", regret);
+        assert!(certified_holds(pc, sc, regret), "the gym verdict agrees with the asserts");
     }
 
     #[test]

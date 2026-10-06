@@ -127,8 +127,9 @@ impl Default for Neuromod {
     fn default() -> Self { Self::new() }
 }
 
-#[cfg(test)]
-mod tests {
+/// The falsifier's world and runs, shared by the tests and the brain gym (`crate::brain_gym`).
+#[cfg(feature = "std")]
+pub mod falsify {
     use super::*;
 
     struct Rng(u64);
@@ -141,10 +142,10 @@ mod tests {
         if flipped { [2u8, 3, 0, 1][a as usize] } else { a }
     }
 
-    struct Run { rate: [f32; 40], regret: f32, resets: u32 }
+    pub struct Run { pub rate: [f32; 40], pub regret: f32, pub resets: u32 }
 
     /// 4000 steps; `flip` = step at which the rule changes (None = stationary).
-    fn run(seed: u64, flip: Option<usize>, modulated: bool) -> Run {
+    pub fn run(seed: u64, flip: Option<usize>, modulated: bool) -> Run {
         let mut r = Rng(seed);
         let mut br: Brain<256, 4, 4> = Brain::new(0.3, 0.5);
         let mut nm = Neuromod::new();
@@ -168,11 +169,53 @@ mod tests {
 
     /// Steps after `flip` until a 100-step window reaches 90% of the pre-flip steady rate
     /// (steady = mean of the 5 windows before the flip); 2000 if never.
-    fn recovery(r: &Run, flip: usize) -> f32 {
+    pub fn recovery(r: &Run, flip: usize) -> f32 {
         let f = flip / 100;
         let steady: f32 = r.rate[f - 5..f].iter().sum::<f32>() / 5.0;
         (f..40).find(|&w| r.rate[w] >= 0.9 * steady).map(|w| ((w + 1) * 100 - flip) as f32).unwrap_or(2000.0)
     }
+
+    pub const FLIP: usize = 2000;
+
+    /// The falsifier's accumulators over a seed set (sums, as the test asserts on them):
+    /// `rec_*` recovery steps, `reg_*` regret, `st_*` stationary last-1000 right-action rate,
+    /// `resets_*` resets; `k` = number of seeds.
+    #[derive(Clone, Copy, Debug)]
+    pub struct Report { pub k: f32, pub rec_f: f32, pub rec_m: f32, pub reg_f: f32, pub reg_m: f32, pub st_f: f32, pub st_m: f32, pub resets_flip: u32, pub resets_stat: u32 }
+
+    impl Report {
+        /// The pre-registered verdict, the test's three asserts: (a) faster recovery,
+        /// (b) stationary not worse by more than 1 point, (c) lower regret.
+        pub fn holds(&self) -> bool {
+            let k = self.k;
+            self.rec_m < self.rec_f && self.st_m / k >= self.st_f / k - 0.01 && self.reg_m < self.reg_f
+        }
+    }
+
+    pub fn falsifier(seeds: &[u64]) -> Report {
+        let flip = FLIP;
+        let k = seeds.len() as f32;
+        let (mut rec_f, mut rec_m, mut reg_f, mut reg_m, mut st_f, mut st_m, mut resets_flip, mut resets_stat) = (0.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0u32, 0u32);
+        for &s in seeds {
+            let (f, m) = (run(s, Some(flip), false), run(s, Some(flip), true));
+            rec_f += recovery(&f, flip); rec_m += recovery(&m, flip);
+            reg_f += f.regret; reg_m += m.regret; resets_flip += m.resets;
+            let (sf, sm) = (run(s, None, false), run(s, None, true));
+            st_f += sf.rate[30..40].iter().sum::<f32>() / 10.0;
+            st_m += sm.rate[30..40].iter().sum::<f32>() / 10.0;
+            resets_stat += sm.resets;
+        }
+        Report { k, rec_f, rec_m, reg_f, reg_m, st_f, st_m, resets_flip, resets_stat }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::falsify::{falsifier, run, Report};
+
+    struct Rng(u64);
+    impl Rng { fn f(&mut self) -> f32 { self.0 ^= self.0 << 13; self.0 ^= self.0 >> 7; self.0 ^= self.0 << 17; ((self.0 >> 40) as f32) / (1u64 << 24) as f32 } }
 
     /// Pre-registered falsifier (set before the run), on 8 seeds and on 8 fresh seeds:
     /// (a) after a mid-stream rule flip, the neuromodulated brain recovers to 90% of its
@@ -182,24 +225,15 @@ mod tests {
     /// (c) total regret over the flip stream is lower.
     #[test]
     fn falsifier_neuromodulation_recovers_faster_without_hurting_stationary() {
-        let flip = 2000usize;
         for seeds in [[11u64, 23, 37, 41, 59, 61, 73, 89], [101, 103, 107, 109, 113, 127, 131, 137]] {
-            let k = seeds.len() as f32;
-            let (mut rec_f, mut rec_m, mut reg_f, mut reg_m, mut st_f, mut st_m, mut resets_flip, mut resets_stat) = (0.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0u32, 0u32);
-            for &s in &seeds {
-                let (f, m) = (run(s, Some(flip), false), run(s, Some(flip), true));
-                rec_f += recovery(&f, flip); rec_m += recovery(&m, flip);
-                reg_f += f.regret; reg_m += m.regret; resets_flip += m.resets;
-                let (sf, sm) = (run(s, None, false), run(s, None, true));
-                st_f += sf.rate[30..40].iter().sum::<f32>() / 10.0;
-                st_m += sm.rate[30..40].iter().sum::<f32>() / 10.0;
-                resets_stat += sm.resets;
-            }
+            let rep = falsifier(&seeds);
+            let Report { k, rec_f, rec_m, reg_f, reg_m, st_f, st_m, resets_flip, resets_stat } = rep;
             std::println!("neuromod falsifier (seeds {:?}..): flip world recovery to 90% fixed {:.0} vs neuromod {:.0} steps; regret fixed {:.0} vs neuromod {:.0}; stationary last-1000 rate fixed {:.3} vs neuromod {:.3}; resets: {:.1}/run in flip world, {:.1}/run stationary",
                 seeds[0], rec_f / k, rec_m / k, reg_f / k, reg_m / k, st_f / k, st_m / k, resets_flip as f32 / k, resets_stat as f32 / k);
             assert!(rec_m < rec_f, "(a) recovery neuromod {} vs fixed {}", rec_m / k, rec_f / k);
             assert!(st_m / k >= st_f / k - 0.01, "(b) stationary neuromod {} vs fixed {}", st_m / k, st_f / k);
             assert!(reg_m < reg_f, "(c) regret neuromod {} vs fixed {}", reg_m / k, reg_f / k);
+            assert!(rep.holds(), "the gym verdict agrees with the asserts");
         }
     }
 

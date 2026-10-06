@@ -255,17 +255,16 @@ mod tests {
     }
 }
 
-#[cfg(test)]
-mod falsifier {
+/// The falsifier's rover worlds and run, shared by the test and the brain gym (`crate::brain_gym`).
+#[cfg(feature = "std")]
+pub mod falsify {
     use super::*;
-    extern crate std;
-    use std::println;
 
     struct Xs(u64);
     impl Xs { fn f(&mut self) -> f32 { self.0 ^= self.0 << 13; self.0 ^= self.0 >> 7; self.0 ^= self.0 << 17; ((self.0 >> 40) as f32) / (1u64 << 24) as f32 } }
 
-    fn truth_a(x: &[f32; 4]) -> u8 { if x[2] > 0.8 { 3 } else if x[1] > 0.6 { 2 } else if x[0] > 0.6 { 1 } else { 0 } }
-    fn truth_b(x: &[f32; 4]) -> u8 {
+    pub fn truth_a(x: &[f32; 4]) -> u8 { if x[2] > 0.8 { 3 } else if x[1] > 0.6 { 2 } else if x[0] > 0.6 { 1 } else { 0 } }
+    pub fn truth_b(x: &[f32; 4]) -> u8 {
         if x[2] > 0.6 && x[0] > 0.6 { 3 } else if x[1] > 0.6 && x[2] < 0.4 { 2 } else if (x[0] > 0.5) != (x[1] > 0.5) { 1 } else { 0 }
     }
     fn reward(t: u8, a: u8) -> f32 { if a == t { 1.0 } else if a == 3 { 0.2 } else { 0.0 } }
@@ -316,6 +315,21 @@ mod falsifier {
         (s1, s2)
     }
 
+    /// The pre-registered verdict on one run (the test's asserts): error among acted <= alpha for
+    /// both rules, interval coverage >= 1 - alpha (2-point slack), selective rule acts on >= half.
+    pub fn holds(s1: &Stats, s2: &Stats, alpha: f32) -> bool {
+        [s1, s2].iter().all(|s| s.acted == 0 || s.errors as f32 <= alpha * s.acted as f32)
+            && s1.covered as f32 >= (1.0 - alpha) * s1.cov_n as f32 - 0.02 * s1.cov_n as f32
+            && s2.acted >= s2.n / 2
+    }
+}
+
+#[cfg(test)]
+mod falsifier {
+    extern crate std;
+    use std::println;
+    use super::falsify::{holds, run, truth_a, truth_b};
+
     fn pct(a: u32, b: u32) -> f32 { if b == 0 { f32::NAN } else { 100.0 * a as f32 / b as f32 } }
 
     #[test]
@@ -333,6 +347,7 @@ mod falsifier {
                 println!("  interval coverage on held-out: {:.2}% (target >= {:.0}%)", pct(s1.covered, s1.cov_n), 100.0 * (1.0 - alpha));
                 assert!(s1.covered as f32 >= (1.0 - alpha) * s1.cov_n as f32 - 0.02 * s1.cov_n as f32, "coverage far below target");
                 assert!(s2.acted >= s2.n / 2, "selective rule must act on at least half the decisions to be useful");
+                assert!(holds(&s1, &s2, alpha), "the gym verdict agrees with the asserts");
             }
         }
     }

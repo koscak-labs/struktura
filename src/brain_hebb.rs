@@ -404,28 +404,29 @@ impl<const B: usize, const G: usize> Hebb<B, G> {
     }
 }
 
-#[cfg(test)]
-mod tests {
+/// The falsifiers' worlds and runs, shared by the tests and the brain gym (`crate::brain_gym`).
+#[cfg(feature = "std")]
+pub mod falsify {
     use super::*;
     use crate::brain_grow::Grower;
 
-    struct Rng(u64);
-    impl Rng { fn f(&mut self) -> f32 { self.0 ^= self.0 << 13; self.0 ^= self.0 >> 7; self.0 ^= self.0 << 17; ((self.0 >> 40) as f32) / (1u64 << 24) as f32 } }
+    pub(crate) struct Rng(pub u64);
+    impl Rng { pub fn f(&mut self) -> f32 { self.0 ^= self.0 << 13; self.0 ^= self.0 >> 7; self.0 ^= self.0 << 17; ((self.0 >> 40) as f32) / (1u64 << 24) as f32 } }
 
     /// World B from `struktura brain demo` (interactions a linear model cannot represent).
-    fn truth_b(x: &[f32; 4]) -> u8 {
+    pub fn truth_b(x: &[f32; 4]) -> u8 {
         if x[2] > 0.6 && x[0] > 0.6 { 3 } else if x[1] > 0.6 && x[2] < 0.4 { 2 } else if (x[0] > 0.5) != (x[1] > 0.5) { 1 } else { 0 }
     }
     /// A world that needs a depth-2 sense: act on (drift x temp) > 0.25.
-    fn truth_d2(x: &[f32; 4]) -> u8 {
+    pub fn truth_d2(x: &[f32; 4]) -> u8 {
         if x[0] * x[2] > 0.25 { 1 } else if x[1] > 0.6 { 2 } else { 0 }
     }
 
     #[derive(Clone, Copy, PartialEq, Debug)]
-    enum Mode { Plain, Grower, Hebb1, Hebb2 }
+    pub enum Mode { Plain, Grower, Hebb1, Hebb2 }
 
     /// (right-action rate over the last 1000 decisions, held-out candidate evaluations).
-    fn run(seed: u64, mode: Mode, truth: fn(&[f32; 4]) -> u8) -> (f32, u32) {
+    pub fn run(seed: u64, mode: Mode, truth: fn(&[f32; 4]) -> u8) -> (f32, u32) {
         let mut r = Rng(seed);
         let mut br: Brain<256, 8, 4> = Brain::new(0.3, 0.5);
         let mut gr: Grower<4, 4> = Grower::new(seed ^ 0xBEEF);
@@ -454,11 +455,35 @@ mod tests {
         (ok as f32 / 1000.0, evals)
     }
 
-    fn mean(seeds: &[u64], mode: Mode, truth: fn(&[f32; 4]) -> u8) -> (f32, f32) {
+    pub fn mean(seeds: &[u64], mode: Mode, truth: fn(&[f32; 4]) -> u8) -> (f32, f32) {
         let (mut a, mut e) = (0.0f32, 0.0f32);
         for &s in seeds { let (x, n) = run(s, mode, truth); a += x; e += n as f32; }
         (a / seeds.len() as f32, e / seeds.len() as f32)
     }
+
+    /// Falsifier (a) on one seed set: seed-mean right-action rates (last 1000) and held-out
+    /// evaluations per run (`ge` grower, `he` hebb depth-1).
+    #[derive(Clone, Copy, Debug)]
+    pub struct ReportA { pub plain: f32, pub grow: f32, pub ge: f32, pub hebb: f32, pub he: f32 }
+
+    impl ReportA {
+        /// The pre-registered verdict, the test's asserts: hebb within 1 point of the grower
+        /// (or better) with strictly fewer held-out evaluations.
+        pub fn holds(&self) -> bool { self.hebb >= self.grow - 0.01 && self.he < self.ge }
+    }
+
+    pub fn falsifier_a(seeds: &[u64]) -> ReportA {
+        let (plain, _) = mean(seeds, Mode::Plain, truth_b);
+        let (grow, ge) = mean(seeds, Mode::Grower, truth_b);
+        let (hebb, he) = mean(seeds, Mode::Hebb1, truth_b);
+        ReportA { plain, grow, ge, hebb, he }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::falsify::{falsifier_a, mean, run, truth_d2, Mode, ReportA, Rng};
 
     const SEEDS: [[u64; 8]; 2] = [[11, 23, 37, 41, 59, 61, 73, 89], [101, 103, 107, 109, 113, 127, 131, 137]];
 
@@ -469,13 +494,13 @@ mod tests {
     #[test]
     fn falsifier_a_hebb_matches_exhaustive_growth_with_fewer_evaluations() {
         for seeds in SEEDS {
-            let (plain, _) = mean(&seeds, Mode::Plain, truth_b);
-            let (grow, ge) = mean(&seeds, Mode::Grower, truth_b);
-            let (hebb, he) = mean(&seeds, Mode::Hebb1, truth_b);
+            let rep = falsifier_a(&seeds);
+            let ReportA { plain, grow, ge, hebb, he } = rep;
             std::println!("hebb (a) interaction world: plain {:.3} | exhaustive grower {:.3} ({:.0} held-out evaluations/run) | hebb depth-1 {:.3} ({:.0} evaluations/run, {:.0}% saved)",
                 plain, grow, ge, hebb, he, 100.0 * (1.0 - he / ge.max(1.0)));
             assert!(hebb >= grow - 0.01, "hebb {} vs grower {}", hebb, grow);
             assert!(he < ge, "hebb evaluations {} not fewer than grower {}", he, ge);
+            assert!(rep.holds(), "the gym verdict agrees with the asserts");
         }
     }
 
