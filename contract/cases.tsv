@@ -32,3 +32,10 @@ r5-abstain-decided-knob	loop --ledger @FIX@/ledger.jsonl --top 99 --json	r5-abst
 # Power.
 power-ledger	power --ledger @FIX@/ledger.jsonl	power-ledger.out	-	pass	-
 power-tasks	power --tasks 20 --discordant 0.4 --favour 0.8	power-tasks.out	-	pass	-
+# FUXI -> NUWA crossing: the rows the neutral arbiter and the chronicle join on (formats frozen byte-for-byte).
+oracle-backtest-json	oracle --ledger @FIX@/oracle-ledger.jsonl --json	oracle-backtest-json.out	map(select(.summary))[0] | (.n == 6) and has("brier_jobs") and has("base_brier_jobs") and has("jobs")	pass	job-weighted Brier is the arbiter metric
+oracle-queued	oracle --ledger @FIX@/oracle-ledger.jsonl --queued	oracle-queued.out	length == 1 and .[0].kind == "forecast" and .[0].target == "pass" and .[0].name == "big-faster" and .[0].job == "20-gate" and .[0].queued_ts == 5000 and (.[0].p_pass | type) == "number"	pass	only the queued name with no verdict since the queue is forecast
+oracle-resolve	oracle --ledger @FIX@/oracle-ledger.jsonl --resolve @FIX@/oracle-forecasts.jsonl	oracle-resolve.out	length == 1 and .[0].kind == "score" and .[0].target == "pass" and .[0].outcome == "pass" and ((.[0].brier - 0.01) | if . < 0 then -. else . end) < 1e-6	pass	pending stays pending; yield forecasts are never scored as pass
+twins-json	twins @FIX@/twins.tsv --map @FIX@/twins-map.tsv --json	twins-json.out	map(select(.summary))[0] | (.families == 2) and (.verdict == "underpowered") and (.solos == 1)	pass	name twins + map twins; one confounded solo
+twins-first-try	twins @FIX@/twins.tsv --first-try --json	twins-first-try.out	[.[] | select(.event == "family" and .family == "gcd")][0] | .pass_a == 1	pass	a two-attempt pass is not a first-try pass
+arms-split-json	arms @FIX@/verdicts.tsv --split bench=t01-t99 --json	arms-split-json.out	any(.[]; .event == "split" and .split == "bench")	pass	per-lane verdicts with a Holm family

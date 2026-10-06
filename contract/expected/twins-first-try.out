@@ -1,0 +1,8 @@
+$ struktura twins @FIX@/twins.tsv --first-try --json
+{"arms":2,"event":"family","family":"gcd","favours":-1,"n_a":3,"n_b":3,"pass_a":1,"pass_b":3,"rate_a":0.2500,"rate_b":1.0000,"task_a":"t11-helix-gcd","task_b":"t12-rust-gcd"}
+{"arms":1,"event":"family","family":"wake","favours":-1,"n_a":1,"n_b":1,"pass_a":0,"pass_b":1,"rate_a":0.0000,"rate_b":1.0000,"task_a":"L01-helix-wake","task_b":"L02-rust-wake"}
+{"arm":"plain","event":"arm","n_a":3,"n_b":3,"pass_a":1,"pass_b":3}
+{"arm":"repair","event":"arm","n_a":1,"n_b":1,"pass_a":0,"pass_b":1}
+{"event":"solo","n":1,"pass":0,"side":"a","task":"t55-helix-roman"}
+{"a":"helix","b":"rust","families":2,"favour_a":0,"favour_b":2,"first_try":true,"min_families":6,"p_value":0.5000,"paired_obs":4,"solos":1,"summary":true,"ties":0,"ttd_pairs":1,"ttd_ratio_b_over_a":0.750,"verdict":"underpowered"}
+--- exit 0

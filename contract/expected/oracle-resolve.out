@@ -1,0 +1,3 @@
+$ struktura oracle --ledger @FIX@/oracle-ledger.jsonl --resolve @FIX@/oracle-forecasts.jsonl
+{"brier":0.010000,"id":"aaaa000000000001","kind":"score","outcome":"pass","p_pass":0.9000,"target":"pass"}
+--- exit 0

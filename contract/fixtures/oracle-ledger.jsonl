@@ -1,0 +1,10 @@
+{"kind":"cal","ts":100,"ok":true,"code":{"tps":200.0}}
+{"kind":"cal","ts":101,"ok":true,"code":{"tps":202.0}}
+{"kind":"cal","ts":102,"ok":true,"code":{"tps":199.0}}
+{"kind":"prediction","ts":1000,"pred":"10.tsv","name":"cand-not-slower","value":"200 vs 201 (-0.50%, need <% 1.6%)","op":"<%","threshold":"arm B","verdict":"pass"}
+{"kind":"prediction","ts":1001,"pred":"10.tsv","name":"cand-quality","value":"10","op":">=","threshold":"10","verdict":"pass"}
+{"kind":"prediction","ts":2000,"pred":"11.tsv","name":"big-faster","value":"201 vs 200 (0.50%, need >% 5%)","op":">%","threshold":"arm B","verdict":"fail"}
+{"kind":"prediction","ts":3000,"pred":"12.tsv","name":"cand-not-slower","value":"200 vs 200 (0.00%, need <% 1.6%)","op":"<%","threshold":"arm B","verdict":"pass"}
+{"kind":"prediction","ts":4000,"pred":"13.tsv","name":"big-faster","value":"212 vs 200 (6.00%, need >% 5%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"queued","ts":5000,"job":"20-gate","pred_file":"20.tsv","names":["cand-not-slower","big-faster"],"designed_by":"nuwa","src":"daemon"}
+{"kind":"prediction","ts":5600,"pred":"20.tsv","name":"cand-not-slower","value":"200 vs 200 (0.10%, need <% 1.6%)","op":"<%","threshold":"arm B","verdict":"pass"}

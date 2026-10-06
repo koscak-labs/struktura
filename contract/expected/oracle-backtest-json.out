@@ -1,0 +1,9 @@
+$ struktura oracle --ledger @FIX@/oracle-ledger.jsonl --json
+{"base_brier":0.2359,"brier":0.2368,"event":"window","first":1,"last":6}
+{"event":"bin","hi":0.60,"lo":0.40,"mean_p":0.5000,"n":3,"pass_rate":1.0000}
+{"event":"bin","hi":0.80,"lo":0.60,"mean_p":0.7325,"n":2,"pass_rate":0.5000}
+{"event":"bin","hi":1.00,"lo":0.80,"mean_p":0.8357,"n":1,"pass_rate":1.0000}
+{"base_brier":0.1176,"basis":"kin","brier":0.1194,"event":"basis","n":3}
+{"base_brier":0.3542,"basis":"base","brier":0.3542,"event":"basis","n":3}
+{"base_brier":0.2359,"base_brier_jobs":0.2330,"beats_base_by":-0.0009,"beats_base_by_jobs":-0.0011,"brier":0.2368,"brier_jobs":0.2341,"jobs":5,"n":6,"skill":-0.0039,"summary":true}
+--- exit 0

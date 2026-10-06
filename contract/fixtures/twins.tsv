@@ -1,0 +1,9 @@
+plain	t11-helix-gcd	1	pass	ttd_s=2.0 attempts=1
+plain	t12-rust-gcd	1	pass	ttd_s=1.5 attempts=1
+plain	t11-helix-gcd	2	fail	ttd_s=3.0 attempts=1
+plain	t12-rust-gcd	2	pass	ttd_s=1.4 attempts=1
+repair	t11-helix-gcd	1	pass	ttd_s=6.0 attempts=2
+repair	t12-rust-gcd	1	pass	ttd_s=1.6 attempts=1
+plain	L01-helix-wake	1	fail	ttd_s=4.0 attempts=1
+plain	L02-rust-wake	1	pass	ttd_s=2.0 attempts=1
+plain	t55-helix-roman	1	fail	ttd_s=5.0 attempts=1
