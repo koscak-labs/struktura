@@ -474,7 +474,7 @@ mod tests {
         assert!(rows.contains(&vec!["deploy", "chunk", "num", "anyof:env|chunk", "-"]));
         assert!(rows.contains(&vec!["gym", "v", "const:1", "yes", "-"]));
         assert!(rows.contains(&vec!["gym", "strand", "const:\"fuxi\"", "yes", "-"]));
-        assert!(rows.contains(&vec!["daemon", "phase", "str", "yes", "autogate|ship|protect|feed|run|tick"]));
+        assert!(rows.contains(&vec!["daemon", "phase", "str", "yes", "autogate|ship|protect|feed|run|tick|janitor"]));
     }
 
     #[test]
@@ -554,7 +554,7 @@ mod tests {
             "2:ERROR field v: expected const:1, got num 2",
             "3:WARN unknown kind \"newthing\"",
             "3:ERROR missing required field ts (num)",
-            "4:WARN field phase: unrecognised value \"dance\" (known: autogate|ship|protect|feed|run|tick)",
+            "4:WARN field phase: unrecognised value \"dance\" (known: autogate|ship|protect|feed|run|tick|janitor)",
             "5:ERROR kind window belongs to strand nuwa, row says \"fuxi\"",
         ]);
         let strict = check(t, true);
