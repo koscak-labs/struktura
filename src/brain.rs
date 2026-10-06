@@ -183,13 +183,7 @@ impl<const N: usize, const D: usize, const A: usize> Brain<N, D, A> {
         if a >= A { return None; }
         let nb = self.nearest(x);
         let (expected, _) = self.estimate(a, x, &nb);
-        // Sherman-Morrison: A^-1 <- A^-1 - (A^-1 x)(x^T A^-1) / (1 + x^T A^-1 x)
-        let mut u = [0.0f32; D];
-        for i in 0..D { let mut s = 0.0; for j in 0..D { s += self.a_inv[a][i][j] * x[j]; } u[i] = s; }
-        let mut den = 1.0; for i in 0..D { den += x[i] * u[i]; }
-        for i in 0..D { for j in 0..D { self.a_inv[a][i][j] -= u[i] * u[j] / den; } }
-        for i in 0..D { self.b[a][i] += reward * x[i]; }
-        self.pulls[a] = self.pulls[a].saturating_add(1);
+        self.update_model(x, action, reward);
         self.clock = self.clock.wrapping_add(1);
         let ep = Episode { key: *x, action, reward, surprise: absf(reward - expected), t: self.clock, used: true };
         if self.len < N {
@@ -213,6 +207,27 @@ impl<const N: usize, const D: usize, const A: usize> Brain<N, D, A> {
     }
 
     // ---- extension points (used by brain_* modules; stable API) ----
+
+    /// Update only the model (no episode is stored): for replay / dreaming in idle time.
+    pub fn update_model(&mut self, x: &[f32; D], action: u8, reward: f32) {
+        let a = action as usize;
+        if a >= A { return; }
+        // Sherman-Morrison: A^-1 <- A^-1 - (A^-1 x)(x^T A^-1) / (1 + x^T A^-1 x)
+        let mut u = [0.0f32; D];
+        for i in 0..D { let mut s = 0.0; for j in 0..D { s += self.a_inv[a][i][j] * x[j]; } u[i] = s; }
+        let mut den = 1.0; for i in 0..D { den += x[i] * u[i]; }
+        for i in 0..D { for j in 0..D { self.a_inv[a][i][j] -= u[i] * u[j] / den; } }
+        for i in 0..D { self.b[a][i] += reward * x[i]; }
+        self.pulls[a] = self.pulls[a].saturating_add(1);
+    }
+
+    /// The model's prediction alone (no memory correction); 0 when `use_model` is off.
+    pub fn predict(&self, action: u8, x: &[f32; D]) -> f32 {
+        let a = action as usize;
+        if a >= A || !self.use_model { return 0.0; }
+        let th = self.theta(a);
+        let mut s = 0.0; for i in 0..D { s += th[i] * x[i]; } s
+    }
 
     /// Memory capacity N.
     pub const CAPACITY: usize = N;

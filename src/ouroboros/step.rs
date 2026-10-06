@@ -50,12 +50,12 @@ pub fn turn(ledger: &str, logs: &[(String, String)], cfg: &Config) -> Turn {
     // The mind estimates each challenger's information yield from what similar past
     // predictions taught; it only re-orders challengers (the agenda's rules keep
     // re-measures first and never touch constraints or missing instruments).
-    let mind = super::mind::Mind::from_lab(&obs.lab);
+    let mind = super::mind::Mind::from_lab_knobs(&obs.lab, &cfg.knobs);
     let mut brain_notes = Vec::new();
     for it in ag.iter_mut().filter(|i| i.kind == Kind::Challenger) {
         let k = cfg.knobs.iter().find(|k| k.name == it.knob).unwrap();
         let thr = design(it, k, &lessons, cv, 0).map(|d| d.threshold_pct).unwrap_or(lessons.band_pct);
-        let y = mind.estimate(&super::mind::situation_planned(&k.metric, thr, lessons.band_pct));
+        let y = mind.estimate_challenger(k, thr, it.observed_effect_pct);
         if !y.abstained {
             it.score *= 0.5 + y.expected;
             it.why = format!("{}; brain: yield {:.2}", it.why, y.expected);
