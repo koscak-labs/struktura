@@ -11,6 +11,10 @@
 //! `match=prefix:P` finds value V in log arms named `P<V>`; `match=group:G` in
 //! arms named `<V>` inside group G. `template=none` means no job instrument
 //! exists yet for this knob: it is observed but never emitted.
+//!
+//! The values are a seed, not the whole space: a PROVEN win grows integer neighbours in the winning
+//! direction (see `agenda::grow`). `grow=N` caps that per turn (default 2, max 2, 0 = frozen) and
+//! `range=LO:HI` bounds it (default 0..unbounded); constraints and FALSIFIED/INVALID walls still apply.
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Knob {
@@ -28,6 +32,11 @@ pub struct Knob {
     pub template: String,
     /// What the metric means, for humans.
     pub what: String,
+    /// Adaptive catalog: at most this many values the agenda may grow per turn from a PROVEN win
+    /// (`grow=N`, default 2, hard cap 2; `grow=0` freezes the catalog).
+    pub grow: usize,
+    /// Allowed range for grown values (`range=LO:HI`); default 0 .. unbounded. Constraints still apply.
+    pub range: (i64, i64),
 }
 
 impl Knob {
@@ -52,7 +61,7 @@ pub fn parse_knobs(text: &str) -> Result<Vec<Knob>, String> {
         if it.next() != Some("knob") { return Err(format!("line {}: expected `knob <name> ...`", ln + 1)); }
         let name = it.next().ok_or(format!("line {}: knob needs a name", ln + 1))?.to_string();
         let mut k = Knob { name: name.clone(), values: Vec::new(), current: String::new(), metric: String::new(), lower_is_better: false,
-            matcher: format!("prefix:{}", name), aliases: Vec::new(), template: "none".into(), what: String::new() };
+            matcher: format!("prefix:{}", name), aliases: Vec::new(), template: "none".into(), what: String::new(), grow: 2, range: (0, i64::MAX) };
         for t in it {
             match t.split_once('=') {
                 None => k.values.push(t.to_string()),
@@ -62,6 +71,11 @@ pub fn parse_knobs(text: &str) -> Result<Vec<Knob>, String> {
                 Some(("match", v)) => k.matcher = v.into(),
                 Some(("template", v)) => k.template = v.into(),
                 Some(("what", v)) => k.what = v.replace('_', " "),
+                Some(("grow", v)) => k.grow = v.parse::<usize>().map_err(|_| format!("line {}: grow={} is not a count", ln + 1, v))?.min(2),
+                Some(("range", v)) => {
+                    let r = v.split_once(':').and_then(|(a, b)| Some((a.parse::<i64>().ok()?, b.parse::<i64>().ok()?)));
+                    match r { Some((a, b)) if a <= b => k.range = (a, b), _ => return Err(format!("line {}: range={} must be LO:HI integers", ln + 1, v)) }
+                }
                 Some(("alias", v)) => { if let Some((a, b)) = v.split_once(':') { k.aliases.push((a.into(), b.into())); } }
                 Some((o, _)) => return Err(format!("line {}: unknown field {}", ln + 1, o)),
             }

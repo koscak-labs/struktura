@@ -59,9 +59,14 @@ pub fn agenda(obs: &Observation, lessons: &Lessons, knobs: &[Knob], cons: &[Cons
             observed_effect_pct: None, samples: 1,
             why: format!("{} by {:+.2}% inside the {:.2}% single-run band: a re-run could flip it", f.verdict, f.margin_pct, band) });
     }
+    let mut grown_from: Vec<(String, String, String)> = Vec::new();
     for k in knobs {
         let con = cons.iter().find(|c| c.knob == k.name);
-        for v in k.values.iter().filter(|v| **v != k.current) {
+        let grown = grow(obs, k, cons, band);
+        let values: Vec<String> = k.values.iter().filter(|v| **v != k.current).cloned()
+            .chain(grown.iter().map(|(v, _)| v.clone())).collect();
+        for (v, why) in &grown { grown_from.push((k.name.clone(), v.clone(), why.clone())); }
+        for v in values.iter() {
             let eff = observed_effect(obs, k, v);
             let (e, n) = match eff { Some((e, n)) => (Some(e), n), None => (None, 0) };
             let mut it = Item { kind: Kind::Challenger, knob: k.name.clone(), value: v.clone(), pred: None, score: 0.0,
@@ -107,9 +112,88 @@ pub fn agenda(obs: &Observation, lessons: &Lessons, knobs: &[Knob], cons: &[Cons
             it.why = format!("knob decided: {}={} is a PROVEN ship candidate; this value re-opens against the new current after it ships", it.knob, v);
         }
     }
+    for it in items.iter_mut() {
+        if let Some((_, _, g)) = grown_from.iter().find(|(k, v, _)| *k == it.knob && *v == it.value) { it.why = format!("{}; {}", it.why, g); }
+    }
     items.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
         .then(a.knob.cmp(&b.knob)).then(a.value.cmp(&b.value)).then(a.pred.cmp(&b.pred)));
     items
+}
+
+/// Tokens of a prediction name ("draft5-beats-draft7-code_tps" -> draft5 beats draft7 code tps).
+fn tokens(name: &str) -> Vec<&str> { name.split(|c: char| !c.is_ascii_alphanumeric()).collect() }
+
+/// A prediction about `label` measured against `incumbent`: both arm labels appear, challenger first
+/// (design names them `<knob><challenger>-beats-<knob><incumbent>-<metric>`). Order matters once the
+/// winner ships: "draft5-beats-draft7" must not read as a result about draft7 against current draft5.
+fn names_pair(name: &str, label: &str, incumbent: &str) -> bool {
+    let t = tokens(name);
+    match (t.iter().position(|x| *x == label), t.iter().position(|x| *x == incumbent)) { (Some(a), Some(b)) => a < b, _ => false }
+}
+
+/// Integer value of an arm token of this knob ("draft5" -> 5); prefix-matched knobs only.
+fn int_of(k: &Knob, tok: &str) -> Option<i64> {
+    tok.strip_prefix(k.name.as_str())?.parse::<i64>().ok().filter(|_| k.matcher == format!("prefix:{}", k.name))
+}
+
+/// ADAPTIVE CATALOG (zero LLM, deterministic). The hand-written values of a knob are a seed; every PROVEN
+/// win grows its untested integer neighbours in the winning direction:
+///
+/// - win = a prediction `<knob>W-beats-<knob>L` that passed, never flipped, agreed >= 2 times and cleared its
+///   threshold by >= one band (the same bar as R5's `proven`). L is the value it beat (the then-current one).
+/// - **midpoint** between W and L (rounded toward W), when they are >= 2 apart;
+/// - **beyond**: W + (W - L), one gap further in the winning direction, clamped into `range=`. If that value is
+///   already listed, infeasible or blocked, bisect back toward W (W+d*gap/2, gap/4, ...) and take the first
+///   value that is none of those (draft 5 beat 7: beyond is 3; with 3 already listed it grows 4).
+///
+/// A grown value is never a duplicate (listed, current, or grown this turn), always an integer, inside
+/// `range=` and every constraint on the knob, and never further from current than a value that was FALSIFIED
+/// or INVALID on the same side, nor that value itself ("draft9 INVALID" closes 9+). At most `grow=` (<= 2) values per knob per turn,
+/// strongest win first. No proven win: nothing grows and the agenda is exactly the catalog's.
+/// Returns (value, "grown from W ...").
+fn grow(obs: &Observation, k: &Knob, cons: &[Constraint], band: f64) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let Ok(cur) = k.current.parse::<i64>() else { return out };
+    if k.grow == 0 || !k.has_instrument() || int_of(k, &format!("{}{}", k.name, cur)).is_none() { return out; }
+    let mut wins: Vec<(f64, i64, i64)> = Vec::new();
+    let mut seen: Vec<i64> = k.values.iter().filter_map(|v| v.parse().ok()).collect();
+    for p in &obs.lab.predictions {
+        let t = tokens(&p.name);
+        seen.extend(t.iter().filter_map(|x| int_of(k, x)));
+        if !(p.verdict == "pass" && p.flips == 0 && p.agreeing >= 2) { continue; }
+        let Some(m) = p.margin_pct.filter(|m| *m >= band) else { continue };
+        let Some(i) = t.iter().position(|x| *x == "beats") else { continue };
+        if i == 0 || i + 1 >= t.len() { continue; }
+        if let (Some(w), Some(l)) = (int_of(k, t[i - 1]), int_of(k, t[i + 1])) {
+            if w == l { continue; }
+            match wins.iter_mut().find(|x| x.1 == w && x.2 == l) { Some(x) => x.0 = x.0.max(m), None => wins.push((m, w, l)) }
+        }
+    }
+    wins.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+    seen.sort(); seen.dedup();
+    let feasible = |g: i64| !cons.iter().any(|c| c.knob == k.name && violates(c, &g.to_string()));
+    // FALSIFIED / INVALID values close everything further out on their side of current
+    let walls: Vec<i64> = seen.iter().copied().filter(|x| *x != cur)
+        .filter(|x| { let s = x.to_string(); falsified(obs, k, &s) || unmeasurable(obs, k, &s).is_some() }).collect();
+    let blocked = |g: i64| walls.iter().any(|x| (g - cur).signum() == (x - cur).signum() && (g - cur).abs() >= (x - cur).abs());
+    let listed = |g: i64, out: &[(String, String)]| { let s = g.to_string(); g == cur || k.values.contains(&s) || out.iter().any(|(v, _)| *v == s) };
+    for (_, w, l) in wins {
+        if out.len() >= k.grow { break; }
+        if !feasible(w) { continue; }
+        let (d, gap) = ((w - l).signum(), (w - l).abs());
+        let ok = |g: i64, out: &[(String, String)]| g >= k.range.0 && g <= k.range.1 && !listed(g, out) && feasible(g) && !blocked(g);
+        let why = |g: i64, how: &str| (g.to_string(), format!("grown from {} ({} of the PROVEN win {}{} over {}{})", w, how, k.name, w, k.name, l));
+        let mid = w - d * (gap / 2);
+        if gap >= 2 && ok(mid, &out) && out.len() < k.grow { let x = why(mid, "midpoint"); out.push(x); }
+        let beyond = (w.saturating_add(d.saturating_mul(gap))).clamp(k.range.0, k.range.1);
+        let mut dist = (beyond - w).abs();
+        while dist >= 1 && out.len() < k.grow {
+            let g = w + d * dist;
+            if ok(g, &out) { let x = why(g, "one step beyond"); out.push(x); break; }
+            dist /= 2;
+        }
+    }
+    out
 }
 
 /// R5 (a decided knob gets no challenger): a prediction that compares this arm with the CURRENT one
@@ -122,7 +206,7 @@ fn proven(obs: &Observation, k: &Knob, v: &str, band: f64) -> Option<(f64, usize
     let (_, incumbent) = k.arm_of(&k.current);
     obs.lab.predictions.iter()
         .filter(|p| p.verdict == "pass" && p.flips == 0 && p.agreeing >= 2)
-        .filter(|p| { let t: Vec<&str> = p.name.split(|c: char| !c.is_ascii_alphanumeric()).collect(); t.contains(&label.as_str()) && t.contains(&incumbent.as_str()) })
+        .filter(|p| names_pair(&p.name, &label, &incumbent))
         .filter_map(|p| p.margin_pct.filter(|m| *m >= band).map(|m| (m, p.agreeing)))
         .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
 }
@@ -229,5 +313,92 @@ mod tests {
         let (o, k) = setup(&scored);
         let a = agenda(&o, &learn(&o), &k, &constraints(&[], &[]));
         assert_ne!(a.iter().find(|i| i.knob == "draft" && i.value == "9").unwrap().kind, Kind::Infeasible);
+    }
+
+    // ---- adaptive catalog ----
+    fn win(name: &str) -> String {
+        let p = |ts: u32, v: &str| format!("{{\"kind\":\"prediction\",\"ts\":{ts},\"pred\":\"g.tsv\",\"name\":\"{name}\",\"value\":\"{v}\",\"op\":\">%\",\"threshold\":\"arm B\",\"verdict\":\"pass\"}}\n");
+        p(10, "212.0 vs 200.0 (6.00%, need >% 3.5%)") + &p(11, "211.4 vs 199.6 (5.91%, need >% 3.5%)")
+    }
+    fn invalid(name: &str) -> String {
+        (20..23).map(|ts| format!("{{\"kind\":\"prediction\",\"ts\":{ts},\"pred\":\"m{ts}.tsv\",\"name\":\"{name}\",\"value\":\"-\",\"verdict\":\"missing\"}}\n")).collect()
+    }
+    fn run(knobs: &str, ledger: &str, cons: &[Constraint]) -> Vec<Item> {
+        let (o, _) = setup(ledger);
+        agenda(&o, &learn(&o), &parse_knobs(knobs).unwrap(), cons)
+    }
+    fn grown(a: &[Item], knob: &str) -> Vec<String> {
+        let mut v: Vec<String> = a.iter().filter(|i| i.knob == knob && i.why.contains("grown from")).map(|i| i.value.clone()).collect();
+        v.sort_by_key(|x| x.parse::<i64>().unwrap()); v
+    }
+    const DRAFT: &str = "template=draft metric=code_tps match=prefix:draft";
+
+    #[test]
+    fn proven_win_grows_midpoint_and_one_step_beyond() {
+        // sparse catalog: draft5 PROVEN over current 7 -> midpoint 6, beyond 5-2=3
+        let a = run(&format!("knob draft 5 7 current=7 {DRAFT}"), &win("draft5-beats-draft7-code_tps"), &[]);
+        assert_eq!(grown(&a, "draft"), ["3", "6"]);
+        let six = a.iter().find(|i| i.knob == "draft" && i.value == "6").unwrap();
+        assert!(six.why.contains("grown from 5 (midpoint of the PROVEN win draft5 over draft7)"), "{}", six.why);
+        // R5 still holds: before draft5 ships, grown values wait like every other draft value
+        assert_eq!(six.kind, Kind::Settled);
+        assert!(six.why.starts_with("knob decided: draft=5"), "{}", six.why);
+        // 3 already listed (untested): beyond bisects back toward the winner -> 4
+        let a = run(&format!("knob draft 3 5 7 current=7 {DRAFT}"), &win("draft5-beats-draft7-code_tps"), &[]);
+        assert_eq!(grown(&a, "draft"), ["4", "6"]);
+        // after draft5 ships (current=5) the same win keeps growing: grown values are live challengers vs 5
+        let a = run(&format!("knob draft 5 7 current=5 {DRAFT}"), &win("draft5-beats-draft7-code_tps"), &[]);
+        assert_eq!(grown(&a, "draft"), ["3", "6"]);
+        assert!(a.iter().filter(|i| i.knob == "draft").all(|i| i.kind == Kind::Challenger), "draft7 is not 'proven' by draft5-beats-draft7");
+        // grow=0 freezes the catalog; grow is capped at 2
+        assert!(grown(&run(&format!("knob draft 5 7 current=7 grow=0 {DRAFT}"), &win("draft5-beats-draft7-code_tps"), &[]), "draft").is_empty());
+        assert_eq!(parse_knobs(&format!("knob draft 5 7 current=7 grow=9 {DRAFT}")).unwrap()[0].grow, 2);
+    }
+
+    #[test]
+    fn invalid_or_falsified_value_closes_its_side() {
+        // draft8 PROVEN over current 6 would grow 7 and 10; draft9 INVALID closes 10+
+        let k = format!("knob draft 6 8 9 current=6 {DRAFT}");
+        let a = run(&k, &(win("draft8-beats-draft6-code_tps") + &invalid("draft9-beats-draft6-code_tps")), &[]);
+        assert_eq!(grown(&a, "draft"), ["7"]);
+        assert!(a.iter().all(|i| !(i.knob == "draft" && i.value.parse::<i64>().unwrap() >= 10)));
+        // same with a FALSIFIED draft9
+        let fail = "{\"kind\":\"prediction\",\"ts\":30,\"pred\":\"f.tsv\",\"name\":\"draft9-beats-draft6-code_tps\",\"value\":\"190 vs 200 (-5.00%, need >% 2%)\",\"op\":\">%\",\"threshold\":\"arm B\",\"verdict\":\"fail\"}\n";
+        let a = run(&k, &(win("draft8-beats-draft6-code_tps") + fail), &[]);
+        assert_eq!(grown(&a, "draft"), ["7"]);
+        // a FALSIFIED value is itself a wall: draft5 over 7 with draft3 falsified grows 6 and 4, never 3
+        let f3 = fail.replace("draft9-beats-draft6", "draft3-beats-draft7");
+        let a = run(&format!("knob draft 5 7 current=7 {DRAFT}"), &(win("draft5-beats-draft7-code_tps") + &f3), &[]);
+        assert_eq!(grown(&a, "draft"), ["4", "6"]);
+        // without the wall, 10 grows
+        assert_eq!(grown(&run(&k, &win("draft8-beats-draft6-code_tps"), &[]), "draft"), ["7", "10"]);
+    }
+
+    #[test]
+    fn constraint_bounds_growth() {
+        // ub256 PROVEN over current 128 under ub<=256: midpoint 192; beyond 384 and every bisection (320..257) violate
+        let k = "knob ub 128 256 current=128 metric=d100000 match=prefix:ub template=ub";
+        let a = run(k, &win("ub256-beats-ub128-d100000"), &constraints(&[], &[]));
+        assert_eq!(grown(&a, "ub"), ["192"]);
+        assert!(a.iter().all(|i| !(i.knob == "ub" && i.value.parse::<i64>().unwrap() > 256)));
+        // a winner the constraint forbids grows nothing
+        let k = "knob ub 256 512 current=256 metric=d100000 match=prefix:ub template=ub";
+        assert!(grown(&run(k, &win("ub512-beats-ub256-d100000"), &constraints(&[], &[])), "ub").is_empty());
+        // range= clamps: draftmin 1 beat 3 -> beyond -1 clamps to 0
+        let a = run("knob draftmin 1 3 current=3 metric=code_tps match=prefix:draftmin template=draftmin range=0:8", &win("draftmin1-beats-draftmin3-code_tps"), &[]);
+        assert_eq!(grown(&a, "draftmin"), ["0", "2"]);
+    }
+
+    #[test]
+    fn nothing_proven_means_the_catalog_is_unchanged() {
+        let frozen: String = BUILTIN.lines().map(|l| format!("{l} grow=0\n")).collect();
+        let fail = "{\"kind\":\"prediction\",\"ts\":1,\"pred\":\"9.tsv\",\"name\":\"draft9-faster\",\"value\":\"90 vs 100 (-10.00%, need >% 2%)\",\"op\":\">%\",\"threshold\":\"arm B\",\"verdict\":\"fail\"}\n";
+        let once = "{\"kind\":\"prediction\",\"ts\":1,\"pred\":\"210.tsv\",\"name\":\"draft5-beats-draft7-code_tps\",\"value\":\"212.0 vs 200.0 (6.00%, need >% 3.5%)\",\"op\":\">%\",\"threshold\":\"arm B\",\"verdict\":\"pass\"}\n";
+        for ledger in ["", fail, once, &invalid("draft9-beats-draft7-code_tps")] {
+            let a = run(BUILTIN, ledger, &constraints(&[], &[]));
+            let b = run(&frozen, ledger, &constraints(&[], &[]));
+            assert_eq!(format!("{a:?}"), format!("{b:?}"), "ledger {ledger:?}");
+            assert!(a.iter().all(|i| !i.why.contains("grown from")));
+        }
     }
 }
