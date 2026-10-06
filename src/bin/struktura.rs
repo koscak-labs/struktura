@@ -5089,6 +5089,7 @@ fn cmd_arms(args: &[String]) {
         println!("    >= {} samples per arm: bootstrap 95% CI of the % difference of medians", struktura::arms::MIN_BOOT);
         println!("    fewer: the difference must clear --min-effect (noise floor), else TIE");
         println!("  --min-effect  noise floor in % (default 1.16 = 2x lab calibration CV)");
+        println!("  --tasks LO-HI restrict workbench tasks by number (t01-t23 in-sample, t31- held-out)   --arms a,b  only these arms");
         println!("  --cv PCT      per-run noise CV: single-run differences must clear 1.96*sqrt(2)*CV (5% false-win rate)");
         println!("  direction: per metric by default (time/latency/tokens keys lower is better, else higher); --lower-is-better / --higher-is-better force one");
         println!("  Workbench verdicts (config<TAB>task<TAB>sample<TAB>pass|fail<TAB>ttd_s=.. gen=..) are compared PAIRED by task:");
@@ -5098,6 +5099,7 @@ fn cmd_arms(args: &[String]) {
     let (mut min_effect, mut dir, mut boot, mut seed, mut json) = (1.16f64, Direction::Auto, 2000usize, 42u64, false);
     let mut cv: Option<f64> = None;
     let mut only: Option<String> = None;
+    let (mut task_range, mut arm_list): (Option<String>, Option<String>) = (None, None);
     let mut files = Vec::new();
     let mut i = 2;
     while i < args.len() {
@@ -5109,6 +5111,8 @@ fn cmd_arms(args: &[String]) {
             "--boot" => { i += 1; boot = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(boot); }
             "--seed" => { i += 1; seed = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(seed); }
             "--metric" => { i += 1; only = args.get(i).cloned(); }
+            "--tasks" => { i += 1; task_range = args.get(i).cloned(); }
+            "--arms" => { i += 1; arm_list = args.get(i).cloned(); }
             "--json" => json = true,
             f if f.starts_with("--") => { eprintln!("arms: unknown option {}", f); process::exit(2); }
             f => files.push(f.to_string()),
@@ -5120,6 +5124,25 @@ fn cmd_arms(args: &[String]) {
         match std::fs::read_to_string(f) { Ok(t) => data.ingest(&t), Err(e) => { eprintln!("arms: {}: {}", f, e); process::exit(2); } }
     }
     if let Some(m) = &only { for v in data.values.values_mut() { v.retain(|k, _| k == m); } }
+    // --tasks LO-HI (e.g. t01-t23, t31-, -t23): keep workbench tasks whose number is in range
+    // (a task's number is the digits after its leading letters: t31-foo -> 31).
+    if let Some(spec) = &task_range {
+        let num = |t: &str| -> Option<u32> { let s = t.trim_start_matches(|c: char| c.is_ascii_alphabetic()); s.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().ok() };
+        let (lo, hi) = match spec.split_once('-') { Some((a, b)) => (num(a).unwrap_or(0), num(b).unwrap_or(u32::MAX)), None => { let n = num(spec).unwrap_or(0); (n, n) } };
+        let binary = data.binary.clone();
+        for v in data.values.values_mut() {
+            v.retain(|k, _| {
+                let task = match k.split_once('@') { Some((_, t)) => t, None if binary.contains(k) => k.as_str(), None => return true };
+                num(task).map(|n| n >= lo && n <= hi).unwrap_or(false)
+            });
+        }
+        data.binary.retain(|k| num(k).map(|n| n >= lo && n <= hi).unwrap_or(false));
+    }
+    if let Some(list) = &arm_list {
+        let keep: Vec<&str> = list.split(',').map(|s| s.trim()).collect();
+        data.order.retain(|(_, a)| keep.contains(&a.as_str()));
+        data.values.retain(|(_, a), _| keep.contains(&a.as_str()));
+    }
     if data.order.len() < 2 { eprintln!("arms: need at least 2 labelled arms ({} labelled lines found)", data.lines); process::exit(2); }
     // Two single runs differ by noise with sd sqrt(2) x CV; a 5% two-sided band is 1.96 x sqrt(2) x CV.
     if let Some(c) = cv { let band = 1.959964 * std::f64::consts::SQRT_2 * c; if band > min_effect { min_effect = band; } }
