@@ -292,7 +292,7 @@ pub fn analyze(ledger: &str) -> LabReport {
         if latest.flips > 0 { r.flipped += 1; }
         if let Some(m) = latest.margin_pct {
             if latest.verdict == "pass" || latest.verdict == "fail" {
-                if m.abs() < r.pair_band_pct.max(r.floor_pct) { r.fragile += 1; }
+                if m.abs() < r.pair_band_pct.max(r.floor_pct) && band_applies(&latest.name, &latest.value) { r.fragile += 1; }
                 if latest.verdict == "pass" { pass_margins.push(m); if m > 3.0 * r.floor_pct { r.easy += 1; } }
             }
         }
@@ -345,7 +345,7 @@ mod tests {
 {"kind":"job","job":"2.sh","start":1700,"end":1800,"rc":1}
 {"kind":"prediction","ts":1700,"pred":"1.tsv","name":"a","value":"","op":">=","threshold":"9","verdict":"missing"}
 {"kind":"prediction","ts":1701,"pred":"1.tsv","name":"a","value":"10","op":">=","threshold":"9","verdict":"pass"}
-{"kind":"prediction","ts":1701,"pred":"1.tsv","name":"b","value":"101 vs 100 (1.00%, need >% 0.5%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"prediction","ts":1701,"pred":"1.tsv","name":"b-tps","value":"101 vs 100 (1.00%, need >% 0.5%)","op":">%","threshold":"arm B","verdict":"pass"}
 {"kind":"prediction","ts":1702,"pred":"2.tsv","name":"x","value":"0","op":">=","threshold":"1","verdict":"fail"}
 {"kind":"prediction","ts":1900,"pred":"2.tsv","name":"x","value":"","op":">=","threshold":"1","verdict":"void"}
 {"kind":"prediction","ts":1702,"pred":"3.tsv","name":"y","value":"3","op":">=","threshold":"5","verdict":"pass"}
@@ -393,4 +393,43 @@ pub fn two_sided_tail(z: f64) -> f64 {
     let t = 1.0 / (1.0 + 0.3275911 * x);
     let erfc = t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429)))) * (-x * x).exp();
     erfc
+}
+
+/// Whether the timing noise band applies to a prediction. The band comes from the
+/// calibration arm's throughput noise, so only timing claims can "flip within noise".
+/// Exact answers (correct counts, needles found, identical output) cannot: re-measuring
+/// them spends GPU time on a deterministic result.
+pub fn band_applies(name: &str, value: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    const EXACT: [&str; 11] = ["quality", "correct", "needle", "found", "identical", "exact", "answer", "pass", "solved", "md5", "allpass"];
+    if EXACT.iter().any(|w| n.contains(w)) { return false; }
+    const TIMING: [&str; 13] = ["tps", "t/s", "ms", "ttd", "latency", "prefill", "decode", "speed", "faster", "slower", "throughput", "step", "tok/s"];
+    if TIMING.iter().any(|w| n.contains(w)) { return true; }
+    // context-depth markers (64k, 100k) and d100000= style keys are timing-at-depth measurements
+    let b = n.as_bytes();
+    if (1..b.len()).any(|i| b[i] == b'k' && b[i - 1].is_ascii_digit()) { return true; }
+    let v = value.to_ascii_lowercase();
+    if v.contains("d1") || v.contains("d3") || v.contains("d6") { if v.contains('=') { return true; } }
+    // otherwise: non-integer measured values are noisy measurements; integers are counts
+    let head = value.split('(').next().unwrap_or("");
+    head.split(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-'))
+        .filter(|t| !t.is_empty() && t.parse::<f64>().is_ok())
+        .any(|t| t.contains('.') && t.trim_end_matches('0').trim_end_matches('.').contains('.'))
+}
+
+#[cfg(test)]
+mod band_tests {
+    use super::band_applies;
+    #[test]
+    fn timing_noise_band_only_applies_to_timing_predictions() {
+        // real names from the raven ledger
+        assert!(!band_applies("cand-short-quality", "10"), "exact count");
+        assert!(!band_applies("cand-concurrent-quality", "20 vs 20 (0.00%, need >% 0%)"), "exact counts");
+        assert!(!band_applies("cand-think-not-worse", "13 vs 13 (0.00%, need ~% 1.6%)"), "integer counts");
+        assert!(!band_applies("stock-needle-200K-d25", "FOUND"), "needle found is exact even at depth");
+        assert!(band_applies("gqa2-5pct-at-64K", "1658 vs 1568 (5.74%, need >% 5%)"), "prefill t/s at depth");
+        assert!(band_applies("q4n-pp16-15pct-faster-at-64K", "42.62 vs 51.08 (-16.56%, need <% 15%)"));
+        assert!(band_applies("noise-fresh-repeat", "149.5 vs 149.2 (0.20%, need ~% 1.16%)"), "non-integer measurements");
+        assert!(band_applies("ub512-faster-than-256-at-100K", "1484 vs 1397 (6.23%, need >% 1.16%)"));
+    }
 }

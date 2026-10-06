@@ -22,6 +22,8 @@ pub struct Config {
     /// Write the design + memory here; None = dry run.
     pub outbox: Option<PathBuf>,
     pub job_floor: u32,
+    /// The lab's feature registry (main goal); empty = information-yield reward only.
+    pub goal: Vec<super::mind::GoalFeature>,
 }
 
 pub struct Turn {
@@ -39,6 +41,10 @@ pub struct Turn {
     pub brain: Vec<(String, super::mind::Yield)>,
     /// Scored predictions the mind learned from.
     pub brain_episodes: usize,
+    /// Senses the mind grew while replaying the ledger: (after N predictions, sense, held-out gain).
+    pub brain_grown: Vec<(usize, String, f32)>,
+    /// Scored predictions that prove a registered feature (0 when no registry was given).
+    pub brain_goal_predictions: Option<usize>,
 }
 
 pub fn turn(ledger: &str, logs: &[(String, String)], cfg: &Config) -> Turn {
@@ -50,7 +56,7 @@ pub fn turn(ledger: &str, logs: &[(String, String)], cfg: &Config) -> Turn {
     // The mind estimates each challenger's information yield from what similar past
     // predictions taught; it only re-orders challengers (the agenda's rules keep
     // re-measures first and never touch constraints or missing instruments).
-    let mind = super::mind::Mind::from_lab_knobs(&obs.lab, &cfg.knobs);
+    let mind = super::mind::Mind::from_lab_goal(&obs.lab, &cfg.knobs, &cfg.goal);
     let mut brain_notes = Vec::new();
     for it in ag.iter_mut().filter(|i| i.kind == Kind::Challenger) {
         let k = cfg.knobs.iter().find(|k| k.name == it.knob).unwrap();
@@ -81,7 +87,8 @@ pub fn turn(ledger: &str, logs: &[(String, String)], cfg: &Config) -> Turn {
     let id = decision_id(&[&format!("{:x}", fnv64(ledger)), &logs_digest, &cfg.knobs_text, &cons_digest, &top]);
 
     let mut t = Turn { lessons, cv_pct: cv, constraints: cons, agenda: ag.clone(), design: None, skipped, id: id.clone(), recalled: false, written: Vec::new(),
-        brain: brain_notes, brain_episodes: mind.episodes };
+        brain: brain_notes, brain_episodes: mind.episodes, brain_grown: mind.grown.clone(),
+        brain_goal_predictions: if mind.goal_aware { Some(mind.goal_predictions) } else { None } };
     let Some(item) = pick.cloned() else { return t };
     let k = cfg.knobs.iter().find(|k| k.name == item.knob).unwrap().clone();
 
@@ -131,7 +138,7 @@ mod tests {
     const LEDGER: &str = "{\"kind\":\"cal\",\"ok\":true,\"code\":{\"tps\":200.0}}\n{\"kind\":\"cal\",\"ok\":true,\"code\":{\"tps\":202.4}}\n";
 
     fn cfg(outbox: Option<PathBuf>) -> Config {
-        Config { knobs: parse_knobs(BUILTIN).unwrap(), knobs_text: BUILTIN.into(), cli_constraints: vec![], outbox, job_floor: 300 }
+        Config { knobs: parse_knobs(BUILTIN).unwrap(), knobs_text: BUILTIN.into(), cli_constraints: vec![], outbox, job_floor: 300, goal: vec![] }
     }
 
     #[test]

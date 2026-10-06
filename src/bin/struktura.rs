@@ -5089,6 +5089,7 @@ fn cmd_arms(args: &[String]) {
         println!("    >= {} samples per arm: bootstrap 95% CI of the % difference of medians", struktura::arms::MIN_BOOT);
         println!("    fewer: the difference must clear --min-effect (noise floor), else TIE");
         println!("  --min-effect  noise floor in % (default 1.16 = 2x lab calibration CV)");
+        println!("  --tasks LO-HI restrict workbench tasks by number (t01-t23 in-sample, t31- held-out)   --arms a,b  only these arms");
         println!("  --cv PCT      per-run noise CV: single-run differences must clear 1.96*sqrt(2)*CV (5% false-win rate)");
         println!("  direction: per metric by default (time/latency/tokens keys lower is better, else higher); --lower-is-better / --higher-is-better force one");
         println!("  Workbench verdicts (config<TAB>task<TAB>sample<TAB>pass|fail<TAB>ttd_s=.. gen=..) are compared PAIRED by task:");
@@ -5098,6 +5099,7 @@ fn cmd_arms(args: &[String]) {
     let (mut min_effect, mut dir, mut boot, mut seed, mut json) = (1.16f64, Direction::Auto, 2000usize, 42u64, false);
     let mut cv: Option<f64> = None;
     let mut only: Option<String> = None;
+    let (mut task_range, mut arm_list): (Option<String>, Option<String>) = (None, None);
     let mut files = Vec::new();
     let mut i = 2;
     while i < args.len() {
@@ -5109,6 +5111,8 @@ fn cmd_arms(args: &[String]) {
             "--boot" => { i += 1; boot = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(boot); }
             "--seed" => { i += 1; seed = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(seed); }
             "--metric" => { i += 1; only = args.get(i).cloned(); }
+            "--tasks" => { i += 1; task_range = args.get(i).cloned(); }
+            "--arms" => { i += 1; arm_list = args.get(i).cloned(); }
             "--json" => json = true,
             f if f.starts_with("--") => { eprintln!("arms: unknown option {}", f); process::exit(2); }
             f => files.push(f.to_string()),
@@ -5120,6 +5124,25 @@ fn cmd_arms(args: &[String]) {
         match std::fs::read_to_string(f) { Ok(t) => data.ingest(&t), Err(e) => { eprintln!("arms: {}: {}", f, e); process::exit(2); } }
     }
     if let Some(m) = &only { for v in data.values.values_mut() { v.retain(|k, _| k == m); } }
+    // --tasks LO-HI (e.g. t01-t23, t31-, -t23): keep workbench tasks whose number is in range
+    // (a task's number is the digits after its leading letters: t31-foo -> 31).
+    if let Some(spec) = &task_range {
+        let num = |t: &str| -> Option<u32> { let s = t.trim_start_matches(|c: char| c.is_ascii_alphabetic()); s.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().ok() };
+        let (lo, hi) = match spec.split_once('-') { Some((a, b)) => (num(a).unwrap_or(0), num(b).unwrap_or(u32::MAX)), None => { let n = num(spec).unwrap_or(0); (n, n) } };
+        let binary = data.binary.clone();
+        for v in data.values.values_mut() {
+            v.retain(|k, _| {
+                let task = match k.split_once('@') { Some((_, t)) => t, None if binary.contains(k) => k.as_str(), None => return true };
+                num(task).map(|n| n >= lo && n <= hi).unwrap_or(false)
+            });
+        }
+        data.binary.retain(|k| num(k).map(|n| n >= lo && n <= hi).unwrap_or(false));
+    }
+    if let Some(list) = &arm_list {
+        let keep: Vec<&str> = list.split(',').map(|s| s.trim()).collect();
+        data.order.retain(|(_, a)| keep.contains(&a.as_str()));
+        data.values.retain(|(_, a), _| keep.contains(&a.as_str()));
+    }
     if data.order.len() < 2 { eprintln!("arms: need at least 2 labelled arms ({} labelled lines found)", data.lines); process::exit(2); }
     // Two single runs differ by noise with sd sqrt(2) x CV; a 5% two-sided band is 1.96 x sqrt(2) x CV.
     if let Some(c) = cv { let band = 1.959964 * std::f64::consts::SQRT_2 * c; if band > min_effect { min_effect = band; } }
@@ -5203,7 +5226,7 @@ fn cmd_lab(args: &[String]) {
         for p in &r.predictions {
             println!("{{\"event\":\"prediction\",\"pred\":\"{}\",\"name\":\"{}\",\"verdict\":\"{}\",\"margin_pct\":{},\"fragile\":{},\"flips\":{},\"measurements\":{},\"agreeing\":{}}}",
                 esc(&p.pred), esc(&p.name), esc(&p.verdict), p.margin_pct.map(num).unwrap_or("null".into()),
-                p.margin_pct.map(|m| m.abs() < r.pair_band_pct.max(r.floor_pct) && (p.verdict == "pass" || p.verdict == "fail")).unwrap_or(false), p.flips, p.measurements, p.agreeing);
+                p.margin_pct.map(|m| m.abs() < r.pair_band_pct.max(r.floor_pct) && (p.verdict == "pass" || p.verdict == "fail") && struktura::lab::band_applies(&p.name, &p.value)).unwrap_or(false), p.flips, p.measurements, p.agreeing);
         }
         println!("{{\"summary\":true,\"rows\":{},\"bad_rows\":{},\"cal_n\":{},\"cal_mean_tps\":{},\"cal_cv_pct\":{},\"floor_pct\":{},\"pair_band_pct\":{},\"predictions\":{},\"scored\":{},\"passed\":{},\"fragile\":{},\"flipped\":{},\"easy\":{},\"replicated\":{},\"contested\":{},\"median_pass_margin_pct\":{},\"jobs\":{},\"jobs_failed\":{},\"window_min\":{},\"job_min_in_windows\":{},\"utilisation_pct\":{},\"cal_min\":{},\"deploys\":{},\"constraints\":{}}}",
             r.rows, r.bad_rows, r.cal_n, num(r.cal_mean_tps), num(r.cal_cv_pct), num(r.floor_pct), num(r.pair_band_pct), r.predictions.len(), scored, passed,
@@ -5233,7 +5256,7 @@ fn cmd_lab(args: &[String]) {
     }
     if list || md {
         let fragile: Vec<_> = r.predictions.iter().filter(|p| (p.verdict == "pass" || p.verdict == "fail")
-            && p.margin_pct.map(|m| m.abs() < r.pair_band_pct.max(r.floor_pct)).unwrap_or(false)).collect();
+            && p.margin_pct.map(|m| m.abs() < r.pair_band_pct.max(r.floor_pct)).unwrap_or(false) && struktura::lab::band_applies(&p.name, &p.value)).collect();
         let flipped: Vec<_> = r.predictions.iter().filter(|p| p.flips > 0).collect();
         if !fragile.is_empty() || !flipped.is_empty() { println!("{}", if md { "\n**Fragile / flipped (re-measure before relying on them):**" } else { "  fragile / flipped:" }); }
         for p in fragile {
@@ -5322,12 +5345,14 @@ fn cmd_loop(args: &[String]) {
         println!("  and with --outbox write job.sh + pred.tsv + manifest.json and an idempotent knowledge.jsonl row.");
         println!("  --req       prod-pulse req.csv: prod gate from the ledger's deploy rows (open / closed / no-evidence)");
         println!("  --knobs     knob space file (default built-in: ub, draft, chunk, budget); --constraint overrides ledger rows");
+        println!("  --features  the lab's feature registry (features.tsv): aim the brain's reward at the main goal (predictions that prove a feature on the path to prod)");
         println!("  --backtest  replay the ledger at each job start: do fragile flags predict later flips?");
         println!("  --submit    hand the emitted job to ~/.oura/lab-q.sh (refused when the prod gate is closed)");
         process::exit(if args.len() < 3 { 2 } else { 0 });
     }
     let (mut ledger, mut logs, mut outbox, mut req, mut model) = (None::<String>, Vec::<String>::new(), None::<String>, None::<String>, "qwen38".to_string());
     let (mut knobs_file, mut cons, mut top, mut json, mut bt, mut submit) = (None::<String>, Vec::new(), 12usize, false, false, false);
+    let mut goal_file: Option<String> = None;
     let mut i = 2;
     while i < args.len() {
         let v = args.get(i + 1).cloned();
@@ -5338,6 +5363,7 @@ fn cmd_loop(args: &[String]) {
             "--req" => { req = v; i += 1; }
             "--model" => { model = v.unwrap_or_default(); i += 1; }
             "--knobs" => { knobs_file = v; i += 1; }
+            "--features" => { goal_file = v; i += 1; }
             "--constraint" => { match v.as_deref().and_then(|s| knobs::parse_constraint(s, "cli")) { Some(c) => cons.push(c), None => { eprintln!("loop: bad --constraint"); process::exit(2); } } i += 1; }
             "--top" => { top = v.and_then(|x| x.parse().ok()).unwrap_or(top); i += 1; }
             "--json" => json = true,
@@ -5369,7 +5395,8 @@ fn cmd_loop(args: &[String]) {
     let log_texts: Vec<(String, String)> = logs.iter().map(|p| (std::path::Path::new(p).file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or(p.clone()), read(p))).collect();
     let knobs_text = match &knobs_file { Some(p) => read(p), None => knobs::BUILTIN.to_string() };
     let knobs = knobs::parse_knobs(&knobs_text).unwrap_or_else(|e| { eprintln!("loop: knobs: {}", e); process::exit(2) });
-    let cfg = step::Config { knobs, knobs_text, cli_constraints: cons, outbox: outbox.as_ref().map(std::path::PathBuf::from), job_floor: 300 };
+    let goal = goal_file.as_ref().map(|p| struktura::ouroboros::mind::parse_goal_features(&read(p))).unwrap_or_default();
+    let cfg = step::Config { knobs, knobs_text, cli_constraints: cons, outbox: outbox.as_ref().map(std::path::PathBuf::from), job_floor: 300, goal };
     let t = step::turn(&ledger_text, &log_texts, &cfg);
     let g = req.as_ref().map(|p| gate(&read(p), &struktura::lab::analyze(&ledger_text).deploys, &model, t.lessons.band_pct));
     let num = |x: f64| if x.is_finite() { format!("{:.3}", x) } else { "null".into() };
@@ -5401,7 +5428,11 @@ fn cmd_loop(args: &[String]) {
             println!("   {:>2}. {:<16} {:<40} {:.2}{}  {}", r + 1, it.kind.as_str(), what, it.score, eff, it.why);
         }
         if !t.brain.is_empty() {
-            println!("  brain (learned from {} scored prediction(s)): expected information yield of each challenger's test", t.brain_episodes);
+            println!("  brain (learned from {} scored prediction(s){}): expected {} of each challenger's test", t.brain_episodes,
+                t.brain_goal_predictions.map(|n| format!("; {} prove a registered feature", n)).unwrap_or_default(),
+                if t.brain_goal_predictions.is_some() { "value toward the main goal" } else { "information yield" });
+            if t.brain_grown.is_empty() { println!("    grown senses: none (no candidate explained held-out mistakes well enough)"); }
+            for (n, s, g) in &t.brain_grown { println!("    grew sense \"{}\" after {} predictions (held-out error -{:.0}%)", s, n, 100.0 * g); }
             for (what, y) in t.brain.iter().take(4) {
                 if y.abstained { println!("    {:<14} abstained (evidence {:.1} too thin)", what, y.evidence); continue; }
                 println!("    {:<14} yield {:.2} (evidence {:.1}); like {}", what, y.expected, y.evidence, y.cites.join(", "));
@@ -5458,6 +5489,8 @@ fn pulse_load(path: &str, archive: Option<&str>) -> String {
 
 fn cmd_brain(args: &[String]) {
     use struktura::brain::Brain;
+    if args.get(2).map(|s| s.as_str()) == Some("grow") { cmd_brain_grow(); return; }
+    if matches!(args.get(2).map(|s| s.as_str()), Some("init" | "decide" | "learn" | "stats")) { cmd_brain_state(args); return; }
     if args.get(2).map(|s| s.as_str()) != Some("demo") {
         println!("struktura brain demo   native decision brain (no heap, no model weights to ship): memory + linear model,");
         println!("                       learning a rover fault-response policy online from its own outcomes, with an ablation");
@@ -5516,4 +5549,118 @@ fn cmd_brain(args: &[String]) {
     }
     let blocked = br.decide(&x, &[true, true, false, true], 3);
     println!("  same situation, quarantine not allowed -> {} (abstained {})", names[blocked.action as usize], blocked.abstained);
+}
+
+fn cmd_brain_grow() {
+    use struktura::brain::Brain;
+    use struktura::brain_grow::{Feat, Grower};
+    let names = ["drift", "spike", "temp", "1"];
+    let truth = |x: &[f32; 4]| -> u8 { if x[2] > 0.6 && x[0] > 0.6 { 3 } else if x[1] > 0.6 && x[2] < 0.4 { 2 } else if (x[0] > 0.5) != (x[1] > 0.5) { 1 } else { 0 } };
+    let mut s = 0x2545F4914F6CDD1Du64;
+    let mut rnd = move || { s ^= s << 13; s ^= s >> 7; s ^= s << 17; ((s >> 40) as f32) / (1u64 << 24) as f32 };
+    let mut br: Brain<256, 8, 4> = Brain::new(0.3, 0.5);
+    let mut plain: Brain<256, 8, 4> = Brain::new(0.3, 0.5);
+    let mut gr: Grower<4, 4> = Grower::new(7);
+    gr.constant[3] = true;
+    println!("struktura brain grow: rover world with interactions; the brain may grow up to 4 new senses,");
+    println!("each adopted only if it explains its mistakes on HELD-OUT memories (random half-splits)");
+    let (mut ok_g, mut ok_p) = (0usize, 0usize);
+    for t in 0..4000usize {
+        let base = [rnd(), rnd(), rnd(), 1.0];
+        let x: [f32; 8] = gr.situation(&base);
+        let xp: [f32; 8] = { let mut v = [0.0; 8]; v[..4].copy_from_slice(&base); v };
+        let d = br.decide(&x, &[true; 4], 3);
+        let dp = plain.decide(&xp, &[true; 4], 3);
+        let a = if d.abstained && t < 400 { (t % 4) as u8 } else { d.action };
+        let ap = if dp.abstained && t < 400 { (t % 4) as u8 } else { dp.action };
+        let rw = |a: u8| if a == truth(&base) { 1.0 } else if a == 3 { 0.2 } else { 0.0 };
+        if t >= 3000 { ok_g += (a == truth(&base)) as usize; ok_p += (ap == truth(&base)) as usize; }
+        br.learn(&x, a, rw(a));
+        plain.learn(&xp, ap, rw(ap));
+        if let Some(g) = gr.after_learn(&mut br) {
+            if let Some(f) = g.adopted {
+                let what = match f {
+                    Feat::Prod(i, j) => format!("{} x {}", names[i as usize], names[j as usize]),
+                    Feat::Step(i, th) => format!("{} > {:.2}", names[i as usize], th),
+                    Feat::Gt(i, j) => format!("{} > {}", names[i as usize], names[j as usize]),
+                    Feat::Off => "-".into(),
+                };
+                println!("  decision {:>4}: grew sense #{} = {:<16} (held-out error -{:.0}%, best of {} candidates)", t + 1, g.slot + 1, what, 100.0 * g.gain, g.candidates);
+            }
+        }
+    }
+    println!("  right-action rate, last 1000 decisions: growing brain {:.1}%  vs same brain without growth {:.1}%", ok_g as f32 / 10.0, ok_p as f32 / 10.0);
+}
+
+/// Stateful brain for other programs (Helix organs, shell): one checksummed state file.
+fn cmd_brain_state(args: &[String]) {
+    use struktura::brain::Brain;
+    type B = Brain<256, 16, 8>;
+    let sub = args.get(2).map(|s| s.as_str()).unwrap_or("");
+    let opt = |name: &str| -> Option<String> { args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned() };
+    let num = |name: &str, d: f64| -> f64 { opt(name).and_then(|v| v.parse().ok()).unwrap_or(d) };
+    let Some(state) = opt("--state") else { eprintln!("brain {}: --state FILE required", sub); process::exit(2) };
+    let meta_path = format!("{}.meta", state);
+    let load = || -> (Box<B>, usize, usize) {
+        let bytes = match std::fs::read(&state) { Ok(b) => b, Err(e) => { eprintln!("brain: {}: {} (run `struktura brain init` first)", state, e); process::exit(2) } };
+        let br = match B::from_bytes(&bytes) { Some(b) => Box::new(b), None => { eprintln!("brain: {}: damaged or incompatible state (magic/version/dims/CRC); refusing to load", state); process::exit(2) } };
+        let meta = std::fs::read_to_string(&meta_path).unwrap_or_default();
+        let get = |k: &str| meta.lines().find_map(|l| l.strip_prefix(k).and_then(|v| v.trim().parse::<usize>().ok()));
+        (br, get("features ").unwrap_or(16), get("actions ").unwrap_or(8))
+    };
+    let save = |br: &B| {
+        let mut buf = vec![0u8; B::state_bytes()];
+        let n = br.to_bytes(&mut buf).expect("buffer sized by state_bytes");
+        let tmp = format!("{}.tmp", state);
+        if std::fs::write(&tmp, &buf[..n]).and_then(|_| std::fs::rename(&tmp, &state)).is_err() { eprintln!("brain: cannot write {}", state); process::exit(2); }
+    };
+    let parse_x = |features: usize| -> [f32; 16] {
+        let Some(s) = opt("--x") else { eprintln!("brain: --x v1,v2,... required"); process::exit(2) };
+        let v: Vec<f32> = s.split(',').filter_map(|t| t.trim().parse().ok()).collect();
+        if v.len() != features || v.iter().any(|x| !x.is_finite()) { eprintln!("brain: --x needs exactly {} finite numbers (got {})", features, v.len()); process::exit(2); }
+        let mut x = [0.0f32; 16]; x[..features].copy_from_slice(&v); x
+    };
+    match sub {
+        "init" => {
+            let (f, a) = (num("--features", 0.0) as usize, num("--actions", 0.0) as usize);
+            if !(1..=16).contains(&f) || !(2..=8).contains(&a) { eprintln!("brain init: --features 1..16 and --actions 2..8"); process::exit(2); }
+            if std::path::Path::new(&state).exists() && !args.iter().any(|x| x == "--force") { eprintln!("brain init: {} exists (pass --force to replace)", state); process::exit(2); }
+            let br: Box<B> = Box::new(B::new(num("--explore", 0.3) as f32, num("--min-evidence", 0.5) as f32));
+            save(&br);
+            if std::fs::write(&meta_path, format!("features {}\nactions {}\n", f, a)).is_err() { eprintln!("brain: cannot write {}", meta_path); process::exit(2); }
+            println!("{{\"event\":\"init\",\"state\":\"{}\",\"features\":{},\"actions\":{},\"bytes\":{}}}", state, f, a, B::state_bytes());
+        }
+        "decide" => {
+            let (br, f, a) = load();
+            let x = parse_x(f);
+            let mut allowed = [false; 8];
+            match opt("--allow") {
+                Some(s) => for t in s.split(',') { if let Ok(k) = t.trim().parse::<usize>() { if k < a { allowed[k] = true; } } },
+                None => for k in 0..a { allowed[k] = true; },
+            }
+            let safe = num("--safe", 0.0) as u8;
+            if safe as usize >= a { eprintln!("brain decide: --safe must be < actions ({})", a); process::exit(2); }
+            let d = br.decide(&x, &allowed, safe);
+            let cites: Vec<String> = (0..d.n_cited as usize).map(|k| d.cited[k].to_string()).collect();
+            println!("{{\"event\":\"decide\",\"action\":{},\"abstained\":{},\"expected\":{:.4},\"bonus\":{:.4},\"evidence\":{:.2},\"cites\":[{}]}}",
+                d.action, d.abstained, d.expected, d.bonus, d.evidence, cites.join(","));
+        }
+        "learn" => {
+            let (mut br, f, a) = load();
+            let x = parse_x(f);
+            let act = num("--action", -1.0);
+            let reward = num("--reward", f64::NAN);
+            if act < 0.0 || act as usize >= a || !reward.is_finite() { eprintln!("brain learn: --action 0..{} and a finite --reward required", a - 1); process::exit(2); }
+            let slot = br.learn(&x, act as u8, reward as f32);
+            save(&br);
+            println!("{{\"event\":\"learn\",\"slot\":{},\"memories\":{},\"clock\":{}}}", slot.map(|s| s.to_string()).unwrap_or("null".into()), br.len(), br.clock());
+        }
+        "stats" => {
+            let (br, f, a) = load();
+            let pulls: Vec<String> = (0..a).map(|k| br.pulls(k).to_string()).collect();
+            println!("{{\"event\":\"stats\",\"features\":{},\"actions\":{},\"memories\":{},\"capacity\":{},\"clock\":{},\"pulls\":[{}],\"explore\":{},\"min_evidence\":{}}}",
+                f, a, br.len(), B::CAPACITY, br.clock(), pulls.join(","), br.explore, br.min_evidence);
+        }
+        _ => { eprintln!("brain: init | decide | learn | stats (with --state FILE)"); process::exit(2); }
+    }
 }

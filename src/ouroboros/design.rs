@@ -85,8 +85,20 @@ pub fn arm_regex(k: &Knob, value: &str) -> String {
 }
 
 pub fn design(item: &Item, k: &Knob, lessons: &Lessons, cv_pct: f64, job_id: u32) -> Result<Design, String> {
-    let (body, fixed, per_run) = template(&k.template).ok_or(format!("knob {} has no job instrument for {}", k.name, k.metric))?;
-    if !k.arm_of(&item.value).0.is_empty() { return Err(format!("knob {} uses grouped arms; emitted jobs need prefix arms", k.name)); }
+    // External lab template (`template=ext:<file>` in the knob file): a wrapper hands the arms to
+    // ~/lab-templates/<file> on raven, which must print the same contract as built-in templates:
+    // one `rep<TAB><arm><TAB><metric>=x` line per run and one `arm<TAB><arm><TAB>median <metric>=m` per arm.
+    let ext_body;
+    let (body, fixed, per_run): (&str, u32, u32) = if let Some(file) = k.template.strip_prefix("ext:") {
+        if file.is_empty() || file.contains('/') || file.contains("..") { return Err(format!("knob {}: bad external template name {:?}", k.name, file)); }
+        ext_body = format!("TPL=~/lab-templates/{f}\n[ -f \"$TPL\" ] || {{ echo \"MISSING template $TPL\" | tee -a \"$OUT\"; exit 2; }}\n\
+            ARMS=\"@CH@ @INC@\" RUNS=@R@ OUT=\"$OUT\" PREFIX=\"@P@\" METRIC=\"@METRIC@\" JOB=\"@JOB@\" bash \"$TPL\"\n", f = file);
+        (ext_body.as_str(), 10, 4)
+    } else {
+        let t = template(&k.template).ok_or(format!("knob {} has no job instrument for {}", k.name, k.metric))?;
+        if !k.arm_of(&item.value).0.is_empty() { return Err(format!("knob {} uses grouped arms; built-in templates need prefix arms", k.name)); }
+        t
+    };
     let band = lessons.band_pct;
     let (pred, src) = match item.observed_effect_pct {
         Some(e) if e > 0.0 => (e, format!("observed {:+.2}% in {} run(s)", e, item.samples)),
@@ -99,7 +111,7 @@ pub fn design(item: &Item, k: &Knob, lessons: &Lessons, cv_pct: f64, job_id: u32
     let runs = if cv_pct.is_finite() && cv_pct > 0.0 { crate::power::runs_needed(cv_pct, pred, 0.05, 0.8).clamp(2, 8) } else { 3 };
     let est = fixed + per_run * runs as u32 * 2;
     let job_name = format!("lab-{}-{}{}", job_id, k.name, item.value);
-    let prefix = k.matcher.split_once(':').map(|(_, p)| p).unwrap_or(&k.name);
+    let prefix = match k.matcher.split_once(':') { Some(("prefix", p)) => p, Some(("group", _)) => "", _ => &k.name };
     let value_meta = ((item.score * 5.0).round() as i64).clamp(1, 10);
     let mut job = format!("#!/usr/bin/env bash\n# LAB-META: est_min={} value={} out=logs/{n}.out pred=lab-pred/{n}.tsv\n\
 # struktura loop {n}: {} {} (arm A) vs incumbent {} (arm B) on {} ({}), {} runs per arm\n\
@@ -138,6 +150,18 @@ pub fn check_pred(tsv: &str) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::ouroboros::agenda::{Item, Kind};
+
+    #[test]
+    fn external_template_wrapper_for_grouped_knob() {
+        let k = crate::ouroboros::knobs::parse_knobs("knob chunk 0 32 64 128 current=64 metric=sum_s dir=lower match=group:contend alias=0:stock template=ext:contend.sh").unwrap().remove(0);
+        let it = Item { kind: Kind::Challenger, knob: "chunk".into(), value: "32".into(), pred: None, score: 0.6, observed_effect_pct: None, samples: 0, why: "test".into() };
+        let ls = crate::ouroboros::learn::Lessons { calibration: 1.0, calibration_n: 0, fragile: Vec::new(), easy: 0, band_pct: 1.6 };
+        let d = design(&it, &k, &ls, 0.578, 301).expect("designs");
+        assert!(d.job.contains("TPL=~/lab-templates/contend.sh") && d.job.contains("MISSING template"), "{}", d.job);
+        assert!(d.job.contains("ARMS=\"32 64\"") && d.job.contains("PREFIX=\"\""), "{}", d.job);
+        assert!(d.pred.contains("^arm\\t32\\tmedian sum_s=") && d.pred.contains("<%"), "{}", d.pred);
+        assert!(design(&it, &crate::ouroboros::knobs::parse_knobs("knob chunk 32 64 current=64 metric=sum_s template=ext:../x.sh").unwrap().remove(0), &ls, 0.578, 301).is_err(), "path traversal refused");
+    }
     use crate::ouroboros::knobs::{parse_knobs, BUILTIN};
 
     fn lessons(cal: f64) -> Lessons { Lessons { calibration: cal, calibration_n: 5, fragile: vec![], easy: 0, band_pct: 1.60 } }
