@@ -113,7 +113,7 @@ const fn fuxi(kind: &'static str, fields: &'static [Field]) -> KindSchema { Kind
 pub const FUXI_ENVELOPE: &[Field] = &[req("v", Ty::Const("1")), req("strand", Ty::Const("\"fuxi\"")), req("ts", Ty::Num)];
 
 /// Daemon phases seen so far. Open set: an unknown phase is a warning.
-pub const DAEMON_PHASES: &[&str] = &["autogate", "ship", "protect", "feed", "run", "tick", "janitor"];
+pub const DAEMON_PHASES: &[&str] = &["autogate", "ship", "protect", "feed", "run", "tick", "janitor", "switch"];
 
 use Ty::*;
 
@@ -475,7 +475,7 @@ mod tests {
         assert!(rows.contains(&vec!["deploy", "chunk", "num", "anyof:env|chunk", "-"]));
         assert!(rows.contains(&vec!["gym", "v", "const:1", "yes", "-"]));
         assert!(rows.contains(&vec!["gym", "strand", "const:\"fuxi\"", "yes", "-"]));
-        assert!(rows.contains(&vec!["daemon", "phase", "str", "yes", "autogate|ship|protect|feed|run|tick|janitor"]));
+        assert!(rows.contains(&vec!["daemon", "phase", "str", "yes", "autogate|ship|protect|feed|run|tick|janitor|switch"]));
     }
 
     #[test]
@@ -555,7 +555,7 @@ mod tests {
             "2:ERROR field v: expected const:1, got num 2",
             "3:WARN unknown kind \"newthing\"",
             "3:ERROR missing required field ts (num)",
-            "4:WARN field phase: unrecognised value \"dance\" (known: autogate|ship|protect|feed|run|tick|janitor)",
+            "4:WARN field phase: unrecognised value \"dance\" (known: autogate|ship|protect|feed|run|tick|janitor|switch)",
             "5:ERROR kind window belongs to strand nuwa, row says \"fuxi\"",
         ]);
         let strict = check(t, true);
