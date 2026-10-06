@@ -1,0 +1,3 @@
+$ struktura pulse @FIX@/req.csv --deploys @FIX@/deploys.jsonl --watch-once
+{"alpha":0.05,"decided_at":13,"deploy":1700040000,"elapsed_s":0,"event":"watch","label":"srv-b chunk=32","min_effect_pct":1.16,"n_solo":16,"need_more":null,"ref_high_ms":20.246,"ref_low_ms":20.028,"ref_median_ms":20.141,"reference_n":16,"same_reachable":true,"unit":"sessions","verdict":"slower"}
+--- exit 1

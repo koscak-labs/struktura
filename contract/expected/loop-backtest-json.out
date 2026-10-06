@@ -1,0 +1,3 @@
+$ struktura loop --ledger @FIX@/ledger.jsonl --backtest --json
+{"calibration_path":[[1699991500,1.000,0],[1699992200,1.000,0],[1699993200,1.000,2],[1699994500,1.000,2],[1699995200,1.148,3],[1699996100,1.148,3],[1699996800,1.148,3],[1699997800,1.402,4],[1699998720,1.148,5],[1699998800,1.091,6]],"cuts":10,"event":"backtest","flagged":4,"flagged_flipped":2,"flagged_rescored":2,"unflagged_flipped":0,"unflagged_rescored":1,"verdict":"too little history: 2 fragile-flagged prediction(s) were re-scored later (need >= 3 to judge the flag); 1 unflagged re-scored, 0 flipped"}
+--- exit 0

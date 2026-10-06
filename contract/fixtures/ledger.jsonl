@@ -1,0 +1,41 @@
+{"kind":"window","ts":1699990000,"event":"up"}
+{"kind":"cal","ts":1699990060,"ok":true,"dur_s":60,"code":{"tps":200.0,"acc":236}}
+{"kind":"cal","ts":1699990200,"ok":true,"dur_s":60,"code":{"tps":201.6,"acc":236}}
+{"kind":"cal","ts":1699990400,"ok":true,"dur_s":60,"code":{"tps":198.8,"acc":236}}
+{"kind":"cal","ts":1699990600,"ok":false,"dur_s":30,"code":{"tps":12.0,"acc":0}}
+{"kind":"cal","ts":1699990800,"ok":true,"dur_s":60,"code":{"tps":200.9,"acc":236}}
+{"kind":"cal","ts":1699991000,"ok":true,"dur_s":60,"code":{"tps":199.1,"acc":236}}
+{"kind":"cal","ts":1699991200,"ok":true,"dur_s":60,"code":{"tps":201.2,"acc":236}}
+{"kind":"cal","ts":1699991400,"ok":true,"dur_s":60,"code":{"tps":198.5,"acc":236}}
+{"kind":"constraint","ts":1699991450,"knob":"ub","op":"<=","value":256,"why":"synthetic memory cap"}
+{"kind":"job","job":"lab-201-noise.sh","start":1699991500,"end":1699992100,"rc":0}
+{"kind":"prediction","ts":1699992110,"pred":"lab-201.tsv","name":"noise-fresh-repeat","value":"149.5 vs 149.2 (0.20%, need ~% 1.16%)","op":"~%","threshold":"arm B","verdict":"pass"}
+{"kind":"job","job":"lab-202-gqa.sh","start":1699992200,"end":1699993100,"rc":0}
+{"kind":"prediction","ts":1699993110,"pred":"lab-202.tsv","name":"gqa2-5pct-at-64K","value":"1658 vs 1568 (5.74%, need >% 5%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"prediction","ts":1699993111,"pred":"lab-202.tsv","name":"q4n-pp16-15pct-faster-at-64K","value":"42.62 vs 51.08 (-16.56%, need <% 10%)","op":"<%","threshold":"arm B","verdict":"pass"}
+{"kind":"job","job":"lab-204-quality.sh","start":1699993200,"end":1699994400,"rc":0}
+{"kind":"prediction","ts":1699994410,"pred":"lab-204.tsv","name":"cand-concurrent-quality","value":"20 vs 20 (0.00%, need ~% 1%)","op":"~%","threshold":"arm B","verdict":"pass"}
+{"kind":"prediction","ts":1699994411,"pred":"lab-204.tsv","name":"stock-needle-200K-d25","value":"FOUND","op":"~","threshold":"FOUND","verdict":"pass"}
+{"kind":"prediction","ts":1699994412,"pred":"lab-204.tsv","name":"code-correct-count","value":"41","op":">=","threshold":"41","verdict":"pass"}
+{"kind":"job","job":"lab-206-ttd.sh","start":1699994500,"end":1699995100,"rc":0}
+{"kind":"prediction","ts":1699995110,"pred":"lab-206.tsv","name":"ttd-short-faster","value":"30.1 vs 33.0 (-8.79%, need <% 8.5%)","op":"<%","threshold":"arm B","verdict":"pass"}
+{"kind":"prediction","ts":1699995900,"pred":"lab-206.tsv","name":"ttd-short-faster","value":"30.1 vs 33.0 (-8.79%, need <% 8.5%)","op":"<%","threshold":"arm B","verdict":"fail"}
+{"kind":"job","job":"lab-207-prefill.sh","start":1699995200,"end":1699995500,"rc":1}
+{"kind":"prediction","ts":1699995510,"pred":"lab-207.tsv","name":"prefill-d100000-tps","value":"0","op":">=","threshold":"1","verdict":"fail"}
+{"kind":"prediction","ts":1699996000,"pred":"lab-207.tsv","name":"prefill-d100000-tps","value":"","op":">=","threshold":"1","verdict":"void"}
+{"kind":"prediction","ts":1699996010,"pred":"lab-208.tsv","name":"decode-tps-at-32K","value":"","op":">=","threshold":"100","verdict":"missing"}
+{"kind":"job","job":"lab-209-spec.sh","start":1699996100,"end":1699996700,"rc":0}
+{"kind":"prediction","ts":1699996710,"pred":"lab-209.tsv","name":"spec-accept-rate","value":"0.71","op":">=","threshold":"0.70","verdict":"pass"}
+{"kind":"prediction","ts":1699997400,"pred":"lab-209.tsv","name":"spec-accept-rate","value":"0.68","op":">=","threshold":"0.70","verdict":"fail"}
+{"kind":"job","job":"lab-210-draft5.sh","start":1699996800,"end":1699997700,"rc":0}
+{"kind":"prediction","ts":1699997710,"pred":"lab-210.tsv","name":"draft5-beats-draft7-code_tps","value":"212.0 vs 200.0 (6.00%, need >% 3.5%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"job","job":"lab-211-draft9.sh","start":1699997800,"end":1699998700,"rc":0}
+{"kind":"prediction","ts":1699998710,"pred":"lab-211.tsv","name":"draft9-beats-draft7-code_tps","value":"194.0 vs 200.0 (-3.00%, need >% 2%)","op":">%","threshold":"arm B","verdict":"fail"}
+{"kind":"job","job":"lab-213-draft3.sh","start":1699998720,"end":1699998790,"rc":0}
+{"kind":"prediction","ts":1699998795,"pred":"lab-213.tsv","name":"draft3-beats-draft7-code_tps","value":"191.0 vs 200.2 (-4.60%, need >% 2%)","op":">%","threshold":"arm B","verdict":"fail"}
+{"kind":"job","job":"lab-212-draft5-repeat.sh","start":1699998800,"end":1699999700,"rc":0}
+{"kind":"prediction","ts":1699999710,"pred":"lab-210.tsv","name":"draft5-beats-draft7-code_tps","value":"211.4 vs 199.6 (5.91%, need >% 3.5%)","op":">%","threshold":"arm B","verdict":"pass"}
+{"kind":"window","ts":1699999800,"event":"stop"}
+{"kind":"deploy","ts":1700000000,"binary":"srv-a","chunk":64}
+{"kind":"deploy","ts":1700040000,"binary":"srv-b","chunk":32}
+not json: a torn line the lab must count, not crash on

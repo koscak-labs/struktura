@@ -1,0 +1,3 @@
+$ struktura power --tasks 20 --discordant 0.4 --favour 0.8
+paired sign test, 20 tasks, configs differ on 40% of tasks, better config wins 80% of those: power 26.4% (alpha 0.05)
+--- exit 0

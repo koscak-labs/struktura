@@ -1,0 +1,8 @@
+$ struktura pulse @FIX@/req.csv --json
+{"busy_n":0,"busy_sessions":0,"busy_share":0.00,"contention_pct":null,"event":"segment","first_row":1,"label":"4000:8081 m1","level_ms":20.52,"median_ctx_k":4.50,"median_ms":21.05,"median_tps":47.51,"n":4,"seg":262152081,"solo_mlen":3.00,"solo_n":4,"solo_sessions":1}
+{"busy_n":16,"busy_sessions":16,"busy_share":0.42,"contention_pct":20.78,"event":"segment","first_row":5,"label":"4101:8081 m1","level_ms":20.06,"median_ctx_k":10.25,"median_ms":21.67,"median_tps":46.14,"n":38,"seg":268771217,"solo_mlen":3.20,"solo_n":22,"solo_sessions":16}
+{"busy_n":16,"busy_sessions":16,"busy_share":0.42,"contention_pct":20.58,"event":"segment","first_row":43,"label":"4202:8081 m1","level_ms":21.68,"median_ctx_k":10.25,"median_ms":23.42,"median_tps":42.69,"n":38,"seg":275390353,"solo_mlen":3.20,"solo_n":21,"solo_sessions":16}
+{"event":"incident","expected_ms":22.69,"ms":90.00,"row":59,"seg":275390353,"z":461.25}
+{"children":3,"cold_mean_s":2.39,"cold_median_s":2.06,"cold_n":5,"cold_total_s":11.94,"event":"churn","excess_s":0.00,"other_model_rows":0,"span_h":20.01,"warm_mean_s":5.94,"warm_median_s":5.67,"warm_n":75,"window_s":300}
+{"incidents":1,"metric":"token","min_effect_pct":1.16,"ms_per_kctx":0.10,"regressed":false,"rows":80,"segments":3,"skipped":1,"slope_clamped":false,"summary":true,"verdicts":false}
+--- exit 0
