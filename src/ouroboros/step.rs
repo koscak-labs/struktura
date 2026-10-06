@@ -45,6 +45,8 @@ pub struct Turn {
     pub brain_grown: Vec<(usize, String, f32)>,
     /// Scored predictions that prove a registered feature (0 when no registry was given).
     pub brain_goal_predictions: Option<usize>,
+    /// Clean job rows (name, minutes): what one more measurement of an agenda item costs (`cost::for_item`).
+    pub jobs: Vec<(String, f64)>,
 }
 
 pub fn turn(ledger: &str, logs: &[(String, String)], cfg: &Config) -> Turn {
@@ -70,7 +72,11 @@ pub fn turn(ledger: &str, logs: &[(String, String)], cfg: &Config) -> Turn {
         }
         brain_notes.push((format!("{}={}", it.knob, it.value), y));
     }
+    // GPU minutes per item (its job's past runs, else its knob's): equal value -> the cheaper measurement first
+    let jobs = super::cost::job_minutes(ledger);
+    let mins = |it: &Item| { let c = super::cost::for_item(&jobs, &cfg.knobs, &it.knob, it.pred.as_ref().map(|(p, _)| p.as_str())).median_min; if c.is_finite() { c } else { f64::INFINITY } };
     ag.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
+        .then(mins(a).partial_cmp(&mins(b)).unwrap_or(std::cmp::Ordering::Equal))
         .then(a.knob.cmp(&b.knob)).then(a.value.cmp(&b.value)).then(a.pred.cmp(&b.pred)));
     let logs_digest: String = logs.iter().map(|(n, t)| format!("{}:{:x}", n, fnv64(t))).collect::<Vec<_>>().join(",");
     let cons_digest: String = cons.iter().map(|c| format!("{}{}{}", c.knob, c.op, c.value)).collect::<Vec<_>>().join(",");
@@ -90,7 +96,7 @@ pub fn turn(ledger: &str, logs: &[(String, String)], cfg: &Config) -> Turn {
 
     let mut t = Turn { lessons, cv_pct: cv, constraints: cons, agenda: ag.clone(), design: None, skipped, id: id.clone(), recalled: false, written: Vec::new(),
         brain: brain_notes, brain_episodes: mind.episodes, brain_grown: mind.grown.clone(),
-        brain_goal_predictions: if mind.goal_aware { Some(mind.goal_predictions) } else { None } };
+        brain_goal_predictions: if mind.goal_aware { Some(mind.goal_predictions) } else { None }, jobs };
     let Some(item) = pick.cloned() else { return t };
     let k = cfg.knobs.iter().find(|k| k.name == item.knob).unwrap().clone();
 

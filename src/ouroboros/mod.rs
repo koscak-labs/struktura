@@ -35,6 +35,7 @@ pub mod gate;
 pub mod step;
 pub mod mind;
 pub mod track;
+pub mod cost;
 
 use crate::arms::{rank, ArmData, ArmsReport, Direction};
 use crate::lab::{analyze, LabReport};

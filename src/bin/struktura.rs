@@ -5479,9 +5479,14 @@ fn cmd_loop(args: &[String]) {
     let num = |x: f64| if x.is_finite() { format!("{:.3}", x) } else { "null".into() };
     if json {
         for (r, it) in t.agenda.iter().enumerate().take(top) {
-            println!("{{\"event\":\"agenda\",\"rank\":{},\"kind\":\"{}\",\"knob\":\"{}\",\"value\":\"{}\",\"pred\":\"{}\",\"score\":{:.3},\"observed_effect_pct\":{},\"samples\":{},\"why\":\"{}\"}}",
+            // est_*: GPU minutes one more measurement costs (median / p90 of its job's or knob's clean runs) — for fitting a window
+            let cost = struktura::ouroboros::cost::for_item(&t.jobs, &cfg.knobs, &it.knob, it.pred.as_ref().map(|(p, _)| p.as_str()));
+            let c = Some(&cost);
+            println!("{{\"event\":\"agenda\",\"rank\":{},\"kind\":\"{}\",\"knob\":\"{}\",\"value\":\"{}\",\"pred\":\"{}\",\"score\":{:.3},\"observed_effect_pct\":{},\"samples\":{},\"why\":\"{}\",\"est_min\":{},\"est_p90_min\":{},\"est_n\":{},\"est_source\":\"{}\"}}",
                 r + 1, it.kind.as_str(), it.knob, it.value, it.pred.as_ref().map(|(p, n)| format!("{}::{}", p, n)).unwrap_or_default(), it.score,
-                it.observed_effect_pct.map(num).unwrap_or("null".into()), it.samples, it.why.replace('"', "'"));
+                it.observed_effect_pct.map(num).unwrap_or("null".into()), it.samples, it.why.replace('"', "'"),
+                c.map(|c| num(c.median_min)).unwrap_or("null".into()), c.map(|c| num(c.p90_min)).unwrap_or("null".into()),
+                c.map(|c| c.n).unwrap_or(0), c.map(|c| c.source).unwrap_or("none"));
         }
         // Each estimate is a forecast the brain can be scored on later (`struktura track --forecasts`):
         // its id is stable for (challenger, metric, ledger rows), so a re-run on the same ledger repeats it.
