@@ -5203,7 +5203,7 @@ fn cmd_lab(args: &[String]) {
         for p in &r.predictions {
             println!("{{\"event\":\"prediction\",\"pred\":\"{}\",\"name\":\"{}\",\"verdict\":\"{}\",\"margin_pct\":{},\"fragile\":{},\"flips\":{},\"measurements\":{},\"agreeing\":{}}}",
                 esc(&p.pred), esc(&p.name), esc(&p.verdict), p.margin_pct.map(num).unwrap_or("null".into()),
-                p.margin_pct.map(|m| m.abs() < r.pair_band_pct.max(r.floor_pct) && (p.verdict == "pass" || p.verdict == "fail")).unwrap_or(false), p.flips, p.measurements, p.agreeing);
+                p.margin_pct.map(|m| m.abs() < r.pair_band_pct.max(r.floor_pct) && (p.verdict == "pass" || p.verdict == "fail") && struktura::lab::band_applies(&p.name, &p.value)).unwrap_or(false), p.flips, p.measurements, p.agreeing);
         }
         println!("{{\"summary\":true,\"rows\":{},\"bad_rows\":{},\"cal_n\":{},\"cal_mean_tps\":{},\"cal_cv_pct\":{},\"floor_pct\":{},\"pair_band_pct\":{},\"predictions\":{},\"scored\":{},\"passed\":{},\"fragile\":{},\"flipped\":{},\"easy\":{},\"replicated\":{},\"contested\":{},\"median_pass_margin_pct\":{},\"jobs\":{},\"jobs_failed\":{},\"window_min\":{},\"job_min_in_windows\":{},\"utilisation_pct\":{},\"cal_min\":{},\"deploys\":{},\"constraints\":{}}}",
             r.rows, r.bad_rows, r.cal_n, num(r.cal_mean_tps), num(r.cal_cv_pct), num(r.floor_pct), num(r.pair_band_pct), r.predictions.len(), scored, passed,
@@ -5233,7 +5233,7 @@ fn cmd_lab(args: &[String]) {
     }
     if list || md {
         let fragile: Vec<_> = r.predictions.iter().filter(|p| (p.verdict == "pass" || p.verdict == "fail")
-            && p.margin_pct.map(|m| m.abs() < r.pair_band_pct.max(r.floor_pct)).unwrap_or(false)).collect();
+            && p.margin_pct.map(|m| m.abs() < r.pair_band_pct.max(r.floor_pct)).unwrap_or(false) && struktura::lab::band_applies(&p.name, &p.value)).collect();
         let flipped: Vec<_> = r.predictions.iter().filter(|p| p.flips > 0).collect();
         if !fragile.is_empty() || !flipped.is_empty() { println!("{}", if md { "\n**Fragile / flipped (re-measure before relying on them):**" } else { "  fragile / flipped:" }); }
         for p in fragile {

@@ -122,6 +122,69 @@ impl<const D: usize, const A: usize, const R: usize> SsLora<D, A, R> {
     }
 }
 
+/// A brain with an SS-LoRA adapter on top: the adapter learns what the brain's
+/// estimate gets wrong, shared across actions through rank R, so actions tried
+/// rarely borrow structure from the rest. The brain's rules stay in charge:
+/// disallowed actions are never chosen and thin evidence abstains to the safe default.
+pub struct Adapted<const N: usize, const D: usize, const A: usize, const R: usize> {
+    pub brain: crate::brain::Brain<N, D, A>,
+    pub adapter: SsLora<D, A, R>,
+    /// Remembered episodes replayed into the adapter after each new outcome (bounded).
+    pub replay: u8,
+    cursor: usize,
+}
+
+impl<const N: usize, const D: usize, const A: usize, const R: usize> Adapted<N, D, A, R> {
+    pub const fn new(brain: crate::brain::Brain<N, D, A>, adapter: SsLora<D, A, R>, replay: u8) -> Self {
+        Adapted { brain, adapter, replay, cursor: 0 }
+    }
+
+    /// Brain estimate plus adapter correction, per action.
+    pub fn expected(&self, x: &[f32; D]) -> [f32; A] {
+        let est = self.brain.estimates(x);
+        let mut out = [0.0f32; A];
+        for a in 0..A { out[a] = est[a].expected + self.adapter.predict(a, x); }
+        out
+    }
+
+    pub fn decide(&self, x: &[f32; D], allowed: &[bool; A], safe_default: u8) -> crate::brain::Decision {
+        let mut d = self.brain.decide(x, allowed, safe_default);
+        if d.abstained { return d; }
+        let est = self.brain.estimates(x);
+        let exp = self.expected(x);
+        let mut best = d.action as usize;
+        let mut best_s = f32::NEG_INFINITY;
+        for a in 0..A {
+            if !allowed[a] || est[a].evidence < self.brain.min_evidence { continue; }
+            let s = exp[a] + self.brain.explore * est[a].width;
+            if s > best_s { best_s = s; best = a; }
+        }
+        d.action = best as u8;
+        d.expected = exp[best];
+        d.evidence = est[best].evidence;
+        d
+    }
+
+    /// Learn an outcome: the adapter takes the brain's error on it, then replays a few memories.
+    pub fn learn(&mut self, x: &[f32; D], action: u8, reward: f32) {
+        let a = action as usize;
+        if a >= A { return; }
+        let before = self.brain.estimates(x)[a].expected;
+        self.adapter.step(a, x, reward - before);
+        self.brain.learn(x, action, reward);
+        let cap = crate::brain::Brain::<N, D, A>::CAPACITY;
+        if cap == 0 { return; }
+        for _ in 0..self.replay {
+            self.cursor = (self.cursor + 7) % cap;
+            if let Some(e) = self.brain.episode(self.cursor) {
+                let (k, ea, er) = (e.key, e.action as usize, e.reward);
+                let target = er - self.brain.estimates(&k)[ea].expected;
+                self.adapter.step(ea, &k, target);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,6 +250,63 @@ mod tests {
             Score { train: tr / n as f32, test: te / test.len() as f32 }
         };
         [mse(&|a, x| ridge.predict(a as u8, x)), mse(&|a, x| models[0].predict(a, x)), mse(&|a, x| models[1].predict(a, x)), mse(&|a, x| models[2].predict(a, x))]
+    }
+
+    /// Online bandit in the rank-2 world: each step a situation arrives, the brain picks an
+    /// action, sees a noisy reward. Score = right-action rate on 500 unseen situations.
+    fn bandit(seed: u64, mode: u8) -> f32 { bandit_steps(seed, mode, 1200) }
+
+    fn bandit_steps(seed: u64, mode: u8, steps: usize) -> f32 {
+        let world = World::new(seed);
+        let mut r = Rng(seed ^ 0x77);
+        let brain: Brain<64, D, A> = Brain::new(0.3, 0.5);
+        let p = if mode == 2 { 0.5 } else { 0.0 };
+        let mut ad: Adapted<64, D, A, R> = Adapted::new(brain, SsLora::new(p, 0.03, seed), 4);
+        for t in 0..steps {
+            let x = situation(&mut r);
+            let d = if mode == 0 { ad.brain.decide(&x, &[true; A], 0) } else { ad.decide(&x, &[true; A], 0) };
+            let a = if d.abstained { (t % A) as u8 } else { d.action };
+            let rw = world.mean(a as usize, &x) + 0.5 * r.n();
+            if mode == 0 { ad.brain.learn(&x, a, rw); } else { ad.learn(&x, a, rw); }
+        }
+        ad.brain.explore = 0.0;
+        let mut ok = 0;
+        for _ in 0..500 {
+            let x = situation(&mut r);
+            let d = if mode == 0 { ad.brain.decide(&x, &[true; A], 0) } else { ad.decide(&x, &[true; A], 0) };
+            let best = (0..A).max_by(|&i, &j| world.mean(i, &x).partial_cmp(&world.mean(j, &x)).unwrap()).unwrap();
+            if d.action as usize == best { ok += 1; }
+        }
+        ok as f32 / 500.0
+    }
+
+    /// Pre-registered: averaged over 8 seeds (and again over 8 fresh seeds), the brain with an
+    /// SS-LoRA adapter (p = 0.5) picks the best action on unseen situations more often than the
+    /// plain brain AND than the same adapter without the mask.
+    #[test]
+    #[ignore = "FAILED as pre-registered: plain brain 0.781 > SS-LoRA-adapted 0.765 > dense-adapted 0.751 at 1200 steps (data is not scarce there); see horizon_sweep"]
+    fn falsifier_adapted_brain_decides_better_on_unseen_situations() {
+        for seeds in [[11u64, 23, 37, 41, 59, 61, 73, 89], [101, 103, 107, 109, 113, 127, 131, 137]] {
+            let mut s = [0.0f32; 3];
+            for &sd in &seeds { for m in 0..3 { s[m as usize] += bandit(sd, m); } }
+            let k = seeds.len() as f32;
+            std::println!("adapted-brain falsifier: plain brain {:.3}  + dense adapter {:.3}  + SS-LoRA adapter {:.3} (right-action rate, unseen situations)", s[0] / k, s[1] / k, s[2] / k);
+            assert!(s[2] > s[0] && s[2] > s[1], "{:?}", s);
+        }
+    }
+
+    /// Follow-up AFTER the failed falsifier (a new hypothesis, reported in full, not a pass of the
+    /// original): does the adapter help when data per action is scarce (short horizons)?
+    #[test]
+    fn horizon_sweep() {
+        let seeds = [11u64, 23, 37, 41, 59, 61, 73, 89, 101, 103, 107, 109, 113, 127, 131, 137];
+        std::println!("horizon sweep (16 seeds, right-action rate on unseen situations): plain | +dense | +SS-LoRA");
+        for &steps in &[80usize, 160, 320, 640, 1200] {
+            let mut s = [0.0f32; 3];
+            for &sd in &seeds { for m in 0..3u8 { s[m as usize] += bandit_steps(sd, m, steps); } }
+            let k = seeds.len() as f32;
+            std::println!("  {:>5} steps ({:>4.1}/action): {:.3} | {:.3} | {:.3}", steps, steps as f32 / A as f32, s[0] / k, s[1] / k, s[2] / k);
+        }
     }
 
     #[test]

@@ -54,7 +54,7 @@ pub fn learn(obs: &Observation) -> Lessons {
             if let Some(m) = measured { if reg > 0.0 { ratios.push(m / reg); } }
         }
         if let Some(m) = p.margin_pct {
-            if m.abs() < obs.band_pct {
+            if m.abs() < obs.band_pct && crate::lab::band_applies(&p.name, &p.value) {
                 fragile.push(Fragile { pred: p.pred.clone(), name: p.name.clone(), verdict: p.verdict.clone(), margin_pct: m });
             }
         }

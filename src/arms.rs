@@ -44,7 +44,7 @@ pub fn lower_is_better(metric: &str, dir: Direction) -> bool {
         Direction::Higher => false,
         Direction::Lower => true,
         Direction::Auto => metric.to_ascii_lowercase().split(|c: char| !c.is_ascii_alphanumeric())
-            .any(|t| matches!(t, "secs" | "sec" | "seconds" | "ms" | "us" | "time" | "lat" | "latency" | "wall" | "dur" | "duration" | "elapsed" | "ttft" | "gen" | "tokens" | "tok" | "cost" | "attempts" | "turns")),
+            .any(|t| matches!(t, "secs" | "sec" | "seconds" | "ms" | "us" | "time" | "lat" | "latency" | "wall" | "dur" | "duration" | "elapsed" | "ttft" | "ttd" | "gen" | "tokens" | "tok" | "cost" | "attempts" | "turns")),
     }
 }
 
@@ -359,6 +359,12 @@ some free text = not a metric line\n";
         assert_eq!(hi.pairs[0].outcome, Outcome::BWins); // higher ms "better" -> slow wins
         assert_eq!(lo.pairs[0].outcome, Outcome::AWins); // lower is better -> fast wins
         assert_eq!(lo.dominant, vec![("lat".to_string(), "fast".to_string())]);
+    }
+
+    #[test]
+    fn time_keys_are_lower_is_better() {
+        for k in ["ttd_s", "ttft_ms", "step_ms", "wall_s", "attempts", "gen", "latency"] { assert!(lower_is_better(k, Direction::Auto), "{}", k); }
+        for k in ["tps", "code_tps", "d100000", "acc", "pass", "params"] { assert!(!lower_is_better(k, Direction::Auto), "{}", k); }
     }
 
     #[test]
