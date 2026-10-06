@@ -1,0 +1,15 @@
+$ struktura arms @FIX@/verdicts.tsv --json
+{"a":"base","a_median":0.5000,"b":"cand","b_median":0.9688,"ci_high":null,"ci_low":null,"delta_pct":46.8750,"event":"pair","evidence":"paired","group":"","metric":"pass_rate(16 tasks)","n_discordant":8,"outcome":"b_wins","p_value":0.0078}
+{"a":"base","a_median":null,"b":"cand","b_median":null,"ci_high":null,"ci_low":null,"delta_pct":-5.4638,"event":"pair","evidence":"paired","group":"","metric":"gen(8 tasks, paired)","n_discordant":8,"outcome":"b_wins","p_value":0.0078}
+{"a":"base","a_median":null,"b":"cand","b_median":null,"ci_high":null,"ci_low":null,"delta_pct":-10.0000,"event":"pair","evidence":"paired","group":"","metric":"ttd_s(8 tasks, paired)","n_discordant":8,"outcome":"b_wins","p_value":0.0078}
+{"a":"base","a_median":0.5000,"b":"alt","b_median":0.5000,"ci_high":null,"ci_low":null,"delta_pct":0.0000,"event":"pair","evidence":"paired","group":"","metric":"pass_rate(16 tasks)","n_discordant":2,"outcome":"inconclusive","p_value":1.0000}
+{"a":"base","a_median":null,"b":"alt","b_median":null,"ci_high":null,"ci_low":null,"delta_pct":0.0000,"event":"pair","evidence":"paired","group":"","metric":"gen(7 tasks, paired)","n_discordant":0,"outcome":"tie","p_value":1.0000}
+{"a":"base","a_median":null,"b":"alt","b_median":null,"ci_high":null,"ci_low":null,"delta_pct":1.0261,"event":"pair","evidence":"paired","group":"","metric":"ttd_s(7 tasks, paired)","n_discordant":0,"outcome":"tie","p_value":1.0000}
+{"a":"cand","a_median":0.9688,"b":"alt","b_median":0.5000,"ci_high":null,"ci_low":null,"delta_pct":-46.8750,"event":"pair","evidence":"paired","group":"","metric":"pass_rate(16 tasks)","n_discordant":8,"outcome":"a_wins","p_value":0.0078}
+{"a":"cand","a_median":null,"b":"alt","b_median":null,"ci_high":null,"ci_low":null,"delta_pct":5.7713,"event":"pair","evidence":"paired","group":"","metric":"gen(8 tasks, paired)","n_discordant":8,"outcome":"a_wins","p_value":0.0078}
+{"a":"cand","a_median":null,"b":"alt","b_median":null,"ci_high":null,"ci_low":null,"delta_pct":12.2386,"event":"pair","evidence":"paired","group":"","metric":"ttd_s(8 tasks, paired)","n_discordant":8,"outcome":"a_wins","p_value":0.0078}
+{"arm":"base","event":"arm","group":"","inconclusive":1,"losses":3,"samples":2,"ties":2,"wins":0}
+{"arm":"cand","event":"arm","group":"","inconclusive":0,"losses":0,"samples":2,"ties":0,"wins":6}
+{"arm":"alt","event":"arm","group":"","inconclusive":1,"losses":3,"samples":2,"ties":2,"wins":0}
+{"arms":3,"dominant":["cand"],"higher_is_better":true,"lines":96,"min_effect_pct":1.16,"pairs":9,"summary":true}
+--- exit 0

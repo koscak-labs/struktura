@@ -1,0 +1,3 @@
+{"kind":"deploy","ts":1700000000,"binary":"srv-a","chunk":64}
+{"kind":"job","job":"lab-299-unrelated.sh","start":1700020000,"end":1700020600,"rc":0}
+{"kind":"deploy","ts":1700040000,"binary":"srv-b","chunk":32}

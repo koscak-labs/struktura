@@ -1,0 +1,14 @@
+$ struktura power --ledger @FIX@/ledger.jsonl
+noise from ledger calibration arm: n=7 CV 0.623%
+CV 0.623% per run (alpha 0.05, power 80%); noise floor 2xCV = 1.25%
+   effect %      runs/arm
+       0.50            25
+       1.00             7
+       1.25             4
+       2.00             2
+       3.00             2
+       5.00             2
+      10.00             2
+  a prediction is informative when its threshold sits within one floor of the predicted effect;
+  thresholds far below it pass easily and teach little (see `struktura lab`).
+--- exit 0

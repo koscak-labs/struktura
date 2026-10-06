@@ -1,0 +1,26 @@
+$ struktura lab @FIX@/ledger.jsonl --json
+{"event":"pred_file","fail":0,"missing":0,"pass":1,"pred":"lab-201.tsv","status":"CONFIRMED","void":0}
+{"event":"pred_file","fail":0,"missing":0,"pass":2,"pred":"lab-202.tsv","status":"CONFIRMED","void":0}
+{"event":"pred_file","fail":0,"missing":0,"pass":3,"pred":"lab-204.tsv","status":"CONFIRMED","void":0}
+{"event":"pred_file","fail":1,"missing":0,"pass":0,"pred":"lab-206.tsv","status":"FALSIFIED","void":0}
+{"event":"pred_file","fail":0,"missing":0,"pass":0,"pred":"lab-207.tsv","status":"VOID","void":1}
+{"event":"pred_file","fail":0,"missing":1,"pass":0,"pred":"lab-208.tsv","status":"PENDING","void":0}
+{"event":"pred_file","fail":1,"missing":0,"pass":0,"pred":"lab-209.tsv","status":"FALSIFIED","void":0}
+{"event":"pred_file","fail":0,"missing":0,"pass":1,"pred":"lab-210.tsv","status":"CONFIRMED","void":0}
+{"event":"pred_file","fail":1,"missing":0,"pass":0,"pred":"lab-211.tsv","status":"FALSIFIED","void":0}
+{"event":"pred_file","fail":1,"missing":0,"pass":0,"pred":"lab-213.tsv","status":"FALSIFIED","void":0}
+{"agreeing":1,"event":"prediction","flips":0,"fragile":true,"margin_pct":0.960,"measurements":1,"name":"noise-fresh-repeat","pred":"lab-201.tsv","verdict":"pass"}
+{"agreeing":1,"event":"prediction","flips":0,"fragile":true,"margin_pct":0.740,"measurements":1,"name":"gqa2-5pct-at-64K","pred":"lab-202.tsv","verdict":"pass"}
+{"agreeing":1,"event":"prediction","flips":0,"fragile":false,"margin_pct":6.560,"measurements":1,"name":"q4n-pp16-15pct-faster-at-64K","pred":"lab-202.tsv","verdict":"pass"}
+{"agreeing":1,"event":"prediction","flips":0,"fragile":false,"margin_pct":1.000,"measurements":1,"name":"cand-concurrent-quality","pred":"lab-204.tsv","verdict":"pass"}
+{"agreeing":1,"event":"prediction","flips":0,"fragile":false,"margin_pct":0.000,"measurements":1,"name":"code-correct-count","pred":"lab-204.tsv","verdict":"pass"}
+{"agreeing":1,"event":"prediction","flips":0,"fragile":false,"margin_pct":null,"measurements":1,"name":"stock-needle-200K-d25","pred":"lab-204.tsv","verdict":"pass"}
+{"agreeing":0,"event":"prediction","flips":1,"fragile":true,"margin_pct":0.290,"measurements":1,"name":"ttd-short-faster","pred":"lab-206.tsv","verdict":"fail"}
+{"agreeing":0,"event":"prediction","flips":0,"fragile":false,"margin_pct":null,"measurements":1,"name":"prefill-d100000-tps","pred":"lab-207.tsv","verdict":"void"}
+{"agreeing":0,"event":"prediction","flips":0,"fragile":false,"margin_pct":null,"measurements":0,"name":"decode-tps-at-32K","pred":"lab-208.tsv","verdict":"missing"}
+{"agreeing":1,"event":"prediction","flips":1,"fragile":false,"margin_pct":-2.857,"measurements":2,"name":"spec-accept-rate","pred":"lab-209.tsv","verdict":"fail"}
+{"agreeing":2,"event":"prediction","flips":0,"fragile":false,"margin_pct":2.410,"measurements":2,"name":"draft5-beats-draft7-code_tps","pred":"lab-210.tsv","verdict":"pass"}
+{"agreeing":1,"event":"prediction","flips":0,"fragile":false,"margin_pct":-5.000,"measurements":1,"name":"draft9-beats-draft7-code_tps","pred":"lab-211.tsv","verdict":"fail"}
+{"agreeing":1,"event":"prediction","flips":0,"fragile":false,"margin_pct":-6.600,"measurements":1,"name":"draft3-beats-draft7-code_tps","pred":"lab-213.tsv","verdict":"fail"}
+{"bad_rows":1,"cal_cv_pct":0.623,"cal_mean_tps":200.014,"cal_min":7.500,"cal_n":7,"constraints":1,"contested":1,"deploys":2,"easy":1,"flipped":2,"floor_pct":1.245,"fragile":3,"job_min_in_windows":116.167,"jobs":10,"jobs_failed":1,"median_pass_margin_pct":0.980,"pair_band_pct":1.726,"passed":7,"predictions":13,"replicated":1,"rows":41,"scored":11,"summary":true,"utilisation_pct":71.122,"window_min":163.333}
+--- exit 0

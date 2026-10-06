@@ -1,0 +1,4 @@
+# feature	commit	env	needs	pred	required	value	flags
+draft5	0000aaa	DRAFT_N=5	-	lab-210.tsv	-	none	-
+gqa2	0000bbb	GQA=2	-	lab-202.tsv	gqa2-5pct-at-64K	none	-
+spec-accept	0000ccc	SPEC=1	draft5	lab-209.tsv	spec-accept-rate	none	-

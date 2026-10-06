@@ -1,0 +1,30 @@
+$ struktura lab @FIX@/ledger.jsonl --fragile
+struktura lab: 41 ledger rows (1 unreadable)
+  rows: 8 cal, 1 constraint, 2 deploy, 10 job, 17 prediction, 2 window
+  noise floor: calibration code t/s n=7 mean 200.0, CV 0.623% -> floor 2xCV 1.25%; 95% band of a single-run difference 1.96*sqrt2*CV = 1.73% (2xCV alone lets ~16% of no-effect single-run comparisons through)
+  predictions: 13 (latest verdict each), 11 scored, 7 pass (64%), median pass margin +1.0%
+  replication: 1 prediction(s) measured independently 2+ times and all agree, 1 contested (independent measurements disagree); re-scoring the same log does not count
+  self-calibration: 3 fragile (|margin| inside the single-run band: a re-run could flip them), 2 flipped on re-scoring, 1 easy passes (margin > 3 floors: thresholds set below the expected effect teach little)
+  lab windows: 163 min open, 116 min of jobs inside -> 71% utilisation; calibration 8 min; jobs 10 (1 failed)
+  deploy @1700000000: srv-a chunk=64
+  deploy @1700040000: srv-b chunk=32
+  constraint: ub <= 256
+  pred             status     pass fail void missing
+  lab-201.tsv      CONFIRMED     1    0    0       0
+  lab-202.tsv      CONFIRMED     2    0    0       0
+  lab-204.tsv      CONFIRMED     3    0    0       0
+  lab-206.tsv      FALSIFIED     0    1    0       0
+  lab-207.tsv      VOID          0    0    1       0
+  lab-208.tsv      PENDING       0    0    0       1
+  lab-209.tsv      FALSIFIED     0    1    0       0
+  lab-210.tsv      CONFIRMED     1    0    0       0
+  lab-211.tsv      FALSIFIED     0    1    0       0
+  lab-213.tsv      FALSIFIED     0    1    0       0
+  fragile / flipped:
+  [pass] lab-201.tsv :: noise-fresh-repeat margin +0.96% (single-run band 1.73%) value 149.5 vs 149.2 (0.20%, need ~% 1.16%) -- awaiting replication
+  [pass] lab-202.tsv :: gqa2-5pct-at-64K margin +0.74% (single-run band 1.73%) value 1658 vs 1568 (5.74%, need >% 5%) -- awaiting replication
+  [fail] lab-206.tsv :: ttd-short-faster margin +0.29% (single-run band 1.73%) value 30.1 vs 33.0 (-8.79%, need <% 8.5%) -- awaiting replication
+  [CONTESTED] lab-209.tsv :: spec-accept-rate latest fail but only 1/2 independent measurements agree
+  [fail] lab-206.tsv :: ttd-short-faster flipped 1x on re-scoring
+  [fail] lab-209.tsv :: spec-accept-rate flipped 1x on re-scoring
+--- exit 0
