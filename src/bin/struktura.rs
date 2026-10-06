@@ -4765,6 +4765,9 @@ fn cmd_pulse(args: &[String]) {
         println!("  --watch | --watch-once  live gate: newest --deploys row vs the one before, anytime-valid e-process");
         println!("     (safe to re-check after every request); one JSON line per check; exit 0 faster/same, 1 slower, 3 pending/timeout");
         println!("  --interval S (60)  --max-wait S (86400)  --alpha A (0.05)   for --watch");
+        println!("  --exclude-near FILE[:B,A]  drop requests starting within [e-B, e+A] s (default 2,600) of an epoch e in FILE");
+        println!("     (first column, e.g. selftraffic.tsv epoch<TAB>source<TAB>bytes): judge real traffic only, never our own");
+        println!("  --only-near FILE[:B,A]  the complement: ONLY those requests (an advisory eval-lane verdict)");
         println!("  Exit: 0 = no regression, 1 = latest judged deploy is slower, 2 = error");
         process::exit(if args.len() < 3 { 2 } else { 0 });
     }
@@ -4785,6 +4788,7 @@ fn cmd_pulse(args: &[String]) {
     let mut spawns_path: Option<String> = None;
     let mut split_ts: Option<u64> = None;
     let (mut watch_mode, mut watch_once, mut interval, mut max_wait, mut alpha) = (false, false, 60u64, 86400u64, 0.05f64);
+    let mut near: Option<(Vec<u64>, u64, u64, bool)> = None;
     let mut i = 3;
     while i < args.len() {
         match args[i].as_str() {
@@ -4810,11 +4814,24 @@ fn cmd_pulse(args: &[String]) {
             "--alpha" => { i += 1; alpha = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(alpha); }
             "--metric" => { i += 1; match args.get(i).map(|s| s.as_str()) { Some("token") => per_step = false, Some("step") => per_step = true, _ => { eprintln!("--metric token|step"); process::exit(2); } } }
             "--json" => json = true,
+            "--exclude-near" | "--only-near" => {
+                if near.is_some() { eprintln!("pulse: --exclude-near and --only-near are exclusive"); process::exit(2); }
+                let keep = args[i] == "--only-near"; i += 1;
+                let Some(spec) = args.get(i) else { eprintln!("pulse: {} needs FILE", args[i - 1]); process::exit(2); };
+                near = Some(pulse_near(spec, keep));
+            }
             other => { eprintln!("pulse: unknown option {}", other); process::exit(2); }
         }
         i += 1;
     }
-    let text = pulse_load(&args[2], archive.as_deref());
+    let (text, near_dropped) = pulse_apply_near(pulse_load(&args[2], archive.as_deref()), &near, cols[5]);
+    if let Some((ep, b, a, keep)) = &near {
+        let mode = if *keep { "only" } else { "exclude" };
+        eprintln!("pulse: --{}-near: dropped {} rows ({} self-traffic epochs, window -{}s..+{}s)", mode, near_dropped, ep.len(), b, a);
+        if json && !watch_mode {
+            println!("{{\"event\":\"selftraffic\",\"mode\":\"{}\",\"epochs\":{},\"dropped\":{},\"before_s\":{},\"after_s\":{}}}", mode, ep.len(), near_dropped, b, a);
+        }
+    }
     // Deploy boundaries from a lab ledger: JSON lines with "kind":"deploy" and a unix "ts".
     // A server process id changes on every model reload, so it is not a deploy; the ledger is.
     let mut deploys: Vec<(u64, String)> = Vec::new();
@@ -4878,7 +4895,7 @@ fn cmd_pulse(args: &[String]) {
             .filter_map(|l| { let (a, b) = l.split_once(',')?; Some((a.trim().parse().ok()?, b.trim().parse().ok()?)) }).collect());
         let t0 = std::time::Instant::now();
         loop {
-            let text = pulse_load(&args[2], archive.as_deref());
+            let (text, _) = pulse_apply_near(pulse_load(&args[2], archive.as_deref()), &near, cols[5]);
             let (reference_now, stream) = session_firsts(&text);
             if frozen.is_none() && reference_now.len() >= struktura::pulse::MIN_SEG_ROWS {
                 if let Some(p) = &ref_state {
@@ -5534,6 +5551,37 @@ fn pulse_load(path: &str, archive: Option<&str>) -> String {
     }
     eprintln!("pulse: archive {}: +{} new rows, {} total", a, added, merged.lines().count());
     merged
+}
+
+
+/// `--exclude-near FILE[:BEFORE,AFTER]` / `--only-near ...`: our own traffic epochs (first column of
+/// each line, tab or comma separated, e.g. `epoch<TAB>source<TAB>bytes`) and the window around each.
+fn pulse_near(spec: &str, keep_near: bool) -> (Vec<u64>, u64, u64, bool) {
+    let (path, win) = match spec.rsplit_once(':') { Some((p, w)) if w.contains(',') => (p, Some(w)), _ => (spec, None) };
+    let (mut before, mut after) = (2u64, 600u64);
+    if let Some(w) = win {
+        let p: Vec<Option<u64>> = w.split(',').map(|x| x.trim().parse().ok()).collect();
+        match p.as_slice() { [Some(b), Some(a)] => { before = *b; after = *a; } _ => { eprintln!("pulse: near window must be BEFORE,AFTER seconds"); process::exit(2); } }
+    }
+    let text = match std::fs::read_to_string(path) { Ok(t) => t, Err(e) => { eprintln!("pulse: {}: {}", path, e); process::exit(2); } };
+    let epochs = text.lines()
+        .filter_map(|l| l.split(['\t', ',']).next()?.trim().parse::<f64>().ok())
+        .filter(|e| *e > 0.0).map(|e| e as u64).collect();
+    (epochs, before, after, keep_near)
+}
+
+/// Keep the rows away from our own traffic (exclude) or only the rows near it (only); returns (rows, dropped).
+fn pulse_apply_near(text: String, near: &Option<(Vec<u64>, u64, u64, bool)>, start_col: usize) -> (String, usize) {
+    let Some((epochs, before, after, keep_near)) = near else { return (text, 0) };
+    let lines: Vec<&str> = text.lines().collect();
+    let starts: Vec<u64> = lines.iter().map(|l| l.split(',').nth(start_col)
+        .and_then(|v| v.trim().parse::<f64>().ok()).map(|v| v as u64).unwrap_or(0)).collect();
+    let mask = struktura::pulse::near_mask(&starts, epochs, *before, *after);
+    let (mut out, mut dropped) = (String::with_capacity(text.len()), 0usize);
+    for (l, near) in lines.iter().zip(mask) {
+        if near == *keep_near { out.push_str(l); out.push('\n'); } else { dropped += 1; }
+    }
+    (out, dropped)
 }
 
 fn cmd_brain(args: &[String]) {

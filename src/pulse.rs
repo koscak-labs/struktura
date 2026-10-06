@@ -663,9 +663,41 @@ pub fn watch(reference: &[(f64, f64)], stream: &[(f64, f64)], min_effect_pct: f6
     st
 }
 
+/// Which requests started near one of our OWN traffic events (a lab hot lane, an eval harness):
+/// `mask[i]` is true when `starts[i]` lies in `[e - before, e + after]` for some epoch `e`.
+///
+/// A deploy verdict must be judged on real traffic only. Self-traffic is shaped by the maker
+/// (its prompts, its timing, its concurrency), so letting it count would let the strand that
+/// ships a change also certify it. The excluded rows are still useful, kept apart, as an
+/// advisory "eval lane" verdict. `epochs` need not be sorted; O((n + m) log m).
+pub fn near_mask(starts: &[u64], epochs: &[u64], before: u64, after: u64) -> Vec<bool> {
+    let mut e: Vec<u64> = epochs.to_vec();
+    e.sort_unstable();
+    starts.iter().map(|&s| {
+        // the first epoch >= s - after is the only candidate that can still cover s from below
+        let lo = s.saturating_sub(after);
+        let i = e.partition_point(|&x| x < lo);
+        e.get(i).is_some_and(|&x| x <= s.saturating_add(before))
+    }).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn near_mask_window_edges() {
+        // epoch 1000, window [998, 1600]
+        let starts = [997, 998, 1000, 1600, 1601, 5000];
+        let m = near_mask(&starts, &[1000], 2, 600);
+        assert_eq!(m, vec![false, true, true, true, false, false]);
+        // unsorted epochs, several windows, no epochs at all
+        let m = near_mask(&[10, 500, 4990], &[5000, 0], 10, 20);
+        assert_eq!(m, vec![true, false, true]);
+        assert_eq!(near_mask(&[1, 2], &[], 2, 600), vec![false, false]);
+        // saturating at 0 and at u64::MAX
+        assert_eq!(near_mask(&[0, u64::MAX], &[1, u64::MAX], 2, 600), vec![true, true]);
+    }
 
     /// Two deploys. Solo level 60 -> 40 ms (-33%); contention multiplies the
     /// whole timing by (1 + pen) while the neighbour is busy. The faster
