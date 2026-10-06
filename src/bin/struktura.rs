@@ -409,6 +409,10 @@ fn main() {
         "investigate" => cmd_investigate(&args),
         "case" => cmd_case(&args),
         "replay" => cmd_replay(&args),
+        "pulse" => cmd_pulse(&args),
+        "arms" => cmd_arms(&args),
+        "lab" => cmd_lab(&args),
+        "power" => cmd_power(&args),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -4731,5 +4735,412 @@ mod tests {
         assert_eq!(cols[0], vec![1.0, 1.1, 1.2]);
         assert_eq!(header, vec!["time", "mode", "motor_current"]);
         assert_eq!(schema.measurement_indices(), vec![2]);
+    }
+}
+
+fn cmd_pulse(args: &[String]) {
+    use struktura::pulse::{analyze, Row};
+    if args.len() < 3 || args[2] == "--help" {
+        println!("struktura pulse <req.csv> [--min-effect PCT] [--boot N] [--seed S] [--json]");
+        println!("  Judge serving deploys from per-request timing rows (prod-pulse.sh req.csv format):");
+        println!("  end_ts,pid,slot,start_ts,ctx,prompt_n,prompt_tps,gen_n,gen_tps,acc,mlen,step_ms,busy_frac");
+        println!("  Step time is adjusted for context depth and slot contention (within-deploy fit),");
+        println!("  consecutive deploys get a bootstrap 95% CI verdict, stalls are flagged.");
+        println!("  --min-effect  smallest believable effect, percent (default 1.16 = 2x lab calibration CV)");
+        println!("  --cols seg,ctx,step,busy,tps   0-based columns (default 1,4,11,12,8)");
+        println!("  Exit: 0 = no regression, 1 = latest judged deploy is slower, 2 = error");
+        process::exit(if args.len() < 3 { 2 } else { 0 });
+    }
+    let (mut min_effect, mut boot, mut seed, mut json, mut per_step) = (1.16f64, 2000usize, 42u64, false, false);
+    // seg, ctx, step_ms, busy, tps, start_ts, mlen (prod-pulse.sh req.csv)
+    let mut cols = [1usize, 4, 11, 12, 8, 3, 10];
+    let mut deploys_path: Option<String> = None;
+    // model alias and server child port (prod-pulse.sh cols 14, 15), prompt tokens and prompt t/s (cols 6, 7)
+    let (model_col, port_col, pn_col, ptps_col) = (13usize, 14usize, 5usize, 6usize);
+    let mut by_child = false;
+    let mut want_model: Option<String> = None;
+    let mut churn_window = 300u64;
+    let mut i = 3;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--min-effect" => { i += 1; min_effect = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(min_effect); }
+            "--boot" => { i += 1; boot = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(boot); }
+            "--seed" => { i += 1; seed = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(seed); }
+            "--cols" => { i += 1; if let Some(v) = args.get(i) {
+                let p: Vec<usize> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                if p.len() == 5 || p.len() == 7 { cols[..p.len()].copy_from_slice(&p); } else { eprintln!("--cols needs 5 or 7 indices"); process::exit(2); } } }
+            "--deploys" => { i += 1; deploys_path = args.get(i).cloned(); }
+            "--model" => { i += 1; want_model = args.get(i).cloned(); }
+            "--by-child" => by_child = true,
+            "--churn-window" => { i += 1; churn_window = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(churn_window); }
+            "--metric" => { i += 1; match args.get(i).map(|s| s.as_str()) { Some("token") => per_step = false, Some("step") => per_step = true, _ => { eprintln!("--metric token|step"); process::exit(2); } } }
+            "--json" => json = true,
+            other => { eprintln!("pulse: unknown option {}", other); process::exit(2); }
+        }
+        i += 1;
+    }
+    let text = match std::fs::read_to_string(&args[2]) { Ok(t) => t, Err(e) => { eprintln!("pulse: {}: {}", args[2], e); process::exit(2); } };
+    // Deploy boundaries from a lab ledger: JSON lines with "kind":"deploy" and a unix "ts".
+    // A server process id changes on every model reload, so it is not a deploy; the ledger is.
+    let mut deploys: Vec<(u64, String)> = Vec::new();
+    if let Some(p) = &deploys_path {
+        let led = match std::fs::read_to_string(p) { Ok(t) => t, Err(e) => { eprintln!("pulse: {}: {}", p, e); process::exit(2); } };
+        for l in led.lines().filter(|l| l.replace(' ', "").contains("\"kind\":\"deploy\"")) {
+            let field = |k: &str| -> Option<String> {
+                let key = format!("\"{}\":", k);
+                let at = l.find(&key)? + key.len();
+                let rest = l[at..].trim_start();
+                if let Some(s) = rest.strip_prefix('"') { s.find('"').map(|e| s[..e].to_string()) }
+                else { Some(rest.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect()) }
+            };
+            if let Some(ts) = field("ts").and_then(|t| t.parse::<f64>().ok()) {
+                let mut label = field("binary").unwrap_or_else(|| "deploy".to_string());
+                if let Some(c) = field("chunk") { label.push_str(&format!(" chunk={}", c)); }
+                deploys.push((ts as u64, label));
+            }
+        }
+        deploys.sort();
+        if deploys.is_empty() { eprintln!("pulse: no kind:\"deploy\" rows with a ts in {}", p); process::exit(2); }
+    }
+    let mut rows = Vec::new();
+    let mut starts: Vec<u64> = Vec::new();
+    let mut churn_rows: Vec<struktura::pulse::ChurnRow> = Vec::new();
+    let mut child_names: Vec<(u64, String)> = Vec::new();
+    let (mut skipped, mut other_model) = (0usize, 0usize);
+    for line in text.lines() {
+        let f: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
+        let get = |k: usize| f.get(k).and_then(|v| v.parse::<f64>().ok());
+        let model = f.get(model_col).copied().unwrap_or("");
+        if let Some(m) = &want_model { if model != m { other_model += 1; continue; } }
+        // One router process hosts several model children: a child is (pid, port).
+        let pid = f.get(cols[0]).and_then(|v| v.parse::<u64>().ok());
+        let port = f.get(port_col).and_then(|v| v.parse::<u64>().ok()).filter(|p| *p < 65536);
+        let seg_id = match (pid, port) { (Some(p), Some(q)) => Some((p << 16) | q), (p, _) => p };
+        if let Some(s) = seg_id { if !child_names.iter().any(|(k, _)| *k == s) {
+            let name = match port { Some(q) => format!("{}:{} {}", pid.unwrap_or(0), q, model), None => format!("{} {}", pid.unwrap_or(0), model) };
+            child_names.push((s, name.trim().to_string())); } }
+        if let (Some(s), Some(t0), Some(pn), Some(pt)) = (seg_id, get(cols[5]), get(pn_col), get(ptps_col)) {
+            if pt > 0.0 { churn_rows.push(struktura::pulse::ChurnRow { child: s, start: t0 as u64, prompt_s: pn / pt }); }
+        }
+        match (seg_id, get(cols[1]), get(cols[2]), get(cols[3]), get(cols[4])) {
+            (Some(seg), Some(ctx), Some(step), Some(busy), Some(tps)) if step > 0.0 && tps > 0.0 => {
+                rows.push(Row { seg, ctx_k: ctx / 1000.0, busy, ms: if per_step { step } else { 1000.0 / tps }, tps,
+                    mlen: get(cols[6]).unwrap_or(f64::NAN) });
+                starts.push(get(cols[5]).unwrap_or(0.0) as u64);
+            }
+            _ => skipped += 1,
+        }
+    }
+    if rows.len() < 2 { eprintln!("pulse: need at least 2 timing rows ({} skipped)", skipped); process::exit(2); }
+    let mut labels: Vec<(u64, String)> = Vec::new();
+    let ch = struktura::pulse::churn(&churn_rows, churn_window);
+    if !deploys.is_empty() {
+        // Segment = the last deploy at or before the request's start; 0 = before the first known deploy.
+        let mut idx: Vec<usize> = (0..rows.len()).collect();
+        idx.sort_by_key(|&k| starts[k]);
+        rows = idx.iter().map(|&k| {
+            let mut r = rows[k];
+            r.seg = deploys.iter().rev().find(|(ts, _)| *ts <= starts[k]).map(|(ts, _)| *ts).unwrap_or(0);
+            r
+        }).collect();
+        labels.push((0, "before first ledger deploy".to_string()));
+        labels.extend(deploys.iter().cloned());
+    } else {
+        labels = child_names.clone();
+    }
+    let mut r = analyze(&rows, min_effect, boot, seed);
+    // Server children are model reloads, not deploys: consecutive children differ mostly in the
+    // sessions they happened to serve, so child-to-child verdicts are noise unless asked for.
+    let verdicts_on = !deploys.is_empty() || by_child;
+    if !verdicts_on { r.comparisons.clear(); }
+    use struktura::pulse::Verdict;
+    let regressed = ["solo", "contention"].iter().any(|k| r.comparisons.iter().rev()
+        .find(|c| c.kind == *k && c.verdict != Verdict::Insufficient)
+        .map(|c| c.verdict == Verdict::Slower).unwrap_or(false));
+    let num = |x: f64| if x.is_finite() { format!("{:.2}", x) } else { "null".to_string() };
+    let metric = if per_step { "step" } else { "token" };
+    let label_of = |seg: u64| labels.iter().find(|(t, _)| *t == seg).map(|(_, l)| l.replace('"', "'")).unwrap_or_default();
+    let short = |seg: u64| if deploys.is_empty() && seg > 0xFFFF { format!("{}:{}", seg >> 16, seg & 0xFFFF) } else { seg.to_string() };
+    if json {
+        for s in &r.segments {
+            println!("{{\"event\":\"segment\",\"seg\":{},\"first_row\":{},\"n\":{},\"solo_n\":{},\"busy_n\":{},\"level_ms\":{},\"contention_pct\":{},\"solo_mlen\":{},\"label\":\"{}\",\"median_ms\":{},\"median_tps\":{},\"median_ctx_k\":{},\"busy_share\":{}}}",
+                s.seg, s.first_row + 1, s.n, s.solo_n, s.busy_n, num(s.level_ms), num(s.contention_pct), num(s.solo_mlen), label_of(s.seg), num(s.median_ms), num(s.median_tps), num(s.median_ctx_k), num(s.busy_share));
+        }
+        for c in &r.comparisons {
+            println!("{{\"event\":\"deploy\",\"kind\":\"{}\",\"from\":{},\"to\":{},\"delta\":{},\"ci_low\":{},\"ci_high\":{},\"verdict\":\"{}\"}}",
+                c.kind, c.from, c.to, num(c.delta), num(c.ci_low), num(c.ci_high), c.verdict.as_str());
+        }
+        for x in &r.incidents {
+            println!("{{\"event\":\"incident\",\"row\":{},\"seg\":{},\"ms\":{},\"expected_ms\":{},\"z\":{}}}",
+                x.row + 1, x.seg, num(x.ms), num(x.expected_ms), num(x.z));
+        }
+        println!("{{\"event\":\"churn\",\"children\":{},\"span_h\":{},\"window_s\":{},\"cold_n\":{},\"warm_n\":{},\"cold_median_s\":{},\"warm_median_s\":{},\"cold_mean_s\":{},\"warm_mean_s\":{},\"cold_total_s\":{},\"excess_s\":{},\"other_model_rows\":{}}}",
+            ch.children, num(ch.span_h), churn_window, ch.cold_n, ch.warm_n, num(ch.cold_median_s), num(ch.warm_median_s), num(ch.cold_mean_s), num(ch.warm_mean_s), num(ch.cold_total_s), num(ch.excess_s), other_model);
+        println!("{{\"summary\":true,\"metric\":\"{}\",\"rows\":{},\"skipped\":{},\"ms_per_kctx\":{},\"slope_clamped\":{},\"verdicts\":{},\"min_effect_pct\":{},\"segments\":{},\"incidents\":{},\"regressed\":{}}}",
+            metric, r.rows, skipped, num(r.slope_ms_per_kctx), r.slope_clamped, verdicts_on, num(min_effect), r.segments.len(), r.incidents.len(), regressed);
+    } else {
+        println!("struktura pulse: {} requests, {} {}, metric = ms per {} ({} rows skipped)", r.rows, r.segments.len(), if deploys.is_empty() { "server children" } else { "deploy segments" }, metric, skipped);
+        if other_model > 0 { println!("  --model {}: {} rows of other models left out", want_model.as_deref().unwrap_or(""), other_model); }
+        if ch.children > 0 { println!("  model churn: {} server children served requests over {:.1} h ({:.1}/h); requests within {} s of a child's first request: {} (prompt read mean {:.2} s vs {:.2} s warm, {:.0} s excess)",
+            ch.children, ch.span_h, if ch.span_h > 0.0 { ch.children as f64 / ch.span_h } else { 0.0 }, churn_window, ch.cold_n, ch.cold_mean_s, ch.warm_mean_s, ch.excess_s); }
+        println!("  context cost (fitted inside deploys, solo requests): +{:.3} ms per 1K tokens of context", r.slope_ms_per_kctx);
+        if r.slope_clamped { println!("    (the fit came out negative: the traffic mix leaks into it, so no context adjustment is applied)"); }
+        println!("  {:>10} {:>5} {:>5} {:>5} {:>9} {:>11} {:>5} {:>8} {:>8} {:>6}", "deploy", "row", "solo", "busy", "solo_ms", "contention", "mlen", "raw_ms", "raw_tps", "ctx_K");
+        for s in &r.segments {
+            let cont = if s.contention_pct.is_finite() { format!("{:+.0}%", s.contention_pct) } else { "-".to_string() };
+            println!("  {:>10} {:>5} {:>5} {:>5} {:>9.2} {:>11} {:>5.2} {:>8.2} {:>8.1} {:>6.0}", short(s.seg), s.first_row + 1, s.solo_n, s.busy_n, s.level_ms, cont, s.solo_mlen, s.median_ms, s.median_tps, s.median_ctx_k);
+        }
+        if !labels.is_empty() {
+            if deploys.is_empty() { println!("  segments = server children (router pid:port; a pid hosts several models, each reload is a new child)"); }
+            else { println!("  deploys keyed on ledger kind:\"deploy\" rows (deploy = its unix ts):"); }
+            for s in &r.segments { println!("    {:>14} = {}", short(s.seg), label_of(s.seg)); }
+        }
+        if !verdicts_on { println!("  no deploy verdicts: segments are server children (model reloads), not deploys. Pass --deploys LEDGER (or --by-child to compare reloads anyway)."); }
+        if verdicts_on { println!("  verdicts need the whole 95% CI beyond +-{:.2} (solo: % of earlier deploy; contention: percentage points):", min_effect); }
+        for c in &r.comparisons {
+            if c.verdict == Verdict::Insufficient { continue; }
+            let unit = if c.kind == "solo" { "%" } else { "pp" };
+            println!("    {:<10} {} -> {}: {:+.1}{} [{:+.1}, {:+.1}]  {}", c.kind, short(c.from), short(c.to), c.delta, unit, c.ci_low, c.ci_high, c.verdict.as_str().to_uppercase());
+        }
+        let insufficient = r.comparisons.iter().filter(|c| c.verdict == Verdict::Insufficient).count();
+        if insufficient > 0 { println!("    ({} deploy(s) too short to judge: < {} solo rows)", insufficient, struktura::pulse::MIN_SEG_ROWS); }
+        println!("  incidents (> {} robust sd AND > {}x expected): {}", struktura::pulse::INCIDENT_Z, struktura::pulse::INCIDENT_RATIO, r.incidents.len());
+        for x in r.incidents.iter().take(15) {
+            println!("    row {:>5} {} {}: {:.1} ms vs {:.1} expected (z {:.0})", x.row + 1, if deploys.is_empty() { "child" } else { "deploy" }, short(x.seg), x.ms, x.expected_ms, x.z);
+        }
+        if r.incidents.len() > 15 { println!("    ... {} more (use --json)", r.incidents.len() - 15); }
+    }
+    process::exit(if regressed { 1 } else { 0 });
+}
+
+fn cmd_arms(args: &[String]) {
+    use struktura::arms::{rank, ArmData, Direction, Evidence, Outcome};
+    if args.len() < 3 || args[2] == "--help" {
+        println!("struktura arms <out.log>... [--min-effect PCT] [--lower-is-better] [--metric KEY] [--boot N] [--seed S] [--json]");
+        println!("  Rank the configurations (arms) of an experiment from labelled log lines:");
+        println!("    ub512<TAB>d0=3008 d100000=1484        arm + metrics");
+        println!("    pp256<TAB>gqa2<TAB>d0=2648tps        group + arm + metrics (compared only inside the group)");
+        println!("  Several logs = repeated runs. Every pair is compared on every shared metric:");
+        println!("    >= {} samples per arm: bootstrap 95% CI of the % difference of medians", struktura::arms::MIN_BOOT);
+        println!("    fewer: the difference must clear --min-effect (noise floor), else TIE");
+        println!("  --min-effect  noise floor in % (default 1.16 = 2x lab calibration CV)");
+        println!("  --cv PCT      per-run noise CV: single-run differences must clear 1.96*sqrt(2)*CV (5% false-win rate)");
+        println!("  direction: per metric by default (time/latency/tokens keys lower is better, else higher); --lower-is-better / --higher-is-better force one");
+        println!("  Workbench verdicts (config<TAB>task<TAB>sample<TAB>pass|fail<TAB>ttd_s=.. gen=..) are compared PAIRED by task:");
+        println!("    pass rate: exact sign test on tasks where one config passed more; numbers on passing samples: per-task ratio");
+        process::exit(if args.len() < 3 { 2 } else { 0 });
+    }
+    let (mut min_effect, mut dir, mut boot, mut seed, mut json) = (1.16f64, Direction::Auto, 2000usize, 42u64, false);
+    let mut cv: Option<f64> = None;
+    let mut only: Option<String> = None;
+    let mut files = Vec::new();
+    let mut i = 2;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--min-effect" => { i += 1; min_effect = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(min_effect); }
+            "--cv" => { i += 1; cv = args.get(i).and_then(|v| v.parse().ok()); }
+            "--lower-is-better" => dir = Direction::Lower,
+            "--higher-is-better" => dir = Direction::Higher,
+            "--boot" => { i += 1; boot = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(boot); }
+            "--seed" => { i += 1; seed = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(seed); }
+            "--metric" => { i += 1; only = args.get(i).cloned(); }
+            "--json" => json = true,
+            f if f.starts_with("--") => { eprintln!("arms: unknown option {}", f); process::exit(2); }
+            f => files.push(f.to_string()),
+        }
+        i += 1;
+    }
+    let mut data = ArmData::default();
+    for f in &files {
+        match std::fs::read_to_string(f) { Ok(t) => data.ingest(&t), Err(e) => { eprintln!("arms: {}: {}", f, e); process::exit(2); } }
+    }
+    if let Some(m) = &only { for v in data.values.values_mut() { v.retain(|k, _| k == m); } }
+    if data.order.len() < 2 { eprintln!("arms: need at least 2 labelled arms ({} labelled lines found)", data.lines); process::exit(2); }
+    // Two single runs differ by noise with sd sqrt(2) x CV; a 5% two-sided band is 1.96 x sqrt(2) x CV.
+    if let Some(c) = cv { let band = 1.959964 * std::f64::consts::SQRT_2 * c; if band > min_effect { min_effect = band; } }
+    let r = rank(&data, min_effect, dir, boot, seed);
+    let name = |g: &str, a: &str| if g.is_empty() { a.to_string() } else { format!("{}/{}", g, a) };
+    let out = |o: &Outcome| match o { Outcome::AWins => "a_wins", Outcome::BWins => "b_wins", Outcome::Tie => "tie", Outcome::Inconclusive => "inconclusive" };
+    let ev = |e: &Evidence| match e { Evidence::Bootstrap => "bootstrap", Evidence::Floor => "floor", Evidence::Paired => "paired" };
+    if json {
+        for p in &r.pairs {
+            let n = |x: f64| if x.is_finite() { format!("{:.4}", x) } else { "null".to_string() };
+            println!("{{\"event\":\"pair\",\"group\":\"{}\",\"metric\":\"{}\",\"a\":\"{}\",\"b\":\"{}\",\"a_median\":{},\"b_median\":{},\"delta_pct\":{},\"ci_low\":{},\"ci_high\":{},\"evidence\":\"{}\",\"outcome\":\"{}\",\"n_discordant\":{},\"p_value\":{}}}",
+                p.group, p.metric, p.a, p.b, n(p.a_median), n(p.b_median), n(p.delta_pct), n(p.ci_low), n(p.ci_high), ev(&p.evidence), out(&p.outcome), p.n_discordant, n(p.p_value));
+        }
+        for s in &r.scores {
+            println!("{{\"event\":\"arm\",\"group\":\"{}\",\"arm\":\"{}\",\"samples\":{},\"wins\":{},\"ties\":{},\"losses\":{},\"inconclusive\":{}}}",
+                s.group, s.arm, s.samples, s.wins, s.ties, s.losses, s.inconclusive);
+        }
+        let dom: Vec<String> = r.dominant.iter().map(|(g, a)| format!("\"{}\"", name(g, a))).collect();
+        println!("{{\"summary\":true,\"lines\":{},\"arms\":{},\"pairs\":{},\"min_effect_pct\":{},\"higher_is_better\":{},\"dominant\":[{}]}}",
+            r.lines, r.scores.len(), r.pairs.len(), min_effect, dir != Direction::Lower, dom.join(","));
+    } else {
+        println!("struktura arms: {} labelled lines, {} arms, {} comparisons ({} is better, floor {:.2}%)",
+            r.lines, r.scores.len(), r.pairs.len(), match dir { Direction::Lower => "lower", Direction::Higher => "higher", Direction::Auto => "per metric: time-like lower, else higher" }, min_effect);
+        for p in &r.pairs {
+            let who = match p.outcome { Outcome::AWins => format!("{} wins", p.a), Outcome::BWins => format!("{} wins", p.b),
+                Outcome::Tie => "tie".to_string(), Outcome::Inconclusive => "inconclusive".to_string() };
+            if p.evidence == Evidence::Paired {
+                let what = if p.metric.starts_with("pass_rate") { format!("{:.0}% vs {:.0}% pass ({:+.0} pp)", 100.0 * p.a_median, 100.0 * p.b_median, p.delta_pct) }
+                    else { format!("geomean {:+.1}% (b vs a)", p.delta_pct) };
+                println!("  {:<12} {:<26} {:>10} vs {:<10} {}  paired: {} discordant task(s), sign test p={:.3}  {}",
+                    if p.group.is_empty() { "-" } else { &p.group }, p.metric, p.a, p.b, what, p.n_discordant, p.p_value, who);
+                continue;
+            }
+            let ci = if p.evidence == Evidence::Bootstrap { format!(" [{:+.1}, {:+.1}]", p.ci_low, p.ci_high) } else { String::new() };
+            println!("  {:<12} {:<10} {:>10} vs {:<10} {:>9} vs {:<9} {:+6.1}%{}  {:<9} {}",
+                if p.group.is_empty() { "-" } else { &p.group }, p.metric, p.a, p.b, p.a_median, p.b_median, p.delta_pct, ci, ev(&p.evidence), who);
+        }
+        println!("  arm scores (wins / ties / losses / inconclusive):");
+        for s in &r.scores {
+            println!("    {:<24} {:>2} / {:>2} / {:>2} / {:>2}   ({} sample(s))", name(&s.group, &s.arm), s.wins, s.ties, s.losses, s.inconclusive, s.samples);
+        }
+        let max_tasks = r.pairs.iter().filter(|p| p.evidence == Evidence::Paired && p.metric.starts_with("pass_rate"))
+            .filter_map(|p| p.metric.split('(').nth(1)?.split_whitespace().next()?.parse::<usize>().ok()).max();
+        if let Some(t) = max_tasks {
+            if t < 6 { println!("  power: {} task(s) per config; a paired sign test needs >= 6 tasks where configs differ to reach p < 0.05 (min p = 2^(1-n)) -> add tasks or this can only say tie/inconclusive", t); }
+        }
+        if r.dominant.is_empty() { println!("  no dominant arm (needs: never loses, never inconclusive, wins at least once)"); }
+        for (g, a) in &r.dominant { println!("  DOMINANT: {}", name(g, a)); }
+    }
+}
+
+fn cmd_lab(args: &[String]) {
+    use struktura::lab::analyze;
+    if args.len() < 3 || args[2] == "--help" {
+        println!("struktura lab <ledger.jsonl> [--json | --md] [--fragile]");
+        println!("  What an experiment ledger has established, and how well the lab predicts its own results:");
+        println!("  noise floor (calibration CV), latest verdict per prediction (void supersedes, never a fail),");
+        println!("  per-file status (CONFIRMED / FALSIFIED / MIXED / VOID), margins vs thresholds, fragile verdicts");
+        println!("  (inside the noise floor), flipped verdicts, failed jobs, and lab-window utilisation.");
+        println!("  --md  markdown section for a facts file    --fragile  list every fragile / flipped prediction");
+        process::exit(if args.len() < 3 { 2 } else { 0 });
+    }
+    let (mut json, mut md, mut list) = (false, false, false);
+    for a in &args[3..] {
+        match a.as_str() { "--json" => json = true, "--md" => md = true, "--fragile" => list = true,
+            o => { eprintln!("lab: unknown option {}", o); process::exit(2); } }
+    }
+    let text = match std::fs::read_to_string(&args[2]) { Ok(t) => t, Err(e) => { eprintln!("lab: {}: {}", args[2], e); process::exit(2); } };
+    let r = analyze(&text);
+    if r.rows == 0 { eprintln!("lab: empty ledger"); process::exit(2); }
+    let num = |x: f64| if x.is_finite() { format!("{:.3}", x) } else { "null".to_string() };
+    let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
+    let scored = r.predictions.iter().filter(|p| p.verdict == "pass" || p.verdict == "fail").count();
+    let passed = r.predictions.iter().filter(|p| p.verdict == "pass").count();
+    let util = if r.window_min > 0.0 { 100.0 * r.job_min_in_windows / r.window_min } else { f64::NAN };
+    if json {
+        for f in &r.files {
+            println!("{{\"event\":\"pred_file\",\"pred\":\"{}\",\"status\":\"{}\",\"pass\":{},\"fail\":{},\"void\":{},\"missing\":{}}}",
+                esc(&f.pred), f.status, f.pass, f.fail, f.void, f.missing);
+        }
+        for p in &r.predictions {
+            println!("{{\"event\":\"prediction\",\"pred\":\"{}\",\"name\":\"{}\",\"verdict\":\"{}\",\"margin_pct\":{},\"fragile\":{},\"flips\":{},\"measurements\":{},\"agreeing\":{}}}",
+                esc(&p.pred), esc(&p.name), esc(&p.verdict), p.margin_pct.map(num).unwrap_or("null".into()),
+                p.margin_pct.map(|m| m.abs() < r.pair_band_pct.max(r.floor_pct) && (p.verdict == "pass" || p.verdict == "fail")).unwrap_or(false), p.flips, p.measurements, p.agreeing);
+        }
+        println!("{{\"summary\":true,\"rows\":{},\"bad_rows\":{},\"cal_n\":{},\"cal_mean_tps\":{},\"cal_cv_pct\":{},\"floor_pct\":{},\"pair_band_pct\":{},\"predictions\":{},\"scored\":{},\"passed\":{},\"fragile\":{},\"flipped\":{},\"easy\":{},\"replicated\":{},\"contested\":{},\"median_pass_margin_pct\":{},\"jobs\":{},\"jobs_failed\":{},\"window_min\":{},\"job_min_in_windows\":{},\"utilisation_pct\":{},\"cal_min\":{},\"deploys\":{},\"constraints\":{}}}",
+            r.rows, r.bad_rows, r.cal_n, num(r.cal_mean_tps), num(r.cal_cv_pct), num(r.floor_pct), num(r.pair_band_pct), r.predictions.len(), scored, passed,
+            r.fragile, r.flipped, r.easy, r.replicated, r.contested, num(r.median_pass_margin), r.jobs, r.jobs_failed, num(r.window_min), num(r.job_min_in_windows), num(util), num(r.cal_min),
+            r.deploys.len(), r.constraints.len());
+        return;
+    }
+    let h = if md { "## " } else { "" };
+    let b = if md { "- " } else { "  " };
+    println!("{}struktura lab: {} ledger rows ({} unreadable)", h, r.rows, r.bad_rows);
+    let kinds: Vec<String> = r.kinds.iter().map(|(k, n)| format!("{} {}", n, k)).collect();
+    println!("{}rows: {}", b, kinds.join(", "));
+    println!("{}noise floor: calibration code t/s n={} mean {:.1}, CV {:.3}% -> floor 2xCV {:.2}%; 95% band of a single-run difference 1.96*sqrt2*CV = {:.2}% (2xCV alone lets ~{:.0}% of no-effect single-run comparisons through)", b, r.cal_n, r.cal_mean_tps, r.cal_cv_pct, r.floor_pct, r.pair_band_pct, 100.0 * struktura::lab::two_sided_tail(r.floor_pct / (std::f64::consts::SQRT_2 * r.cal_cv_pct)));
+    println!("{}predictions: {} (latest verdict each), {} scored, {} pass ({:.0}%), median pass margin {:+.1}%", b, r.predictions.len(), scored, passed,
+        if scored > 0 { 100.0 * passed as f64 / scored as f64 } else { f64::NAN }, r.median_pass_margin);
+    println!("{}replication: {} prediction(s) measured independently 2+ times and all agree, {} contested (independent measurements disagree); re-scoring the same log does not count", b, r.replicated, r.contested);
+    println!("{}self-calibration: {} fragile (|margin| inside the single-run band: a re-run could flip them), {} flipped on re-scoring, {} easy passes (margin > 3 floors: thresholds set below the expected effect teach little)", b, r.fragile, r.flipped, r.easy);
+    println!("{}lab windows: {:.0} min open, {:.0} min of jobs inside -> {:.0}% utilisation; calibration {:.0} min; jobs {} ({} failed)",
+        b, r.window_min, r.job_min_in_windows, util, r.cal_min, r.jobs, r.jobs_failed);
+    for (ts, l) in &r.deploys { println!("{}deploy @{:.0}: {}", b, ts, l); }
+    for c in &r.constraints { println!("{}constraint: {}", b, c); }
+    if md { println!("\n| pred | status | pass | fail | void | missing |\n|---|---|---|---|---|---|"); }
+    else { println!("  {:<16} {:<10} {:>4} {:>4} {:>4} {:>7}", "pred", "status", "pass", "fail", "void", "missing"); }
+    for f in &r.files {
+        if md { println!("| {} | {} | {} | {} | {} | {} |", f.pred, f.status, f.pass, f.fail, f.void, f.missing); }
+        else { println!("  {:<16} {:<10} {:>4} {:>4} {:>4} {:>7}", f.pred, f.status, f.pass, f.fail, f.void, f.missing); }
+    }
+    if list || md {
+        let fragile: Vec<_> = r.predictions.iter().filter(|p| (p.verdict == "pass" || p.verdict == "fail")
+            && p.margin_pct.map(|m| m.abs() < r.pair_band_pct.max(r.floor_pct)).unwrap_or(false)).collect();
+        let flipped: Vec<_> = r.predictions.iter().filter(|p| p.flips > 0).collect();
+        if !fragile.is_empty() || !flipped.is_empty() { println!("{}", if md { "\n**Fragile / flipped (re-measure before relying on them):**" } else { "  fragile / flipped:" }); }
+        for p in fragile {
+            let rep = if p.measurements >= 2 { format!("{}/{} independent measurements agree", p.agreeing, p.measurements) } else { "awaiting replication".to_string() };
+            println!("{}[{}] {} :: {} margin {:+.2}% (single-run band {:.2}%) value {} -- {}", b, p.verdict, p.pred, p.name, p.margin_pct.unwrap(), r.pair_band_pct.max(r.floor_pct), p.value, rep);
+        }
+        for p in r.predictions.iter().filter(|p| p.measurements >= 2 && p.agreeing < p.measurements) {
+            println!("{}[CONTESTED] {} :: {} latest {} but only {}/{} independent measurements agree", b, p.pred, p.name, p.verdict, p.agreeing, p.measurements);
+        }
+        for p in flipped { println!("{}[{}] {} :: {} flipped {}x on re-scoring", b, p.verdict, p.pred, p.name, p.flips); }
+    }
+}
+
+fn cmd_power(args: &[String]) {
+    use struktura::power::{min_detectable, runs_needed, sign_test_power, tasks_needed};
+    if args.iter().any(|a| a == "--help") || args.len() < 3 {
+        println!("struktura power  how much evidence an experiment needs before its verdict means anything");
+        println!("  runs:  struktura power (--cv PCT | --ledger lab-ledger.jsonl) [--effect PCT | --runs N]");
+        println!("         runs per arm to detect EFFECT% given per-run noise CV% (ledger: calibration arm CV),");
+        println!("         or the smallest effect N runs per arm can detect; with neither, a table");
+        println!("  tasks: struktura power --tasks [N] --discordant D --favour Q");
+        println!("         paired sign test (workbench): D = share of tasks where configs differ, Q = share of those");
+        println!("         the better config wins; prints exact power at N tasks, or the tasks needed");
+        println!("  --alpha A (default 0.05)  --power P (default 0.8)");
+        process::exit(if args.len() < 3 { 2 } else { 0 });
+    }
+    let (mut cv, mut effect, mut runs, mut alpha, mut power) = (None::<f64>, None::<f64>, None::<usize>, 0.05f64, 0.8f64);
+    let (mut tasks_mode, mut tasks, mut disc, mut fav) = (false, None::<usize>, None::<f64>, None::<f64>);
+    let mut i = 2;
+    let val = |i: usize| args.get(i).and_then(|v| v.parse::<f64>().ok());
+    while i < args.len() {
+        match args[i].as_str() {
+            "--cv" => { i += 1; cv = val(i); }
+            "--ledger" => { i += 1; match args.get(i).map(std::fs::read_to_string) {
+                Some(Ok(t)) => { let r = struktura::lab::analyze(&t); if r.cal_cv_pct.is_finite() { cv = Some(r.cal_cv_pct); println!("noise from ledger calibration arm: n={} CV {:.3}%", r.cal_n, r.cal_cv_pct); } else { eprintln!("power: ledger has < 2 calibration rows"); process::exit(2); } }
+                _ => { eprintln!("power: cannot read ledger"); process::exit(2); } } }
+            "--effect" => { i += 1; effect = val(i); }
+            "--runs" => { i += 1; runs = val(i).map(|x| x as usize); }
+            "--alpha" => { i += 1; alpha = val(i).unwrap_or(alpha); }
+            "--power" => { i += 1; power = val(i).unwrap_or(power); }
+            "--tasks" => { tasks_mode = true; if let Some(n) = args.get(i + 1).and_then(|v| v.parse::<usize>().ok()) { tasks = Some(n); i += 1; } }
+            "--discordant" => { i += 1; disc = val(i); }
+            "--favour" | "--favor" => { i += 1; fav = val(i); }
+            o => { eprintln!("power: unknown option {}", o); process::exit(2); }
+        }
+        i += 1;
+    }
+    if !(alpha > 0.0 && alpha < 1.0 && power > 0.0 && power < 1.0) { eprintln!("power: alpha and power must be in (0,1)"); process::exit(2); }
+    if tasks_mode {
+        let (Some(d), Some(q)) = (disc, fav) else { eprintln!("power: --tasks needs --discordant D and --favour Q"); process::exit(2) };
+        if !(d > 0.0 && d <= 1.0 && q > 0.5 && q <= 1.0) { eprintln!("power: need 0 < D <= 1 and 0.5 < Q <= 1"); process::exit(2); }
+        match tasks {
+            Some(n) => println!("paired sign test, {} tasks, configs differ on {:.0}% of tasks, better config wins {:.0}% of those: power {:.1}% (alpha {})",
+                n, 100.0 * d, 100.0 * q, 100.0 * sign_test_power(n, d, q, alpha), alpha),
+            None => match tasks_needed(d, q, alpha, power, 2000) {
+                Some(t) => println!("paired sign test: {} tasks needed for {:.0}% power (configs differ on {:.0}% of tasks, better config wins {:.0}% of those, alpha {}); fewer than 6 discordant tasks can never reach p < 0.05",
+                    t, 100.0 * power, 100.0 * d, 100.0 * q, alpha),
+                None => println!("paired sign test: more than 2000 tasks needed — the effect is too small to detect this way"),
+            },
+        }
+        return;
+    }
+    let Some(cv) = cv else { eprintln!("power: give --cv PCT or --ledger FILE (or --tasks ...)"); process::exit(2) };
+    match (effect, runs) {
+        (Some(e), _) => println!("runs per arm to detect {:.2}% at CV {:.3}% (alpha {}, power {:.0}%): {}", e, cv, alpha, 100.0 * power, runs_needed(cv, e, alpha, power)),
+        (None, Some(n)) => println!("smallest effect {} runs per arm can detect at CV {:.3}% (alpha {}, power {:.0}%): {:.2}%", n, cv, alpha, 100.0 * power, min_detectable(cv, n, alpha, power)),
+        (None, None) => {
+            println!("CV {:.3}% per run (alpha {}, power {:.0}%); noise floor 2xCV = {:.2}%", cv, alpha, 100.0 * power, (2.0 * cv).max(1.0));
+            println!("  {:>9}  {:>12}", "effect %", "runs/arm");
+            for e in [0.5, 1.0, (2.0 * cv).max(1.0), 2.0, 3.0, 5.0, 10.0] { println!("  {:>9.2}  {:>12}", e, runs_needed(cv, e, alpha, power)); }
+            println!("  a prediction is informative when its threshold sits within one floor of the predicted effect;");
+            println!("  thresholds far below it pass easily and teach little (see `struktura lab`).");
+        }
     }
 }
