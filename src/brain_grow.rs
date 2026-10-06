@@ -137,6 +137,12 @@ impl<const B: usize, const G: usize> Grower<B, G> {
     /// Evaluate every candidate on random half-splits of memory (held-out error reduction).
     pub fn check<const N: usize, const D: usize, const A: usize>(&mut self, brain: &Brain<N, D, A>) -> Growth {
         let _ = K;
+        // The brain's residual on each stored episode does not depend on the candidate or the
+        // split: compute it once per check (same values as computing it inside the loops).
+        let mut res = [0.0f32; N];
+        for (s, r) in res.iter_mut().enumerate() {
+            if let Some(e) = brain.episode(s) { *r = e.reward - brain.estimates(&e.key)[e.action as usize].expected; }
+        }
         let mut best = (None, 0.0f32);
         let mut cands = 0u16;
         let mut idx = 0usize;
@@ -155,7 +161,7 @@ impl<const B: usize, const G: usize> Grower<B, G> {
                     if !self.coin() { continue; }
                     let mut base = [0.0f32; B]; for i in 0..B { base[i] = e.key[i]; }
                     let fv = f.eval(&base);
-                    let r = e.reward - brain.estimates(&e.key)[e.action as usize].expected;
+                    let r = res[s];
                     sfr[e.action as usize] += fv * r; sff[e.action as usize] += fv * fv;
                 }
                 // score on the other half (replay the same coins)
@@ -167,7 +173,7 @@ impl<const B: usize, const G: usize> Grower<B, G> {
                     let a = e.action as usize;
                     let mut base = [0.0f32; B]; for i in 0..B { base[i] = e.key[i]; }
                     let fv = f.eval(&base);
-                    let r = e.reward - brain.estimates(&e.key)[a].expected;
+                    let r = res[s];
                     let beta = if sff[a] > 1e-6 { sfr[a] / sff[a] } else { 0.0 };
                     before += r * r;
                     let rr = r - beta * fv; after += rr * rr;
