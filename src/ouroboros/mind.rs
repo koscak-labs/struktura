@@ -3,9 +3,17 @@
 //! the lab something, then estimates the information yield of each candidate
 //! experiment and cites the past predictions its estimate rests on.
 //!
-//! Situation (6 features), known before an experiment runs:
-//! relative claim (A vs B), how ambitious the threshold is in noise bands,
-//! equivalence test, speed metric, quality metric, constant.
+//! Situation (9 features), known before an experiment runs:
+//! - the claim: relative (A vs B), threshold ambition in noise bands,
+//!   equivalence test, speed metric, quality metric;
+//! - the knob's own history: prior effect in noise bands, how often the knob
+//!   was measured, and how often its past tests were decisive;
+//! - a constant.
+//!
+//! A past prediction is attributed to a knob when a token of its name equals
+//! one of the knob's arm labels (e.g. `ub1024`, `draft3`); history features of
+//! a past prediction use only predictions scored before it (no leakage).
+//!
 //! Reward, known after it was scored: 1 = decisive verdict; 0.5 = an easy pass
 //! (margin > 3 noise floors: it was a safe bet); 0 = fragile (margin inside the
 //! single-run band) or void (instrument bug: the run taught nothing).
@@ -17,8 +25,9 @@
 
 use crate::brain::Brain;
 use crate::lab::LabReport;
+use super::knobs::{parse_knobs, Knob, BUILTIN};
 
-pub const D: usize = 6;
+pub const D: usize = 9;
 pub type Situation = [f32; D];
 
 fn has(name: &str, words: &[&str]) -> bool {
@@ -29,20 +38,72 @@ fn has(name: &str, words: &[&str]) -> bool {
 const SPEED: &[&str] = &["tps", "ms", "fast", "slow", "pp", "prefill", "decode", "ttd", "speed", "_s", "latency", "throughput"];
 const QUALITY: &[&str] = &["pass", "found", "needle", "correct", "acc", "identical", "quality", "solved", "ppl"];
 
-/// Situation of a scored prediction (from lab-score's op and value text) as it looked before the run.
-pub fn situation_of(op: &str, value: &str, name: &str, band_pct: f64) -> Situation {
-    let relative = op.ends_with('%');
-    let thr = if relative { crate::ouroboros::learn::parse_relative(value).map(|(_, _, p)| p).unwrap_or(0.0) } else { 0.0 };
-    let ambition = if relative && band_pct > 0.0 { (thr / band_pct).min(10.0) / 10.0 } else { 0.0 };
-    [relative as u8 as f32, ambition as f32, (op == "~%") as u8 as f32,
-     has(name, SPEED) as u8 as f32, has(name, QUALITY) as u8 as f32, 1.0]
+/// What the lab knew about a knob before an experiment.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct History {
+    /// Scored predictions attributed to the knob.
+    pub n: usize,
+    /// Of those, decisive verdicts (reward 1).
+    pub decisive: usize,
+    /// Sum of |measured effect| in noise bands over relative predictions, and their count.
+    pub effect_bands_sum: f64,
+    pub effect_n: usize,
 }
 
-/// Situation of a planned challenger: a relative claim on `metric` with `threshold_pct`.
+impl History {
+    fn features(&self, prior_effect_bands: Option<f64>) -> [f32; 3] {
+        let eff = prior_effect_bands.or(if self.effect_n > 0 { Some(self.effect_bands_sum / self.effect_n as f64) } else { None });
+        let e = eff.map(|e| (e.abs().min(10.0) / 10.0) as f32).unwrap_or(0.0);
+        let times = self.n as f32 / (self.n as f32 + 2.0);
+        let rate = (self.decisive as f32 + 0.5) / (self.n as f32 + 1.0);
+        [e, times, rate]
+    }
+}
+
+fn claim(relative: bool, ambition: f64, equivalence: bool, name_or_metric: &str) -> [f32; 5] {
+    let quality = has(name_or_metric, QUALITY);
+    let speed = has(name_or_metric, SPEED) || (relative && !quality);
+    [relative as u8 as f32, ambition as f32, equivalence as u8 as f32, speed as u8 as f32, quality as u8 as f32]
+}
+
+fn join(c: [f32; 5], h: [f32; 3]) -> Situation {
+    [c[0], c[1], c[2], c[3], c[4], h[0], h[1], h[2], 1.0]
+}
+
+fn ambition(thr: f64, band: f64) -> f64 {
+    if band > 0.0 && thr.is_finite() { (thr.abs() / band).min(10.0) / 10.0 } else { 0.0 }
+}
+
+/// Situation of a scored prediction (from lab-score's op and value text) as it looked before the run,
+/// given the history of its knob up to then.
+pub fn situation_of(op: &str, value: &str, name: &str, band_pct: f64, history: &History) -> Situation {
+    let relative = op.ends_with('%');
+    let thr = if relative { super::learn::parse_relative(value).map(|(_, _, p)| p).unwrap_or(0.0) } else { 0.0 };
+    join(claim(relative, if relative { ambition(thr, band_pct) } else { 0.0 }, op == "~%", name), history.features(None))
+}
+
+/// Situation of a planned relative test on `metric` at `threshold_pct`, with no knob history.
+/// Kept for callers that do not know the knob; prefer [`Mind::situation_for`].
 pub fn situation_planned(metric: &str, threshold_pct: f64, band_pct: f64) -> Situation {
-    let ambition = if band_pct > 0.0 { (threshold_pct / band_pct).min(10.0) / 10.0 } else { 0.0 };
-    let quality = has(metric, QUALITY);
-    [1.0, ambition as f32, 0.0, (!quality) as u8 as f32, quality as u8 as f32, 1.0]
+    join(claim(true, ambition(threshold_pct, band_pct), false, metric), History::default().features(None))
+}
+
+/// Tokens of a prediction name (split on anything that is not a letter or digit).
+fn tokens(name: &str) -> impl Iterator<Item = String> + '_ {
+    name.split(|c: char| !c.is_ascii_alphanumeric()).filter(|t| !t.is_empty()).map(|t| t.to_ascii_lowercase())
+}
+
+/// Knob a prediction is about: a name token equal to one of the knob's arm labels that mixes
+/// letters and digits (`ub512`, `draft3`), or to the knob name followed by a value (`chunk248`).
+/// Plain words and numbers (`stock`, `64`) are too generic to attribute by.
+fn knob_of<'a>(name: &str, knobs: &'a [Knob]) -> Option<&'a Knob> {
+    let toks: Vec<String> = tokens(name).collect();
+    knobs.iter().find(|k| k.values.iter().any(|v| {
+        let label = k.arm_of(v).1.to_ascii_lowercase();
+        let specific = label.chars().any(|c| c.is_ascii_digit()) && label.chars().any(|c| c.is_ascii_alphabetic());
+        let named = format!("{}{}", k.name.to_ascii_lowercase(), v.to_ascii_lowercase());
+        toks.iter().any(|t| (specific && *t == label) || *t == named)
+    }))
 }
 
 pub struct Mind {
@@ -50,6 +111,9 @@ pub struct Mind {
     /// "pred::name" per memory slot, for citations.
     labels: Vec<String>,
     pub episodes: usize,
+    band_pct: f64,
+    /// Knob history after the whole ledger, by knob name.
+    history: Vec<(String, History)>,
 }
 
 #[derive(Clone, Debug)]
@@ -63,14 +127,22 @@ pub struct Yield {
 }
 
 impl Mind {
-    /// Learn from every scored prediction in the ledger (latest verdict each, in time order).
+    /// Learn from every scored prediction in the ledger, attributing predictions to the built-in knobs.
     pub fn from_lab(lab: &LabReport) -> Self {
+        let knobs = parse_knobs(BUILTIN).unwrap_or_default();
+        Self::from_lab_knobs(lab, &knobs)
+    }
+
+    /// Learn from every scored prediction (latest verdict each, in time order), attributing each to
+    /// one of `knobs` when its name names one of the knob's arms.
+    pub fn from_lab_knobs(lab: &LabReport, knobs: &[Knob]) -> Self {
         let mut brain: Box<Brain<256, D, 1>> = Box::new(Brain::new(0.0, 1.0));
         let mut labels = vec![String::new(); 256];
         let band = lab.pair_band_pct.max(lab.floor_pct);
         let mut preds: Vec<&crate::lab::Prediction> = lab.predictions.iter()
             .filter(|p| matches!(p.verdict.as_str(), "pass" | "fail" | "void")).collect();
         preds.sort_by(|a, b| a.ts.partial_cmp(&b.ts).unwrap_or(std::cmp::Ordering::Equal).then(a.pred.cmp(&b.pred)).then(a.name.cmp(&b.name)));
+        let mut history: Vec<(String, History)> = knobs.iter().map(|k| (k.name.clone(), History::default())).collect();
         let mut episodes = 0;
         for p in preds {
             let reward = match (p.verdict.as_str(), p.margin_pct) {
@@ -79,16 +151,41 @@ impl Mind {
                 ("pass", Some(m)) if m > 3.0 * lab.floor_pct => 0.5,
                 _ => 1.0,
             };
-            let x = situation_of(&p.op, &p.value, &p.name, band);
-            let before: Vec<bool> = (0..256).map(|s| brain.episode(s).is_some()).collect();
-            brain.learn(&x, 0, reward);
-            // Find the slot that changed (new or replaced) to label it.
-            let slot = (0..256).find(|&s| brain.episode(s).map(|e| e.key == x && e.reward == reward).unwrap_or(false) && !before[s])
-                .or_else(|| (0..256).rev().find(|&s| brain.episode(s).map(|e| e.key == x && e.reward == reward).unwrap_or(false)));
-            if let Some(s) = slot { labels[s] = format!("{}::{}", p.pred, p.name); }
+            let knob = knob_of(&p.name, knobs).map(|k| k.name.clone());
+            let h = knob.as_ref().and_then(|k| history.iter().find(|(n, _)| n == k)).map(|(_, h)| *h).unwrap_or_default();
+            let x = situation_of(&p.op, &p.value, &p.name, band, &h);
+            if let Some(s) = brain.learn(&x, 0, reward) { labels[s] = format!("{}::{}", p.pred, p.name); }
             episodes += 1;
+            // Update the knob's history only after its situation was taken (no leakage).
+            if let Some(k) = knob {
+                if let Some((_, h)) = history.iter_mut().find(|(n, _)| *n == k) {
+                    h.n += 1;
+                    if reward >= 1.0 { h.decisive += 1; }
+                    if let Some((d, _, _)) = super::learn::parse_relative(&p.value) {
+                        if band > 0.0 { h.effect_bands_sum += d.abs() / band; h.effect_n += 1; }
+                    }
+                }
+            }
         }
-        Mind { brain, labels, episodes }
+        Mind { brain, labels, episodes, band_pct: band, history }
+    }
+
+    /// History of `knob` over the whole ledger.
+    pub fn history(&self, knob: &str) -> History {
+        self.history.iter().find(|(n, _)| n == knob).map(|(_, h)| *h).unwrap_or_default()
+    }
+
+    /// Situation of a planned challenger test: the knob's metric at `threshold_pct`, with the knob's
+    /// history and, when job logs measured this value already, its observed effect (percent, positive
+    /// = better) taken as the prior effect.
+    pub fn situation_for(&self, knob: &Knob, threshold_pct: f64, observed_effect_pct: Option<f64>) -> Situation {
+        let prior = observed_effect_pct.and_then(|e| if self.band_pct > 0.0 { Some(e / self.band_pct) } else { None });
+        join(claim(true, ambition(threshold_pct, self.band_pct), false, &knob.metric), self.history(&knob.name).features(prior))
+    }
+
+    /// Expected information yield of a challenger test (see [`Mind::situation_for`]).
+    pub fn estimate_challenger(&self, knob: &Knob, threshold_pct: f64, observed_effect_pct: Option<f64>) -> Yield {
+        self.estimate(&self.situation_for(knob, threshold_pct, observed_effect_pct))
     }
 
     pub fn estimate(&self, x: &Situation) -> Yield {
@@ -138,5 +235,69 @@ mod tests {
         let lab = crate::lab::analyze(&ledger(&[]));
         let m = Mind::from_lab(&lab);
         assert!(m.estimate(&situation_planned("code_tps", 1.6, 1.6)).abstained);
+    }
+
+    #[test]
+    fn attributes_predictions_to_knobs_by_arm_label() {
+        let knobs = parse_knobs(BUILTIN).unwrap();
+        assert_eq!(knob_of("ub1024-faster-than-256-at-100K", &knobs).map(|k| k.name.as_str()), Some("ub"));
+        assert_eq!(knob_of("draft3-beats-draft7-code_tps", &knobs).map(|k| k.name.as_str()), Some("draft"));
+        assert_eq!(knob_of("gqa2-5pct-at-64K", &knobs), None, "no knob arm named");
+        assert_eq!(knob_of("stock-short", &knobs), None, "a plain alias (`stock`) does not attribute");
+        assert_eq!(knob_of("chunk248-piggyback-beats-64-sum", &knobs).map(|k| k.name.as_str()), Some("chunk"), "knob name + value does");
+    }
+
+    #[test]
+    fn a_knob_whose_tests_were_decisive_outranks_one_whose_tests_were_fragile() {
+        // Same claim shape (relative, same threshold), different knob histories:
+        // ub's past tests were decisive (margin between the 1.95% band and 3 floors = 4.22%),
+        // draft's were fragile (margin inside the band).
+        let mut rows = Vec::new();
+        for i in 0..10 {
+            rows.push((if i % 2 == 0 { "ub512-faster" } else { "ub1024-faster" }, ">%", "105 vs 100 (5.00%, need >% 2%)", "pass"));
+            rows.push((if i % 2 == 0 { "draft3-faster" } else { "draft5-faster" }, ">%", "101 vs 100 (1.00%, need >% 0.5%)", "pass"));
+        }
+        let lab = crate::lab::analyze(&ledger(&rows));
+        let knobs = parse_knobs(BUILTIN).unwrap();
+        let m = Mind::from_lab_knobs(&lab, &knobs);
+        let (ub, draft) = (knobs.iter().find(|k| k.name == "ub").unwrap(), knobs.iter().find(|k| k.name == "draft").unwrap());
+        assert_eq!((m.history("ub").n, m.history("ub").decisive), (10, 10));
+        assert_eq!((m.history("draft").n, m.history("draft").decisive), (10, 0));
+        let band = lab.pair_band_pct.max(lab.floor_pct);
+        let y_ub = m.estimate_challenger(ub, band, None);
+        let y_draft = m.estimate_challenger(draft, band, None);
+        std::println!("synthetic: ub challenger yield {:.3}, draft challenger yield {:.3}", y_ub.expected, y_draft.expected);
+        assert!(!y_ub.abstained && !y_draft.abstained);
+        assert!(y_ub.expected > y_draft.expected + 0.3, "{:?} vs {:?}", y_ub, y_draft);
+    }
+
+    /// Falsifier on the real lab: challengers must get different yields. Reads the live ledger and job
+    /// logs from STRUKTURA_LAB_DIR (ledger.jsonl, lab-*.out); skipped when absent (lab data is not
+    /// committed).
+    #[test]
+    fn live_ledger_challengers_get_different_yields() {
+        let dir = std::env::var("STRUKTURA_LAB_DIR").unwrap_or_else(|_| "/tmp/claude-1000/-home-yin/05eb9a0d-7dac-4311-a190-0501e9f40dbe/scratchpad/lab".into());
+        let Ok(ledger) = std::fs::read_to_string(format!("{}/ledger.jsonl", dir)) else { std::println!("live ledger absent: skipped"); return };
+        let logs: Vec<(String, String)> = ["115", "120", "130", "160"].iter()
+            .filter_map(|n| std::fs::read_to_string(format!("{}/lab-{}.out", dir, n)).ok().map(|t| (format!("lab-{}.out", n), t))).collect();
+        let obs = super::super::observe(&ledger, &logs);
+        let lessons = super::super::learn::learn(&obs);
+        let knobs = parse_knobs(BUILTIN).unwrap();
+        let cons = super::super::knobs::constraints(&[], &obs.lab.constraints);
+        let ag = super::super::agenda::agenda(&obs, &lessons, &knobs, &cons);
+        let m = Mind::from_lab_knobs(&obs.lab, &knobs);
+        let mut ys = Vec::new();
+        for it in ag.iter().filter(|i| i.kind == super::super::agenda::Kind::Challenger) {
+            let k = knobs.iter().find(|k| k.name == it.knob).unwrap();
+            let thr = super::super::design::design(it, k, &lessons, obs.lab.cal_cv_pct, 0).map(|d| d.threshold_pct).unwrap_or(lessons.band_pct);
+            let y = m.estimate_challenger(k, thr, it.observed_effect_pct);
+            std::println!("live: {}={} yield {:.3} (evidence {:.1}, knob history n={} decisive={}) cites {:?}",
+                it.knob, it.value, y.expected, y.evidence, m.history(&it.knob).n, m.history(&it.knob).decisive, y.cites);
+            ys.push(y.expected);
+        }
+        assert!(ys.len() >= 2, "need at least two challengers on the live agenda");
+        let spread = ys.iter().cloned().fold(f64::MIN, f64::max) - ys.iter().cloned().fold(f64::MAX, f64::min);
+        std::println!("live: yield spread across {} challengers = {:.3}", ys.len(), spread);
+        assert!(spread > 1e-6, "challengers still indistinguishable: {:?}", ys);
     }
 }
