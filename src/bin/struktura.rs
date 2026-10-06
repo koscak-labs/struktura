@@ -413,6 +413,7 @@ fn main() {
         "arms" => cmd_arms(&args),
         "lab" => cmd_lab(&args),
         "power" => cmd_power(&args),
+        "loop" => cmd_loop(&args),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -5134,6 +5135,114 @@ fn cmd_power(args: &[String]) {
             for e in [0.5, 1.0, (2.0 * cv).max(1.0), 2.0, 3.0, 5.0, 10.0] { println!("  {:>9.2}  {:>12}", e, runs_needed(cv, e, alpha, power)); }
             println!("  a prediction is informative when its threshold sits within one floor of the predicted effect;");
             println!("  thresholds far below it pass easily and teach little (see `struktura lab`).");
+        }
+    }
+}
+
+fn cmd_loop(args: &[String]) {
+    use struktura::ouroboros::{backtest::backtest, gate::gate, knobs, step};
+    if args.iter().any(|a| a == "--help") || args.len() < 3 {
+        println!("struktura loop --ledger lab-ledger.jsonl [--log job.out]... [--outbox DIR] [--req req.csv [--model M]]");
+        println!("               [--knobs FILE] [--constraint 'ub<=256']... [--top N] [--json] [--backtest] [--submit]");
+        println!("  The lab's experiment brain, no model in the loop: observe the ledger and job logs, learn the lab's");
+        println!("  calibration and fragile verdicts, rank an agenda (re-measure fragile results first, then challengers");
+        println!("  scored by what their next test would teach), design the top challenger with power (runs per arm,");
+        println!("  threshold one noise band below the predicted effect, a job measuring the metric the knob moves),");
+        println!("  and with --outbox write job.sh + pred.tsv + manifest.json and an idempotent knowledge.jsonl row.");
+        println!("  --req       prod-pulse req.csv: prod gate from the ledger's deploy rows (open / closed / no-evidence)");
+        println!("  --knobs     knob space file (default built-in: ub, draft, chunk, budget); --constraint overrides ledger rows");
+        println!("  --backtest  replay the ledger at each job start: do fragile flags predict later flips?");
+        println!("  --submit    hand the emitted job to ~/.oura/lab-q.sh (refused when the prod gate is closed)");
+        process::exit(if args.len() < 3 { 2 } else { 0 });
+    }
+    let (mut ledger, mut logs, mut outbox, mut req, mut model) = (None::<String>, Vec::<String>::new(), None::<String>, None::<String>, "qwen38".to_string());
+    let (mut knobs_file, mut cons, mut top, mut json, mut bt, mut submit) = (None::<String>, Vec::new(), 12usize, false, false, false);
+    let mut i = 2;
+    while i < args.len() {
+        let v = args.get(i + 1).cloned();
+        match args[i].as_str() {
+            "--ledger" => { ledger = v; i += 1; }
+            "--log" => { if let Some(x) = v { logs.push(x); } i += 1; }
+            "--outbox" => { outbox = v; i += 1; }
+            "--req" => { req = v; i += 1; }
+            "--model" => { model = v.unwrap_or_default(); i += 1; }
+            "--knobs" => { knobs_file = v; i += 1; }
+            "--constraint" => { match v.as_deref().and_then(|s| knobs::parse_constraint(s, "cli")) { Some(c) => cons.push(c), None => { eprintln!("loop: bad --constraint"); process::exit(2); } } i += 1; }
+            "--top" => { top = v.and_then(|x| x.parse().ok()).unwrap_or(top); i += 1; }
+            "--json" => json = true,
+            "--backtest" => bt = true,
+            "--submit" => submit = true,
+            o => { eprintln!("loop: unknown option {}", o); process::exit(2); }
+        }
+        i += 1;
+    }
+    let read = |p: &str| std::fs::read_to_string(p).unwrap_or_else(|e| { eprintln!("loop: {}: {}", p, e); process::exit(2) });
+    let Some(lp) = ledger else { eprintln!("loop: --ledger is required"); process::exit(2) };
+    let ledger_text = read(&lp);
+    if bt {
+        let b = backtest(&ledger_text);
+        if json {
+            let path: Vec<String> = b.calibration_path.iter().map(|(t, c, n)| format!("[{:.0},{:.3},{}]", t, c, n)).collect();
+            println!("{{\"event\":\"backtest\",\"cuts\":{},\"flagged\":{},\"flagged_rescored\":{},\"flagged_flipped\":{},\"unflagged_rescored\":{},\"unflagged_flipped\":{},\"calibration_path\":[{}],\"verdict\":\"{}\"}}",
+                b.cuts, b.flagged, b.flagged_rescored, b.flagged_flipped, b.unflagged_rescored, b.unflagged_flipped, path.join(","), b.verdict.replace('"', "'"));
+        } else {
+            println!("struktura loop --backtest: {} cut(s) (one per job start)", b.cuts);
+            println!("  fragile-flagged predictions: {} ever; re-scored later {} (flipped {}); unflagged re-scored {} (flipped {})",
+                b.flagged, b.flagged_rescored, b.flagged_flipped, b.unflagged_rescored, b.unflagged_flipped);
+            let path: Vec<String> = b.calibration_path.iter().map(|(_, c, n)| format!("{:.2}(n={})", c, n)).collect();
+            println!("  calibration factor at each cut: {}", path.join(" "));
+            println!("  verdict: {}", b.verdict);
+        }
+        return;
+    }
+    let log_texts: Vec<(String, String)> = logs.iter().map(|p| (std::path::Path::new(p).file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or(p.clone()), read(p))).collect();
+    let knobs_text = match &knobs_file { Some(p) => read(p), None => knobs::BUILTIN.to_string() };
+    let knobs = knobs::parse_knobs(&knobs_text).unwrap_or_else(|e| { eprintln!("loop: knobs: {}", e); process::exit(2) });
+    let cfg = step::Config { knobs, knobs_text, cli_constraints: cons, outbox: outbox.as_ref().map(std::path::PathBuf::from), job_floor: 300 };
+    let t = step::turn(&ledger_text, &log_texts, &cfg);
+    let g = req.as_ref().map(|p| gate(&read(p), &struktura::lab::analyze(&ledger_text).deploys, &model, t.lessons.band_pct));
+    let num = |x: f64| if x.is_finite() { format!("{:.3}", x) } else { "null".into() };
+    if json {
+        for (r, it) in t.agenda.iter().enumerate().take(top) {
+            println!("{{\"event\":\"agenda\",\"rank\":{},\"kind\":\"{}\",\"knob\":\"{}\",\"value\":\"{}\",\"pred\":\"{}\",\"score\":{:.3},\"observed_effect_pct\":{},\"samples\":{},\"why\":\"{}\"}}",
+                r + 1, it.kind.as_str(), it.knob, it.value, it.pred.as_ref().map(|(p, n)| format!("{}::{}", p, n)).unwrap_or_default(), it.score,
+                it.observed_effect_pct.map(num).unwrap_or("null".into()), it.samples, it.why.replace('"', "'"));
+        }
+        if let Some(d) = &t.design { println!("{{\"event\":\"design\",\"manifest\":{}}}", d.manifest); }
+        if let Some(g) = &g { println!("{{\"event\":\"gate\",\"state\":\"{}\",\"why\":\"{}\"}}", g.as_str(), g.why().replace('"', "'")); }
+        println!("{{\"summary\":true,\"id\":\"{}\",\"recalled\":{},\"written\":{},\"calibration\":{},\"calibration_n\":{},\"band_pct\":{},\"cv_pct\":{},\"fragile\":{},\"easy\":{},\"agenda\":{}}}",
+            t.id, t.recalled, t.written.len(), num(t.lessons.calibration), t.lessons.calibration_n, num(t.lessons.band_pct), num(t.cv_pct), t.lessons.fragile.len(), t.lessons.easy, t.agenda.len());
+    } else {
+        println!("struktura loop: decision {}{}", t.id, if t.recalled { " (recalled: already decided on these inputs; nothing new written)" } else { "" });
+        println!("  learned: noise CV {:.3}% -> single-run band {:.2}%; calibration measured/registered {:.2} over {} prediction(s){}; {} fragile, {} easy",
+            t.cv_pct, t.lessons.band_pct, t.lessons.calibration, t.lessons.calibration_n,
+            if t.lessons.calibration_n < struktura::ouroboros::learn::MIN_CALIBRATION { " (too few: factor 1.0)" } else { "" }, t.lessons.fragile.len(), t.lessons.easy);
+        for c in &t.constraints { println!("  constraint: {} {} {} ({})", c.knob, c.op, c.value, c.source); }
+        if let Some(g) = &g { println!("  prod gate: {} — {}", g.as_str().to_uppercase(), g.why()); }
+        println!("  agenda (top {}):", top.min(t.agenda.len()));
+        for (r, it) in t.agenda.iter().enumerate().take(top) {
+            let what = match &it.pred { Some((p, n)) => format!("{}::{}", p, n), None => format!("{} = {}", it.knob, it.value) };
+            let eff = it.observed_effect_pct.map(|e| format!(" [{:+.1}%]", e)).unwrap_or_default();
+            println!("   {:>2}. {:<16} {:<40} {:.2}{}  {}", r + 1, it.kind.as_str(), what, it.score, eff, it.why);
+        }
+        for s in &t.skipped { println!("  not designed: {}", s); }
+        match &t.design {
+            Some(d) => {
+                println!("  next experiment: {} — {} {} vs {} on {} ({}): predicted {:+.2}% ({}), threshold {:.2}%, {} runs/arm, ~{} min",
+                    d.job_name, d.knob, d.challenger, d.incumbent, d.metric, if d.lower_is_better { "lower is better" } else { "higher is better" },
+                    d.predicted_effect_pct, d.effect_source, d.threshold_pct, d.runs_per_arm, d.est_min);
+                for p in &t.written { println!("    wrote {}", p.display()); }
+                if outbox.is_none() { println!("    (dry run: pass --outbox DIR to write it)"); }
+            }
+            None => println!("  next experiment: none designable (see agenda)"),
+        }
+    }
+    if submit {
+        let (Some(d), Some(ob)) = (&t.design, &outbox) else { eprintln!("loop: --submit needs --outbox and a designed job"); process::exit(2) };
+        if matches!(g, Some(struktura::ouroboros::gate::Gate::Closed(_))) { eprintln!("loop: prod gate CLOSED — not submitting"); process::exit(1); }
+        match step::submit(std::path::Path::new(ob), &d.job_name) {
+            Ok(o) => println!("submitted {}: {}", d.job_name, o.trim()),
+            Err(e) => { eprintln!("loop: submit failed: {}", e.trim()); process::exit(1); }
         }
     }
 }

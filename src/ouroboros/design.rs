@@ -2,7 +2,8 @@
 //! metric the knob moves, with a pre-registration lab-score can score.
 //!
 //! - Predicted effect: the observed effect if the logs have one, else a 3%
-//!   prior scaled by the lab's calibration factor. Never below one noise band.
+//!   prior shrunk (never inflated) by the lab's calibration factor. Never
+//!   below one noise band.
 //! - Threshold: one band below the predicted effect (but at least one band),
 //!   so a pass carries information and noise cannot pass it.
 //! - Runs per arm: `power::runs_needed` for the predicted effect at the
@@ -89,7 +90,9 @@ pub fn design(item: &Item, k: &Knob, lessons: &Lessons, cv_pct: f64, job_id: u32
     let band = lessons.band_pct;
     let (pred, src) = match item.observed_effect_pct {
         Some(e) if e > 0.0 => (e, format!("observed {:+.2}% in {} run(s)", e, item.samples)),
-        _ => (PRIOR_EFFECT_PCT * lessons.calibration, format!("prior {:.1}% x calibration {:.2}", PRIOR_EFFECT_PCT, lessons.calibration)),
+        // The factor only shrinks a guess: >1 means the lab registers thresholds below what it then
+        // measures, which says nothing about how large an unmeasured effect is.
+        _ => { let f = lessons.calibration.min(1.0); (PRIOR_EFFECT_PCT * f, format!("prior {:.1}% x calibration min(1, {:.2})", PRIOR_EFFECT_PCT, lessons.calibration)) }
     };
     let pred = pred.max(band);
     let threshold = (pred - band).max(band);
@@ -193,5 +196,21 @@ rep\tub128\td0=2700 d32768=2100 d100000=1350\nrep\tub128\td0=2710 d32768=2101 d1
         assert!(!d.job.contains("2>&1 |") && !d.job.contains("build/bin/llama"), "lint R2/R3");
         assert!(d.job.contains("--spec-draft-n-max $v") && d.job.contains("for v in 7 5"));
         assert!(d.manifest.contains("\"metric\":\"code_tps\""));
+    }
+}
+
+#[cfg(test)]
+mod prior_tests {
+    use super::*;
+    use crate::ouroboros::agenda::{Item, Kind};
+    use crate::ouroboros::knobs::{parse_knobs, BUILTIN};
+
+    #[test]
+    fn calibration_never_inflates_an_unmeasured_prior() {
+        let k = parse_knobs(BUILTIN).unwrap().into_iter().find(|k| k.name == "draft").unwrap();
+        let it = Item { kind: Kind::Challenger, knob: "draft".into(), value: "5".into(), pred: None, score: 0.5, observed_effect_pct: None, samples: 0, why: "t".into() };
+        let ls = |c| Lessons { calibration: c, calibration_n: 19, fragile: vec![], easy: 0, band_pct: 1.6 };
+        assert!((design(&it, &k, &ls(3.0), 0.578, 1).unwrap().predicted_effect_pct - 3.0).abs() < 1e-9, "factor 3 must not inflate");
+        assert!((design(&it, &k, &ls(0.6), 0.578, 1).unwrap().predicted_effect_pct - 1.8).abs() < 1e-9, "factor 0.6 shrinks");
     }
 }
