@@ -410,6 +410,7 @@ fn main() {
         "case" => cmd_case(&args),
         "replay" => cmd_replay(&args),
         "pulse" => cmd_pulse(&args),
+        "arms" => cmd_arms(&args),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -4870,4 +4871,76 @@ fn cmd_pulse(args: &[String]) {
         if r.incidents.len() > 15 { println!("    ... {} more (use --json)", r.incidents.len() - 15); }
     }
     process::exit(if regressed { 1 } else { 0 });
+}
+
+fn cmd_arms(args: &[String]) {
+    use struktura::arms::{rank, ArmData, Evidence, Outcome};
+    if args.len() < 3 || args[2] == "--help" {
+        println!("struktura arms <out.log>... [--min-effect PCT] [--lower-is-better] [--metric KEY] [--boot N] [--seed S] [--json]");
+        println!("  Rank the configurations (arms) of an experiment from labelled log lines:");
+        println!("    ub512<TAB>d0=3008 d100000=1484        arm + metrics");
+        println!("    pp256<TAB>gqa2<TAB>d0=2648tps        group + arm + metrics (compared only inside the group)");
+        println!("  Several logs = repeated runs. Every pair is compared on every shared metric:");
+        println!("    >= {} samples per arm: bootstrap 95% CI of the % difference of medians", struktura::arms::MIN_BOOT);
+        println!("    fewer: the difference must clear --min-effect (noise floor), else TIE");
+        println!("  --min-effect  noise floor in % (default 1.16 = 2x lab calibration CV)");
+        println!("  --lower-is-better  for latencies (default: higher is better, e.g. t/s)");
+        process::exit(if args.len() < 3 { 2 } else { 0 });
+    }
+    let (mut min_effect, mut lower, mut boot, mut seed, mut json) = (1.16f64, false, 2000usize, 42u64, false);
+    let mut only: Option<String> = None;
+    let mut files = Vec::new();
+    let mut i = 2;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--min-effect" => { i += 1; min_effect = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(min_effect); }
+            "--lower-is-better" => lower = true,
+            "--boot" => { i += 1; boot = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(boot); }
+            "--seed" => { i += 1; seed = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(seed); }
+            "--metric" => { i += 1; only = args.get(i).cloned(); }
+            "--json" => json = true,
+            f if f.starts_with("--") => { eprintln!("arms: unknown option {}", f); process::exit(2); }
+            f => files.push(f.to_string()),
+        }
+        i += 1;
+    }
+    let mut data = ArmData::default();
+    for f in &files {
+        match std::fs::read_to_string(f) { Ok(t) => data.ingest(&t), Err(e) => { eprintln!("arms: {}: {}", f, e); process::exit(2); } }
+    }
+    if let Some(m) = &only { for v in data.values.values_mut() { v.retain(|k, _| k == m); } }
+    if data.order.len() < 2 { eprintln!("arms: need at least 2 labelled arms ({} labelled lines found)", data.lines); process::exit(2); }
+    let r = rank(&data, min_effect, !lower, boot, seed);
+    let name = |g: &str, a: &str| if g.is_empty() { a.to_string() } else { format!("{}/{}", g, a) };
+    let out = |o: &Outcome| match o { Outcome::AWins => "a_wins", Outcome::BWins => "b_wins", Outcome::Tie => "tie", Outcome::Inconclusive => "inconclusive" };
+    let ev = |e: &Evidence| match e { Evidence::Bootstrap => "bootstrap", Evidence::Floor => "floor" };
+    if json {
+        for p in &r.pairs {
+            println!("{{\"event\":\"pair\",\"group\":\"{}\",\"metric\":\"{}\",\"a\":\"{}\",\"b\":\"{}\",\"a_median\":{},\"b_median\":{},\"delta_pct\":{:.3},\"ci_low\":{:.3},\"ci_high\":{:.3},\"evidence\":\"{}\",\"outcome\":\"{}\"}}",
+                p.group, p.metric, p.a, p.b, p.a_median, p.b_median, p.delta_pct, p.ci_low, p.ci_high, ev(&p.evidence), out(&p.outcome));
+        }
+        for s in &r.scores {
+            println!("{{\"event\":\"arm\",\"group\":\"{}\",\"arm\":\"{}\",\"samples\":{},\"wins\":{},\"ties\":{},\"losses\":{},\"inconclusive\":{}}}",
+                s.group, s.arm, s.samples, s.wins, s.ties, s.losses, s.inconclusive);
+        }
+        let dom: Vec<String> = r.dominant.iter().map(|(g, a)| format!("\"{}\"", name(g, a))).collect();
+        println!("{{\"summary\":true,\"lines\":{},\"arms\":{},\"pairs\":{},\"min_effect_pct\":{},\"higher_is_better\":{},\"dominant\":[{}]}}",
+            r.lines, r.scores.len(), r.pairs.len(), min_effect, !lower, dom.join(","));
+    } else {
+        println!("struktura arms: {} labelled lines, {} arms, {} comparisons ({} is better, floor {:.2}%)",
+            r.lines, r.scores.len(), r.pairs.len(), if lower { "lower" } else { "higher" }, min_effect);
+        for p in &r.pairs {
+            let who = match p.outcome { Outcome::AWins => format!("{} wins", p.a), Outcome::BWins => format!("{} wins", p.b),
+                Outcome::Tie => "tie".to_string(), Outcome::Inconclusive => "inconclusive".to_string() };
+            let ci = if p.evidence == Evidence::Bootstrap { format!(" [{:+.1}, {:+.1}]", p.ci_low, p.ci_high) } else { String::new() };
+            println!("  {:<12} {:<10} {:>10} vs {:<10} {:>9} vs {:<9} {:+6.1}%{}  {:<9} {}",
+                if p.group.is_empty() { "-" } else { &p.group }, p.metric, p.a, p.b, p.a_median, p.b_median, p.delta_pct, ci, ev(&p.evidence), who);
+        }
+        println!("  arm scores (wins / ties / losses / inconclusive):");
+        for s in &r.scores {
+            println!("    {:<24} {:>2} / {:>2} / {:>2} / {:>2}   ({} sample(s))", name(&s.group, &s.arm), s.wins, s.ties, s.losses, s.inconclusive, s.samples);
+        }
+        if r.dominant.is_empty() { println!("  no dominant arm (needs: never loses, never inconclusive, wins at least once)"); }
+        for (g, a) in &r.dominant { println!("  DOMINANT: {}", name(g, a)); }
+    }
 }

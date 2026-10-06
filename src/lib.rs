@@ -1742,3 +1742,5 @@ pub mod replay;
 #[cfg(feature = "std")]
 pub mod report;
 pub mod pulse;
+#[cfg(feature = "std")]
+pub mod arms;
