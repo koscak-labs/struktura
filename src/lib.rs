@@ -1775,6 +1775,7 @@ pub mod brain_cycle;
 pub mod brain_cycle2;
 pub mod brain_grok;
 pub mod brain_grok2;
+pub mod brain_grok3;
 pub mod brain_sleep;
 pub mod brain_prune;
 pub mod brain_genome;
