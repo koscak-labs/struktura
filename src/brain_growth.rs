@@ -56,9 +56,30 @@
 //!   bigger model" in this world; it does not touch step 2 (the event itself is real) or the gate's
 //!   value as a detector, which is tested separately.
 //!
-//! ## RESULT
+//! ## RESULT (added after the one run; rule, thresholds and seeds unchanged; raven CPU, 40 threads)
 //!
-//! (added after the one run; rule, thresholds and seeds unchanged)
+//! **Growth claim: FAIL, as predicted.** **Gate check: FAIL, narrowly** (one firing at test 0.895).
+//!
+//! | regime | end task-2 test, mean G / U / S | G > S | G > U | `t_both`: G faster than S / U | G events |
+//! |--------|----------------------------------|-------|-------|-------------------------------|----------|
+//! | R1 (10 %, primary) | 0.820 / 0.823 / 0.826 | 9/30 (p 0.99) | 12/30 (p 0.90) | 0/30 / 0/30 (no arm reaches 0.95 on task 2) | 30/30 |
+//! | R2 (25 %) | 0.994 / 0.994 / 0.995 | 3/30 (p 1.00) | 6/30 (p 1.00) | 0/30 / 0/30 | 30/30 |
+//!
+//! R2: G is cheaper than S in parameter-steps to `t_both` on 5/30. (R1's "cheaper 30/30" is an
+//! artifact of the cap: no arm reached `t_both`, so it only counts G's smaller early net; not claimed.)
+//! Growing only after the grokking event does not give a better (or faster) bigger model here:
+//! every arm keeps training task 1, so every arm groks it and shares the same neurons. The structural
+//! prune at the growth point removed 0 neurons on every seed: compression here is a smaller weight
+//! norm and a few dominant frequencies, not dead neurons.
+//!
+//! **Gate (90 runs, 12 000 steps, 37 s):** positives fired with test >= 0.90 on 29/30; the 30th
+//! (seed 40151) fired at step 3 200 with test 0.895 and ended at 1.000 (it fired mid-rise, 0.005
+//! under the bar): 1 false positive by the pre-registered rule. Negative arms: **0 firings in 60
+//! runs**, including all 30 low-data runs, whose weight norm ended 16-18 % below its peak: they
+//! compress without generalizing, and the train-carved validation slice keeps the gate shut.
+//! Compression alone is not a grokking signal; the validation condition is what does the work.
+//! A stricter gate would need a new pre-registration and new seeds.
+
 
 
 use std::vec::Vec;
@@ -272,6 +293,78 @@ pub const GATE_NEG_LOWDATA: (usize, f32) = (184, 1.0);
 /// A firing is a false positive when task 1's test accuracy at that measurement is below this.
 pub const TRUE_GEN: f32 = 0.90;
 
+/// Continual world (no rehearsal): arms.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContArm {
+    /// Grows at the gate's event, then trains on task 2 only.
+    Gated,
+    /// Grows at the first fit, keeps training task 1 until the same switch step, then task 2 only.
+    Ungated,
+    /// Never grows (adds only the task-2 head at the switch step), then task 2 only.
+    NoGrowth,
+}
+
+/// One continual run: the switch step and the end accuracies.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ContRun {
+    pub arm: ContArm,
+    pub switch: u32,
+    pub grow_step: Option<u32>,
+    /// Task 1 test accuracy at the switch (what there is to retain) and at the end.
+    pub test1_at_switch: f32,
+    pub retain: f32,
+    /// Task 2 test accuracy at the end.
+    pub acquire: f32,
+}
+
+/// The switch step of a seed: G's gate event (or the cap), from a task-1-only run with the gate.
+pub fn switch_step(seed: u64, c: &GrowCfg) -> u32 {
+    let g = gate_run_cfg(seed, c, c.cap);
+    g.fired_at.unwrap_or(c.cap as u32)
+}
+
+fn gate_run_cfg(seed: u64, c: &GrowCfg, steps: usize) -> GateRun {
+    let d = data(seed, c);
+    let mut rng = Rng::new(seed);
+    let mut net = Net::new(c.p, c.hidden, c.act, c.init, &mut rng);
+    let mut gate = GrokGate::new(GateCfg { fit: c.fit, val_ok: c.val_ok, val_hold: c.val_hold, drop: c.norm_drop });
+    let (mut fired_at, mut test_at_fire, mut last) = (None, 0.0f32, point(&net, 0, &d));
+    for s in 1..=steps {
+        net.step(&d.tr1, c.lr, c.wd);
+        if s % c.eval_every != 0 { continue; }
+        last = point(&net, s, &d);
+        if gate.observe(last.train1, last.val, last.norm2) { fired_at = Some(s as u32); test_at_fire = last.test1; break; }
+    }
+    GateRun { fired_at, test_at_fire, end_test: last.test1, norm_drop: 1.0 - last.norm2 / gate.peak().max(1e-30) }
+}
+
+/// Run one continual arm with a given switch step (task 1 until `switch`, task 2 only after).
+pub fn run_continual(seed: u64, c: &GrowCfg, arm: ContArm, switch: u32) -> ContRun {
+    let d = data(seed, c);
+    let mut rng = Rng::new(seed);
+    let mut net = Net::new(c.p, c.hidden, c.act, c.init, &mut rng);
+    let mut grow_rng = Rng::new(seed ^ 0x6A0F_0000);
+    let (mut grow_step, mut test1_at_switch) = (None, 0.0f32);
+    for s in 1..=c.total {
+        let phase2 = s as u32 > switch;
+        net.step(if phase2 { &d.tr2 } else { &d.tr1 }, c.lr, c.wd);
+        if s % c.eval_every == 0 && grow_step.is_none() && arm == ContArm::Ungated && net.eval(&d.tr1).0 >= c.fit {
+            net.prune(c.prune_frac); net.grow(c.grow_by, c.init, &mut grow_rng); grow_step = Some(s as u32);
+        }
+        if s as u32 == switch {
+            test1_at_switch = net.eval(&d.te1).0;
+            match arm {
+                ContArm::Gated => { net.prune(c.prune_frac); net.grow(c.grow_by, c.init, &mut grow_rng); grow_step = Some(s as u32); }
+                ContArm::Ungated => { if grow_step.is_none() { net.prune(c.prune_frac); net.grow(c.grow_by, c.init, &mut grow_rng); grow_step = Some(s as u32); } }
+                ContArm::NoGrowth => {}
+            }
+            net.add_op();
+        }
+    }
+    let (retain, acquire) = (net.eval(&d.te1).0, if net.ops > 1 { net.eval(&d.te2).0 } else { 0.0 });
+    ContRun { arm, switch, grow_step, test1_at_switch, retain, acquire }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -363,7 +456,7 @@ mod tests {
     /// PRE-REGISTERED primary (R1): G beats S AND U on task 2's end test accuracy, >= 20/30 each.
     /// Run: GR_THREADS=40 cargo test --release --lib brain_growth::tests::falsifier_r1 -- --ignored --nocapture
     #[test]
-    #[ignore = "slow: 30 seeds x 3 arms x 16 000 steps (run explicitly)"]
+    #[ignore = "FAILED as pre-registered (predicted): G>S 9/30, G>U 12/30 (see module docs)"]
     fn falsifier_r1_gated_growth_beats_scratch_and_ungated() {
         let (ws, wu) = growth_falsifier("R1", &R1);
         assert!(ws >= MIN_WINS && wu >= MIN_WINS, "G>S {}/30, G>U {}/30 (need {} each)", ws, wu, MIN_WINS);
@@ -371,7 +464,7 @@ mod tests {
 
     /// PRE-REGISTERED secondary (R2, reported): the same comparisons with 132 task-2 pairs.
     #[test]
-    #[ignore = "slow: 30 seeds x 3 arms x 16 000 steps (run explicitly)"]
+    #[ignore = "FAILED (reported): G>S 3/30, G>U 6/30 (see module docs)"]
     fn falsifier_r2_reported() {
         let (ws, wu) = growth_falsifier("R2", &R2);
         assert!(ws >= MIN_WINS && wu >= MIN_WINS, "G>S {}/30, G>U {}/30 (need {} each)", ws, wu, MIN_WINS);
@@ -380,7 +473,7 @@ mod tests {
     /// PRE-REGISTERED detector check: no false positive on 60 negative runs; fires with test >= 0.90
     /// on >= 27 of 30 positive runs.
     #[test]
-    #[ignore = "slow: 90 runs x 12 000 steps (run explicitly)"]
+    #[ignore = "FAILED as pre-registered: 29/30 true fires, 1 fire at test 0.895, 0/60 negative firings (see module docs)"]
     fn falsifier_gate_detects_grokking_without_false_positives() {
         let jobs: Vec<(u64, usize, (usize, f32))> = FRESH_SEEDS.iter().flat_map(|&s| [(s, 0, GATE_POS), (s, 1, GATE_NEG_NODECAY), (s, 2, GATE_NEG_LOWDATA)]).collect();
         let r: Vec<GateRun> = par_map(&jobs, |&(s, _, (n, wd))| gate_run(s, n, wd, GATE_STEPS));
@@ -395,6 +488,19 @@ mod tests {
         }
         std::println!("GATE: positives fired correctly {}/30 | false positives (fired, test < {}) {}/90 | negative-arm firings {}/60 (of which truly generalized there {})", tp, TRUE_GEN, fp, fired_neg, late_true);
         assert!(fp == 0 && tp >= 27, "tp {}/30 fp {}", tp, fp);
+    }
+
+    /// Continual dev, dev seeds only: GR_N2=132 cargo test --release --lib brain_growth::tests::dev_continual -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn dev_continual() {
+        let c = dev_cfg();
+        let seeds: Vec<u64> = (0..env("GR_SEEDS", 3u64)).map(|i| 100 + i).collect();
+        assert!(seeds.iter().all(|s| !FRESH_SEEDS.contains(s)));
+        let jobs: Vec<(u64, ContArm)> = seeds.iter().flat_map(|&s| [(s, ContArm::Gated), (s, ContArm::Ungated), (s, ContArm::NoGrowth)]).collect();
+        let sw: Vec<u32> = par_map(&seeds, |&s| switch_step(s, &c));
+        let r: Vec<ContRun> = par_map(&jobs, |&(s, a)| { let k = seeds.iter().position(|&x| x == s).unwrap(); run_continual(s, &c, a, sw[k]) });
+        for (j, x) in jobs.iter().zip(r.iter()) { std::println!("seed {} {:?}: switch {} grow {:?} test1@switch {:.3} retain {:.3} acquire {:.3}", j.0, x.arm, x.switch, x.grow_step, x.test1_at_switch, x.retain, x.acquire); }
     }
 
     /// Dev runs, dev seeds only: cargo test --release --lib brain_growth::tests::dev -- --ignored --nocapture
