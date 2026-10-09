@@ -53,9 +53,30 @@
 //! - **Analysis prediction:** PASS (10/10). Risk stated in advance: the transition here is an
 //!   S-curve over ~3 000 steps, delayed ~10x after the fit, not a single-step jump.
 //!
-//! ## RESULT
+//! ## RESULT (added after the one run; rule, thresholds and seeds unchanged)
 //!
-//! (added after the one run; rule, thresholds and seeds unchanged)
+//! **PASS: 10 of 10 fresh seeds pass** (D groks, N does not). 44 s on 10 threads.
+//!
+//! | seed | D fit (test there) | D gen | delay | D end | D norm peak -> at gen | D Fourier conc fit -> gen | N end |
+//! |------|--------------------|-------|-------|-------|-----------------------|---------------------------|-------|
+//! | 31337 | 300 (0.019) | 3 700 | 12.3x | 1.000 | 2015 -> 1798 | 0.41 -> 0.75 | 0.083 |
+//! | 31415 | 200 (0.004) | 3 500 | 17.5x | 1.000 | 2003 -> 1816 | 0.36 -> 0.74 | 0.102 |
+//! | 32003 | 300 (0.004) | 4 700 | 15.7x | 1.000 | 2026 -> 1768 | 0.40 -> 0.77 | 0.049 |
+//! | 32771 | 300 (0.011) | 3 800 | 12.7x | 1.000 | 2006 -> 1790 | 0.40 -> 0.75 | 0.083 |
+//! | 33013 | 200 (0.011) | 4 400 | 22.0x | 1.000 | 2021 -> 1770 | 0.36 -> 0.76 | 0.087 |
+//! | 33533 | 300 (0.023) | 3 600 | 12.0x | 1.000 | 2005 -> 1809 | 0.41 -> 0.75 | 0.113 |
+//! | 34061 | 300 (0.019) | 3 500 | 11.7x | 1.000 | 1988 -> 1791 | 0.43 -> 0.77 | 0.159 |
+//! | 34511 | 300 (0.023) | 4 100 | 13.7x | 1.000 | 2015 -> 1783 | 0.40 -> 0.76 | 0.083 |
+//! | 35027 | 300 (0.019) | 4 200 | 14.0x | 1.000 | 1991 -> 1750 | 0.41 -> 0.79 | 0.089 |
+//! | 35543 | 300 (0.008) | 4 000 | 13.3x | 1.000 | 2007 -> 1784 | 0.42 -> 0.75 | 0.145 |
+//!
+//! Arm N fits at the same steps (200..300) and never reaches test 0.95. Reported: D's weight norm
+//! fell from its peak before generalizing on 10/10 (-10 % .. -13 %), and its Fourier concentration
+//! rose by >= 0.1 on 10/10 (0.36..0.43 -> 0.74..0.79): the network compresses into a few
+//! frequencies, then generalizes. Caveat as pre-registered: the rise is an S-curve over ~3 000
+//! steps, delayed 12..22x after the fit; it is grokking in the delayed-generalization sense, not a
+//! single-step jump.
+
 
 
 use std::vec;
@@ -614,9 +635,9 @@ mod tests {
     }
 
     /// PRE-REGISTERED falsifier: weight decay groks, no decay does not; 10 fresh seeds, >= 9 pass.
-    /// Run: cargo test --release --lib brain_grokbed::tests::falsifier -- --ignored --nocapture
+    /// RESULT: PASSED, 10/10 (see module docs). Run: cargo test --release --lib brain_grokbed::tests::falsifier -- --ignored --nocapture
     #[test]
-    #[ignore = "slow: 10 seeds x 2 arms x 12 000 steps (run explicitly)"]
+    #[ignore = "PASSED 10/10 as pre-registered; slow (about 6 CPU-minutes), run explicitly"]
     fn falsifier_decay_groks_and_no_decay_does_not() {
         let t: Vec<Trial> = std::thread::scope(|s| FRESH_SEEDS.iter().map(|&sd| s.spawn(move || trial(sd))).collect::<Vec<_>>().into_iter().map(|h| h.join().unwrap()).collect());
         for x in t.iter() {
