@@ -1783,3 +1783,5 @@ pub mod brain_neuromod;
 pub mod brain_hebb;
 #[cfg(feature = "std")]
 pub mod brain_gym;
+#[cfg(feature = "std")]
+pub mod brain_grokbed;
