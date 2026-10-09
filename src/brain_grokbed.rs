@@ -91,9 +91,13 @@
 //!   falsifies these seed values with this optimizer in this world, not Grokfast in general (the
 //!   paper pairs it with retuned weight decay; nothing here was retuned).
 //!
-//! ## RESULT (Grokfast)
+//! ## RESULT (Grokfast; added after the one run; raven CPU, 30 threads, 44 s)
 //!
-//! (added after the one run)
+//! **FAIL, as predicted, decisively.** Grokfast (0.98, 4.2) generalized earlier on 0/30 seeds and
+//! later on 30/30 (p < 1e-8). Pre-registered grokking events: plain 30/30, Grokfast 0/30. Mean end
+//! test accuracy: plain 1.000, Grokfast 0.697. With AdamW at decay 1 the HxO seed values do not
+//! accelerate grokking; they stop it within the budget (dev: the larger lambda, the later).
+
 
 
 
@@ -726,7 +730,7 @@ mod tests {
     /// PRE-REGISTERED (HxO seed): Grokfast (0.98, 4.2) generalizes earlier than plain AdamW on >= 20/30 seeds.
     /// Run: GB_THREADS=40 cargo test --release --lib brain_grokbed::tests::falsifier_grokfast -- --ignored --nocapture
     #[test]
-    #[ignore = "slow: 30 seeds x 2 arms x 12 000 steps (run explicitly)"]
+    #[ignore = "FAILED as pre-registered (predicted): Grokfast earlier 0/30, events 0/30 vs plain 30/30 (see module docs)"]
     fn falsifier_grokfast_hxo_seed_groks_faster() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Mutex;
