@@ -97,6 +97,21 @@
 //! later on 30/30 (p < 1e-8). Pre-registered grokking events: plain 30/30, Grokfast 0/30. Mean end
 //! test accuracy: plain 1.000, Grokfast 0.697. With AdamW at decay 1 the HxO seed values do not
 //! accelerate grokking; they stop it within the budget (dev: the larger lambda, the later).
+//!
+//! ## Pre-registration: Friston F as written (committed before any of its fresh seeds was run)
+//!
+//! The spec's loss "F = surprise + entropy", taken literally: cross-entropy + 1.0 x the entropy of
+//! the prediction ([`Net::entropy`], gradient checked against finite differences).
+//! - **Claim** ([`f_trial`]): in the [`PREREG`] world F generalizes (test >= 0.95) earlier than plain
+//!   cross-entropy on >= 20 of 30 fresh seeds [`F_SEEDS`] (sign test; never = 12 001; tie = loss).
+//! - **Dev** (100..105): CE 3 000..4 400, F 3 700..4 700; F earlier on 2/6, both end at 1.000.
+//!   Coefficient 0.1: 3 300..4 100.
+//! - **Analysis prediction: FAIL** (no speed-up; no harm at the end).
+//!
+//! ## RESULT (Friston F)
+//!
+//! (added after the one run)
+
 
 
 
@@ -174,6 +189,9 @@ pub struct Net {
     /// Grokfast (Lee et al. 2024, the HxO optimizer seed): `Some((alpha, lambda))` adds `lambda` x an
     /// EMA (`alpha`) of past gradients to each gradient before AdamW. `None` = plain AdamW.
     pub grokfast: Option<(f32, f32)>,
+    /// Friston "F = surprise + entropy" as written in the HxO spec: the loss is cross-entropy plus
+    /// `entropy` x the prediction's entropy. 0 = plain cross-entropy.
+    pub entropy: f32,
     ema: Vec<f32>,
 }
 
@@ -190,7 +208,7 @@ impl Net {
         let s = 1.0 / (h as f32).sqrt();
         for x in w[2 * p * h..].iter_mut() { *x = s * rng.normal(); }
         let n = w.len();
-        Net { p, h, act, ops: 1, w, m: vec![0.0; n], v: vec![0.0; n], t: 0, grokfast: None, ema: Vec::new() }
+        Net { p, h, act, ops: 1, w, m: vec![0.0; n], v: vec![0.0; n], t: 0, grokfast: None, entropy: 0.0, ema: Vec::new() }
     }
 
     pub fn params(&self) -> usize { self.w.len() }
@@ -267,6 +285,12 @@ impl Net {
             let (a, b, op, y) = (a as usize, b as usize, op as usize, y as usize);
             self.forward(a, b, op, &mut pre, &mut z, &mut out);
             loss += xent(&mut out, y) as f64; // out is now the softmax
+            if self.entropy != 0.0 {
+                // dH/dz_c = -p_c (ln p_c + H)
+                let hh: f32 = -out.iter().map(|&q| if q > 0.0 { q * q.ln() } else { 0.0 }).sum::<f32>();
+                loss += (self.entropy * hh) as f64;
+                for c in 0..p { let q = out[c]; let dh = if q > 0.0 { -q * (q.ln() + hh) } else { 0.0 }; out[c] += self.entropy * dh; }
+            }
             out[y] -= 1.0;
             for d in dz.iter_mut() { *d = 0.0; }
             for c in 0..p {
@@ -435,11 +459,15 @@ pub fn measure(net: &Net, step: usize, train: &[Pair], test: &[Pair]) -> Point {
 pub fn run(seed: u64, cfg: &Config) -> Vec<Point> { run_with(seed, cfg, None) }
 
 /// [`run`] with an optional Grokfast `(alpha, lambda)` ([`Net::grokfast`]).
-pub fn run_with(seed: u64, cfg: &Config, grokfast: Option<(f32, f32)>) -> Vec<Point> {
+pub fn run_with(seed: u64, cfg: &Config, grokfast: Option<(f32, f32)>) -> Vec<Point> { run_opts(seed, cfg, grokfast, 0.0) }
+
+/// [`run`] with optional Grokfast and the Friston entropy coefficient ([`Net::entropy`]).
+pub fn run_opts(seed: u64, cfg: &Config, grokfast: Option<(f32, f32)>, entropy: f32) -> Vec<Point> {
     let (train, test) = split(seed, cfg.p, cfg.n_train);
     let mut rng = Rng::new(seed);
     let mut net = Net::new(cfg.p, cfg.hidden, cfg.act, cfg.init, &mut rng);
     net.grokfast = grokfast;
+    net.entropy = entropy;
     let mut curve = Vec::with_capacity(cfg.steps / cfg.eval_every.max(1) + 2);
     curve.push(measure(&net, 0, &train, &test));
     for s in 1..=cfg.steps {
@@ -544,6 +572,22 @@ pub fn gf_trial(seed: u64) -> GfTrial {
     GfTrial { seed, plain_gen: a.t_gen.unwrap_or(never), gf_gen: b.t_gen.unwrap_or(never), plain_end: a.end_test, gf_end: b.end_test, plain_event: a.event, gf_event: b.event }
 }
 
+/// Friston F coefficient under test ("F = surprise + entropy" as written: CE + 1.0 x entropy).
+pub const HXO_ENTROPY: f32 = 1.0;
+/// F falsifier fresh seeds.
+pub const F_SEEDS: [u64; 30] = [61001, 61007, 61027, 61031, 61043, 61051, 61057, 61091, 61099, 61121, 61129, 61141, 61151, 61153, 61169,
+    61211, 61223, 61231, 61253, 61261, 61283, 61291, 61297, 61331, 61333, 61339, 61343, 61357, 61363, 61379];
+
+/// One seed: generalization step (never = steps + 1) and end test, CE vs F.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FTrial { pub seed: u64, pub ce_gen: u32, pub f_gen: u32, pub ce_end: f32, pub f_end: f32 }
+
+pub fn f_trial(seed: u64) -> FTrial {
+    let never = PREREG.steps as u32 + 1;
+    let (a, b) = (analyse(&run(seed, &PREREG)), analyse(&run_opts(seed, &PREREG, None, HXO_ENTROPY)));
+    FTrial { seed, ce_gen: a.t_gen.unwrap_or(never), f_gen: b.t_gen.unwrap_or(never), ce_end: a.end_test, f_end: b.end_test }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -590,6 +634,24 @@ mod tests {
         let mut d = base.clone(); d.step(&data, 1e-2, 0.0);
         for i in 0..g.len() { if g[i].abs() > 1e-4 { assert!((c.w[i] - base.w[i]) * (d.w[i] - base.w[i]) > 0.0); } }
         assert_eq!(c.ema, g);
+    }
+
+    #[test]
+    fn entropy_loss_gradient_matches_finite_differences() {
+        let mut rng = Rng::new(4);
+        let mut net = Net::new(5, 6, Act::Quad, 0.5, &mut rng);
+        net.entropy = 0.7;
+        let data: Vec<Pair> = vec![(1, 2, 0, 3), (4, 4, 0, 3), (0, 3, 0, 3), (2, 1, 0, 3)];
+        let (l0, g) = net.grad(&data);
+        let plain = { let mut n = net.clone(); n.entropy = 0.0; n.grad(&data).0 };
+        assert!(l0 > plain, "the entropy term adds to the loss");
+        for i in 0..net.w.len() {
+            let e = 1e-2f32;
+            let mut np = net.clone(); np.w[i] += e;
+            let mut nm = net.clone(); nm.w[i] -= e;
+            let fd = (np.grad(&data).0 as f64 - nm.grad(&data).0 as f64) / (2.0 * e as f64);
+            assert!((fd - g[i] as f64).abs() <= 2e-3 + 2e-2 * fd.abs(), "weight {}: fd {} vs analytic {}", i, fd, g[i]);
+        }
     }
 
     #[test]
@@ -751,6 +813,25 @@ mod tests {
         assert!(wins >= GF_MIN_WINS, "Grokfast earlier on {}/30 (need {})", wins, GF_MIN_WINS);
     }
 
+    /// PRE-REGISTERED (HxO seed): Friston F (CE + entropy) generalizes earlier than CE on >= 20/30 seeds.
+    /// Run: GB_THREADS=40 cargo test --release --lib brain_grokbed::tests::falsifier_friston -- --ignored --nocapture
+    #[test]
+    #[ignore = "slow: 30 seeds x 2 arms x 12 000 steps (run explicitly)"]
+    fn falsifier_friston_f_groks_faster() {
+        assert_eq!(HXO_ENTROPY, 1.0);
+        for x in F_SEEDS.iter() { assert!(!GF_SEEDS.contains(x) && !FRESH_SEEDS.contains(x) && !DEV_SEEDS.contains(x)); }
+        let t: Vec<FTrial> = { let th = env("GB_THREADS", 16usize); let idx: Vec<usize> = (0..30).collect();
+            let out = std::sync::Mutex::new(vec![None; 30]); let next = std::sync::atomic::AtomicUsize::new(0);
+            std::thread::scope(|s| for _ in 0..th.min(30) { s.spawn(|| loop { let i = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst); if i >= idx.len() { break; } let r = f_trial(F_SEEDS[i]); out.lock().unwrap()[i] = Some(r); }); });
+            out.into_inner().unwrap().into_iter().map(|x| x.unwrap()).collect() };
+        for x in t.iter() { std::println!("  F seed {}: gen CE {} F {} | end CE {:.3} F {:.3}", x.seed, x.ce_gen, x.f_gen, x.ce_end, x.f_end); }
+        let wins = t.iter().filter(|x| x.f_gen < x.ce_gen).count();
+        let later = t.iter().filter(|x| x.f_gen > x.ce_gen).count();
+        let m = |f: fn(&FTrial) -> f32| t.iter().map(|x| f(x)).sum::<f32>() / 30.0;
+        std::println!("FRISTON: earlier {}/30 (p {:.4}) later {}/30 | mean gen CE {:.0} F {:.0} | end CE {:.3} F {:.3}", wins, crate::brain_grok3::sign_p(wins, 30), later, m(|x| x.ce_gen as f32), m(|x| x.f_gen as f32), m(|x| x.ce_end), m(|x| x.f_end));
+        assert!(wins >= GF_MIN_WINS, "F earlier on {}/30", wins);
+    }
+
     fn env<T: core::str::FromStr>(k: &str, d: T) -> T { std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d) }
 
     /// Dev runs (env GB_*), dev seeds only: cargo test --release --lib brain_grokbed::tests::dev -- --ignored --nocapture
@@ -765,7 +846,7 @@ mod tests {
         std::println!("{:?}", cfg);
         let gf = if env("GB_GF", 0) == 1 { Some((env("GB_GFA", 0.98f32), env("GB_GFL", 4.2f32))) } else { None };
         std::println!("grokfast {:?}", gf);
-        let runs: Vec<Vec<Point>> = std::thread::scope(|s| seeds.iter().map(|&sd| s.spawn(move || run_with(sd, &cfg, gf))).collect::<Vec<_>>().into_iter().map(|h| h.join().unwrap()).collect());
+        let runs: Vec<Vec<Point>> = std::thread::scope(|s| seeds.iter().map(|&sd| s.spawn(move || run_opts(sd, &cfg, gf, env("GB_ENT", 0.0f32)))).collect::<Vec<_>>().into_iter().map(|h| h.join().unwrap()).collect());
         for (sd, c) in seeds.iter().zip(runs.iter()) {
             std::println!("seed {}", sd);
             for pt in c.iter() {

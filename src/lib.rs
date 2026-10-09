@@ -1775,6 +1775,7 @@ pub mod brain_cycle;
 pub mod brain_cycle2;
 pub mod brain_grok;
 pub mod brain_grok2;
+#[cfg(feature = "std")]
 pub mod brain_grok3;
 pub mod brain_sleep;
 pub mod brain_prune;
@@ -1788,3 +1789,5 @@ pub mod brain_grokbed;
 #[cfg(feature = "std")]
 pub mod brain_growth;
 pub mod grok_gate;
+#[cfg(feature = "std")]
+pub mod brain_hxo;

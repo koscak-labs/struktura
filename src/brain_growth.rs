@@ -106,6 +106,29 @@
 //! N 0.349. In this continual world growing at the grokking event is the WORST option on both
 //! counts, and not growing is the best: new random neurons that arrive with the new task are
 //! shaped by the new task alone and pull the shared readout toward it.
+//!
+//! ## Pre-registration 3c: grow on a measured capacity shortfall (the #14 successor; committed before its seeds ran)
+//!
+//! - **World** [`SHORT`]: task 1 only (grokbed world, 265 trained + 25 validation pairs), start at 8
+//!   neurons, double (function unchanged) up to 128 when the trigger metric improved by < 0.01 over
+//!   the last 10 measurements while below its target; 24 000 steps. [`run_shortfall`].
+//! - **Arms**: Val (trigger = validation accuracy below 0.95), Big (128 from the start), Train
+//!   (trigger = training accuracy below 0.99), Small (8, never grows).
+//! - **Claim**: Val reaches test >= 0.95 with fewer parameter-steps than Big on >= 20 of 30 fresh
+//!   seeds [`SF_SEEDS`] (sign test; a Val run that never generalizes loses). Reported: generalized
+//!   counts and end test per arm; Train > Small.
+//! - **Dev** (100..102): capacity sweep at 12 000 steps: 4 neurons never fit; 8 fit 0.84..0.95; 16 fit
+//!   at ~1 500 but test 0.41..0.54; 32 test 0.77..0.89; 128 groks to 1.000 at ~4 000. Fitting is not
+//!   generalizing: generalization needs spare capacity. At 24 000 steps: Train stops at 16 neurons
+//!   (test 0.45..0.50); Val reaches 128 at 8 000..11 000 and generalizes at 13 900 / 18 900 / never
+//!   (end 0.98 / 0.90 / 1.00 for seeds 100 / 101 / 102); Big generalizes at 3 700..4 100 (~33-36 M
+//!   parameter-steps), Val's total by 24 000 steps 134..154 M.
+//! - **Analysis prediction: FAIL** (Big is cheaper to generalization).
+//!
+//! ## RESULT 3c
+//!
+//! (added after the one run)
+
 
 
 
@@ -402,6 +425,86 @@ pub fn run_continual(seed: u64, c: &GrowCfg, arm: ContArm, switch: u32) -> ContR
     ContRun { arm, switch, grow_step, test1_at_switch, retain, acquire }
 }
 
+/// Capacity-shortfall growth (the #14 successor): which signal triggers a doubling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Short {
+    /// Double while TRAINING accuracy has plateaued below `fit`.
+    Train,
+    /// Double while VALIDATION accuracy (slice carved from training data) has plateaued below `val_ok`.
+    Val,
+    /// Never grow (stays at the start size).
+    Small,
+    /// Start at the maximum size.
+    Big,
+}
+
+/// Settings of the shortfall experiment (task 1 only).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShortCfg {
+    pub base: GrowCfg,
+    pub h0: usize,
+    pub h_max: usize,
+    /// A plateau = the trigger metric improved by less than `delta` over the last `window` measurements.
+    pub window: usize,
+    pub delta: f32,
+}
+
+/// One shortfall run.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShortRun {
+    pub mode: Short,
+    pub grows: Vec<u32>,
+    pub final_h: usize,
+    pub end_test: f32,
+    pub end_train: f32,
+    /// First step with test >= [`BOTH`] (0.95), if any.
+    pub t_gen: Option<u32>,
+    /// Sum over steps of parameters in use (compute proxy).
+    pub param_steps: f64,
+    /// Parameter-steps spent until `t_gen` (None: never generalized).
+    pub param_steps_at_gen: Option<f64>,
+}
+
+/// Run one shortfall arm.
+pub fn run_shortfall(seed: u64, s: &ShortCfg, mode: Short) -> ShortRun {
+    let c = &s.base;
+    let d = data(seed, c);
+    let mut rng = Rng::new(seed);
+    let mut net = Net::new(c.p, if mode == Short::Big { s.h_max } else { s.h0 }, c.act, c.init, &mut rng);
+    let mut grow_rng = Rng::new(seed ^ 0x5F0F_0000);
+    let (mut grows, mut hist, mut param_steps, mut t_gen, mut ps_gen) = (Vec::new(), Vec::<f32>::new(), 0.0f64, None, None);
+    let mut tail: Vec<f32> = Vec::new();
+    for st in 1..=c.total {
+        net.step(&d.tr1, c.lr, c.wd);
+        param_steps += net.params() as f64;
+        if st % c.eval_every != 0 { continue; }
+        let (tr, va, te) = (net.eval(&d.tr1).0, net.eval(&d.val).0, net.eval(&d.te1).0);
+        if t_gen.is_none() && te >= BOTH { t_gen = Some(st as u32); ps_gen = Some(param_steps); }
+        tail.push(te); if tail.len() > END_EVALS { tail.remove(0); }
+        let (metric, target) = match mode { Short::Train => (tr, c.fit), Short::Val => (va, c.val_ok), _ => continue };
+        hist.push(metric);
+        if hist.len() > s.window && metric < target && net.h < s.h_max {
+            let then = hist[hist.len() - 1 - s.window];
+            let best_recent = hist[hist.len() - s.window..].iter().cloned().fold(f32::MIN, f32::max);
+            if best_recent - then < s.delta {
+                let add = net.h.min(s.h_max - net.h);
+                net.grow(add, c.init, &mut grow_rng);
+                grows.push(st as u32);
+                hist.clear();
+            }
+        }
+    }
+    let end_test = tail.iter().sum::<f32>() / tail.len().max(1) as f32;
+    ShortRun { mode, grows, final_h: net.h, end_test, end_train: net.eval(&d.tr1).0, t_gen, param_steps, param_steps_at_gen: ps_gen }
+}
+
+/// Pre-registered shortfall settings (#14 successor): task 1, start 8 neurons, double up to 128,
+/// plateau = < 0.01 improvement over 10 measurements, 24 000 steps.
+pub const SHORT: ShortCfg = ShortCfg { base: GrowCfg { total: 24_000, ..PREREG }, h0: 8, h_max: 128, window: 10, delta: 0.01 };
+/// Fresh seeds for the shortfall falsifier.
+pub const SF_SEEDS: [u64; 30] = [63029, 63031, 63059, 63067, 63073, 63079, 63097, 63103, 63113, 63127, 63131, 63149, 63179, 63197, 63199,
+    63211, 63241, 63247, 63277, 63281, 63299, 63311, 63313, 63317, 63331, 63337, 63347, 63353, 63361, 63367];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -559,6 +662,55 @@ mod tests {
         std::println!("CONTINUAL: retain mean G {:.3} U {:.3} N {:.3} | G>U {}/30 (p {:.4}) G>N {}/30 (p {:.4}) | acquire mean G {:.3} U {:.3} N {:.3}",
             mean(&g, |x| x.retain), mean(&u, |x| x.retain), mean(&n, |x| x.retain), wins_gu, crate::brain_grok3::sign_p(wins_gu, 30), wins_gn, crate::brain_grok3::sign_p(wins_gn, 30), ag, au, mean(&n, |x| x.acquire));
         assert!(wins_gu >= MIN_WINS && ag >= au - ACQ_SLACK, "G>U retain {}/30, acquire G {:.3} vs U {:.3}", wins_gu, ag, au);
+    }
+
+    #[test]
+    fn shortfall_preregistration_is_pinned() {
+        assert_eq!((SHORT.h0, SHORT.h_max, SHORT.window, SHORT.delta, SHORT.base.total, SHORT.base.n_train1, SHORT.base.n_val), (8, 128, 10, 0.01, 24_000, 290, 25));
+        let mut s = SF_SEEDS.to_vec(); s.sort(); s.dedup(); assert_eq!(s.len(), 30);
+        for x in SF_SEEDS.iter() { assert!(!FRESH_SEEDS.contains(x) && !CONT_SEEDS.contains(x) && !crate::brain_hxo::HX_SEEDS.contains(x) && !crate::brain_grokbed::F_SEEDS.contains(x)); }
+    }
+
+    /// PRE-REGISTERED (#14 successor): growth on a measured VALIDATION shortfall reaches test >= 0.95 with
+    /// fewer parameter-steps than the big network from the start, on >= 20/30 seeds (never = loss).
+    /// Run: GR_THREADS=40 cargo test --release --lib brain_growth::tests::falsifier_shortfall -- --ignored --nocapture
+    #[test]
+    #[ignore = "slow: 30 seeds x 4 arms x 24 000 steps (run explicitly)"]
+    fn falsifier_shortfall_growth_is_cheaper() {
+        let jobs: Vec<(u64, Short)> = SF_SEEDS.iter().flat_map(|&x| [(x, Short::Val), (x, Short::Big), (x, Short::Train), (x, Short::Small)]).collect();
+        let r: Vec<ShortRun> = par_map(&jobs, |&(x, m)| run_shortfall(x, &SHORT, m));
+        for k in 0..30 {
+            let (v, b, t, s) = (&r[4 * k], &r[4 * k + 1], &r[4 * k + 2], &r[4 * k + 3]);
+            std::println!("  sf seed {}: Val grows {:?} end {:.3} gen {:?} Mps@gen {:?} | Big end {:.3} gen {:?} Mps@gen {:?} | Train h {} end {:.3} | Small end {:.3}", SF_SEEDS[k],
+                v.grows, v.end_test, v.t_gen, v.param_steps_at_gen.map(|x| (x / 1e6).round()), b.end_test, b.t_gen, b.param_steps_at_gen.map(|x| (x / 1e6).round()), t.final_h, t.end_test, s.end_test);
+        }
+        let cheaper = (0..30).filter(|&k| match (r[4 * k].param_steps_at_gen, r[4 * k + 1].param_steps_at_gen) { (Some(v), Some(b)) => v < b, (Some(_), None) => true, _ => false }).count();
+        let m = |o: usize| (0..30).map(|k| r[4 * k + o].end_test).sum::<f32>() / 30.0;
+        let gen = |o: usize| (0..30).filter(|&k| r[4 * k + o].t_gen.is_some()).count();
+        let tr_gt_small = (0..30).filter(|&k| r[4 * k + 2].end_test > r[4 * k + 3].end_test).count();
+        std::println!("SHORTFALL: Val cheaper than Big {}/30 (p {:.4}) | generalized Val {}/30 Big {}/30 Train {}/30 Small {}/30 | end test Val {:.3} Big {:.3} Train {:.3} Small {:.3} | Train > Small {}/30",
+            cheaper, crate::brain_grok3::sign_p(cheaper, 30), gen(0), gen(1), gen(2), gen(3), m(0), m(1), m(2), m(3), tr_gt_small);
+        assert!(cheaper >= MIN_WINS, "Val cheaper on {}/30", cheaper);
+    }
+
+    fn short_cfg() -> ShortCfg {
+        ShortCfg { base: GrowCfg { n_train1: 290, total: env("SF_TOTAL", 12000), ..dev_cfg() }, h0: env("SF_H0", 8), h_max: env("SF_HMAX", 128),
+            window: env("SF_WIN", 10), delta: env("SF_DELTA", 0.01) }
+    }
+
+    /// Shortfall dev, dev seeds only: cargo test --release --lib brain_growth::tests::dev_shortfall -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn dev_shortfall() {
+        let s = short_cfg();
+        std::println!("{:?}", s);
+        let seeds: Vec<u64> = (0..env("GR_SEEDS", 3u64)).map(|i| 100 + i).collect();
+        assert!(seeds.iter().all(|x| !FRESH_SEEDS.contains(x) && !CONT_SEEDS.contains(x)));
+        let jobs: Vec<(u64, Short)> = seeds.iter().flat_map(|&x| [(x, Short::Train), (x, Short::Val), (x, Short::Small), (x, Short::Big)]).collect();
+        let r: Vec<ShortRun> = par_map(&jobs, |&(x, m)| run_shortfall(x, &s, m));
+        for (j, x) in jobs.iter().zip(r.iter()) {
+            std::println!("seed {} {:?}: grows {:?} final_h {} end train {:.3} test {:.3} t_gen {:?} Mparam-steps {:.0}", j.0, x.mode, x.grows, x.final_h, x.end_train, x.end_test, x.t_gen, x.param_steps / 1e6);
+        }
     }
 
     /// Continual dev, dev seeds only: GR_N2=132 cargo test --release --lib brain_growth::tests::dev_continual -- --ignored --nocapture
