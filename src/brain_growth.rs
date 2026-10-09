@@ -99,9 +99,14 @@
 //!   when task 2 starts, with random embeddings, and are trained by task 2 alone.
 //! - **Analysis prediction: FAIL** (G retains no better than U, and acquires worse).
 //!
-//! ## RESULT 3b
+//! ## RESULT 3b (added after the one run; raven CPU, 40 threads, 78 s)
 //!
-//! (added after the one run)
+//! **FAIL, as predicted, decisively.** Retention (end task-1 test) mean G 0.775, U 0.828, N 0.840;
+//! G > U on 1/30 seeds (p 1.00), G > N on 0/30. Acquisition (end task-2 test) mean G 0.226, U 0.318,
+//! N 0.349. In this continual world growing at the grokking event is the WORST option on both
+//! counts, and not growing is the best: new random neurons that arrive with the new task are
+//! shaped by the new task alone and pull the shared readout toward it.
+
 
 
 
@@ -534,7 +539,7 @@ mod tests {
     /// AND G's mean task-2 acquisition is within 0.05 of U's.
     /// Run: GR_THREADS=40 cargo test --release --lib brain_growth::tests::falsifier_continual -- --ignored --nocapture
     #[test]
-    #[ignore = "slow: 30 seeds x 3 arms (run explicitly)"]
+    #[ignore = "FAILED as pre-registered (predicted): retention G>U 1/30, G>N 0/30 (see module docs)"]
     fn falsifier_continual_gated_growth_retains_better() {
         let c = CONT;
         let sw: Vec<u32> = par_map(&CONT_SEEDS, |&s| switch_step(s, &c));
