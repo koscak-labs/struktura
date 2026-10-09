@@ -145,9 +145,13 @@
 //!   +2 000: 0.996 on 6/6, budget 1.000; negatives never fired (12/12).
 //! - **Analysis prediction: PASS** (~50 % of the compute saved for <= 0.004 accuracy).
 //!
-//! ## RESULT 3d
+//! ## RESULT 3d (added after the one run; raven CPU, 40 threads, 52 s)
 //!
-//! (added after the one run)
+//! **PASS, as predicted.** Accuracy kept (test at the stop >= budget test - 0.02) on 29/30 seeds;
+//! stop at <= 60 % of the budget on 27/30 (exactly the bar); mean compute saved 48.4 %; early stops
+//! on the 60 negative runs: 0. The gate is a working CONSOLIDATE / STOP signal here: about half the
+//! compute for the same generalization, and it never stops a run that has not generalized.
+
 
 
 
@@ -780,7 +784,7 @@ mod tests {
     /// >= budget test - 0.02 AND stop <= 60 % of the budget, each on >= 27/30; on 60 negative runs: 0 early stops.
     /// Run: GR_THREADS=40 cargo test --release --lib brain_growth::tests::falsifier_stop -- --ignored --nocapture
     #[test]
-    #[ignore = "slow: 90 runs x 12 000 steps (run explicitly)"]
+    #[ignore = "PASSED as pre-registered: accuracy kept 29/30, stop <= 60% 27/30, 0/60 early stops; slow, run explicitly"]
     fn falsifier_stop_signal_saves_compute_at_equal_accuracy() {
         let jobs: Vec<(u64, usize, (usize, f32))> = ST_SEEDS.iter().flat_map(|&s| [(s, 0, GATE_POS), (s, 1, GATE_NEG_NODECAY), (s, 2, GATE_NEG_LOWDATA)]).collect();
         let r: Vec<StopRun> = par_map(&jobs, |&(s, _, (n, wd))| stop_run(s, n, wd, STOP_BUDGET, &[CONSOLIDATE]));
