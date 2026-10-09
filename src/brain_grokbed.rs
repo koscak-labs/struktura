@@ -76,6 +76,25 @@
 //! frequencies, then generalizes. Caveat as pre-registered: the rise is an S-curve over ~3 000
 //! steps, delayed 12..22x after the fit; it is grokking in the delayed-generalization sense, not a
 //! single-step jump.
+//!
+//! ## Pre-registration: the HxO optimizer seed (committed before any of its fresh seeds was run)
+//!
+//! `Oura/HXO_ARCHITECTURE.md` specifies Grokfast (Lee et al. 2024; EMA of gradients added to the
+//! gradient) with `alpha = 0.98, lambda = 4.2`, whose purpose is to accelerate grokking.
+//! - **Claim** ([`gf_trial`], [`HXO_GROKFAST`]): in the [`PREREG`] world (AdamW `lr 1e-3`, decay 1),
+//!   Grokfast generalizes (test >= 0.95) at an earlier step than plain AdamW on >= 20 of the 30
+//!   fresh seeds [`GF_SEEDS`] (sign test p <= 0.05; never generalizing = step 12 001; a tie is a loss).
+//! - **Dev** (seeds 100..105): plain generalized at 3 000..4 400 on 6/6; Grokfast (0.98, 4.2) on 0/6
+//!   within 12 000 steps (end test 0.56..0.77); lambda 2.0: 1/6 (end 0.79..0.96); lambda 0.5: 6/6 but
+//!   later (3 800..5 200). Larger lambda, later generalization.
+//! - **Analysis prediction: FAIL** (Grokfast later, not earlier). Scope stated in advance: a FAIL
+//!   falsifies these seed values with this optimizer in this world, not Grokfast in general (the
+//!   paper pairs it with retuned weight decay; nothing here was retuned).
+//!
+//! ## RESULT (Grokfast)
+//!
+//! (added after the one run)
+
 
 
 
@@ -148,6 +167,10 @@ pub struct Net {
     m: Vec<f32>,
     v: Vec<f32>,
     t: u32,
+    /// Grokfast (Lee et al. 2024, the HxO optimizer seed): `Some((alpha, lambda))` adds `lambda` x an
+    /// EMA (`alpha`) of past gradients to each gradient before AdamW. `None` = plain AdamW.
+    pub grokfast: Option<(f32, f32)>,
+    ema: Vec<f32>,
 }
 
 /// AdamW constants (the usual defaults).
@@ -163,7 +186,7 @@ impl Net {
         let s = 1.0 / (h as f32).sqrt();
         for x in w[2 * p * h..].iter_mut() { *x = s * rng.normal(); }
         let n = w.len();
-        Net { p, h, act, ops: 1, w, m: vec![0.0; n], v: vec![0.0; n], t: 0 }
+        Net { p, h, act, ops: 1, w, m: vec![0.0; n], v: vec![0.0; n], t: 0, grokfast: None, ema: Vec::new() }
     }
 
     pub fn params(&self) -> usize { self.w.len() }
@@ -212,7 +235,11 @@ impl Net {
     /// One full-batch AdamW step on `data` with learning rate `lr` and decoupled weight decay `wd`.
     /// Returns the training loss before the step.
     pub fn step(&mut self, data: &[Pair], lr: f32, wd: f32) -> f32 {
-        let (loss, g) = self.grad(data);
+        let (loss, mut g) = self.grad(data);
+        if let Some((alpha, lambda)) = self.grokfast {
+            if self.ema.len() != g.len() { self.ema = g.clone(); } else { for (e, x) in self.ema.iter_mut().zip(g.iter()) { *e = alpha * *e + (1.0 - alpha) * x; } }
+            for (x, e) in g.iter_mut().zip(self.ema.iter()) { *x += lambda * e; }
+        }
         self.t += 1;
         let (c1, c2) = (1.0 - BETA1.powi(self.t as i32), 1.0 - BETA2.powi(self.t as i32));
         for i in 0..self.w.len() {
@@ -401,10 +428,14 @@ pub fn measure(net: &Net, step: usize, train: &[Pair], test: &[Pair]) -> Point {
 }
 
 /// Train one seed under `cfg`, measuring at step 0 and every `eval_every` steps.
-pub fn run(seed: u64, cfg: &Config) -> Vec<Point> {
+pub fn run(seed: u64, cfg: &Config) -> Vec<Point> { run_with(seed, cfg, None) }
+
+/// [`run`] with an optional Grokfast `(alpha, lambda)` ([`Net::grokfast`]).
+pub fn run_with(seed: u64, cfg: &Config, grokfast: Option<(f32, f32)>) -> Vec<Point> {
     let (train, test) = split(seed, cfg.p, cfg.n_train);
     let mut rng = Rng::new(seed);
     let mut net = Net::new(cfg.p, cfg.hidden, cfg.act, cfg.init, &mut rng);
+    net.grokfast = grokfast;
     let mut curve = Vec::with_capacity(cfg.steps / cfg.eval_every.max(1) + 2);
     curve.push(measure(&net, 0, &train, &test));
     for s in 1..=cfg.steps {
@@ -491,6 +522,24 @@ pub fn trial(seed: u64) -> Trial {
     Trial { seed, decay: d, control: n, pass: d.event && !n.event && n.end_test <= d.end_test - GAP }
 }
 
+/// HxO optimizer seed under test: Grokfast `(alpha, lambda)` from `Oura/HXO_ARCHITECTURE.md`.
+pub const HXO_GROKFAST: (f32, f32) = (0.98, 4.2);
+/// Grokfast falsifier fresh seeds (30; disjoint from every earlier set).
+pub const GF_SEEDS: [u64; 30] = [60013, 60017, 60029, 60037, 60041, 60077, 60083, 60089, 60091, 60101, 60103, 60107, 60127, 60133, 60139,
+    60149, 60161, 60167, 60169, 60209, 60217, 60223, 60251, 60257, 60259, 60271, 60289, 60293, 60317, 60331];
+/// Grokfast wins needed of 30 (one-sided sign test p <= 0.05).
+pub const GF_MIN_WINS: usize = 20;
+
+/// One seed: step of generalization (test >= [`GEN`]; never = steps + 1) and end test, plain vs Grokfast.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GfTrial { pub seed: u64, pub plain_gen: u32, pub gf_gen: u32, pub plain_end: f32, pub gf_end: f32, pub plain_event: bool, pub gf_event: bool }
+
+pub fn gf_trial(seed: u64) -> GfTrial {
+    let never = PREREG.steps as u32 + 1;
+    let (a, b) = (analyse(&run(seed, &PREREG)), analyse(&run_with(seed, &PREREG, Some(HXO_GROKFAST))));
+    GfTrial { seed, plain_gen: a.t_gen.unwrap_or(never), gf_gen: b.t_gen.unwrap_or(never), plain_end: a.end_test, gf_end: b.end_test, plain_event: a.event, gf_event: b.event }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -519,6 +568,24 @@ mod tests {
             }
             assert!(checked >= net.w.len() * 9 / 10, "{:?}: only {} of {} checked", act, checked, net.w.len());
         }
+    }
+
+    #[test]
+    fn grokfast_off_is_plain_adamw_and_on_adds_the_ema() {
+        let mut rng = Rng::new(2);
+        let base = Net::new(5, 6, Act::Quad, 0.5, &mut rng);
+        let data: Vec<Pair> = vec![(1, 2, 0, 3), (4, 4, 0, 3)];
+        let (mut a, mut b) = (base.clone(), base.clone());
+        b.grokfast = Some((0.98, 0.0));
+        for _ in 0..5 { a.step(&data, 1e-2, 0.1); b.step(&data, 1e-2, 0.1); }
+        assert_eq!(a.w, b.w, "lambda 0 is plain AdamW");
+        let mut c = base.clone(); c.grokfast = Some((0.98, 4.2));
+        let (_, g) = base.grad(&data);
+        c.step(&data, 1e-2, 0.0);
+        // first step: ema = g, effective gradient = 5.2 g; Adam's first step is sign-like, so the move matches plain
+        let mut d = base.clone(); d.step(&data, 1e-2, 0.0);
+        for i in 0..g.len() { if g[i].abs() > 1e-4 { assert!((c.w[i] - base.w[i]) * (d.w[i] - base.w[i]) > 0.0); } }
+        assert_eq!(c.ema, g);
     }
 
     #[test]
@@ -648,6 +715,38 @@ mod tests {
         assert!(n >= PASS_SEEDS, "{}/10 seeds pass (need {})", n, PASS_SEEDS);
     }
 
+    #[test]
+    fn grokfast_preregistration_is_pinned() {
+        assert_eq!(HXO_GROKFAST, (0.98, 4.2));
+        let mut s = GF_SEEDS.to_vec(); s.sort(); s.dedup(); assert_eq!(s.len(), 30);
+        for x in GF_SEEDS.iter() { assert!(!FRESH_SEEDS.contains(x) && !DEV_SEEDS.contains(x) && !crate::brain_growth::FRESH_SEEDS.contains(x) && !crate::brain_growth::CONT_SEEDS.contains(x)); }
+        assert!(crate::brain_grok3::sign_p(GF_MIN_WINS, 30) <= 0.05);
+    }
+
+    /// PRE-REGISTERED (HxO seed): Grokfast (0.98, 4.2) generalizes earlier than plain AdamW on >= 20/30 seeds.
+    /// Run: GB_THREADS=40 cargo test --release --lib brain_grokbed::tests::falsifier_grokfast -- --ignored --nocapture
+    #[test]
+    #[ignore = "slow: 30 seeds x 2 arms x 12 000 steps (run explicitly)"]
+    fn falsifier_grokfast_hxo_seed_groks_faster() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Mutex;
+        let threads = env("GB_THREADS", 16usize).max(1);
+        let next = AtomicUsize::new(0);
+        let out: Mutex<Vec<Option<GfTrial>>> = Mutex::new(vec![None; 30]);
+        std::thread::scope(|s| for _ in 0..threads.min(30) { s.spawn(|| loop {
+            let i = next.fetch_add(1, Ordering::SeqCst); if i >= 30 { break; }
+            let r = gf_trial(GF_SEEDS[i]); out.lock().unwrap()[i] = Some(r);
+        }); });
+        let t: Vec<GfTrial> = out.into_inner().unwrap().into_iter().map(|x| x.unwrap()).collect();
+        for x in t.iter() { std::println!("  gf seed {}: gen plain {} grokfast {} | end plain {:.3} grokfast {:.3} | event plain {} grokfast {}", x.seed, x.plain_gen, x.gf_gen, x.plain_end, x.gf_end, x.plain_event, x.gf_event); }
+        let wins = t.iter().filter(|x| x.gf_gen < x.plain_gen).count();
+        let slower = t.iter().filter(|x| x.gf_gen > x.plain_gen).count();
+        let mean = |f: fn(&GfTrial) -> f32| t.iter().map(|x| f(x)).sum::<f32>() / 30.0;
+        std::println!("GROKFAST: earlier {}/30 (p {:.4}), later {}/30 (p {:.4}) | events plain {}/30 grokfast {}/30 | end test plain {:.3} grokfast {:.3}",
+            wins, crate::brain_grok3::sign_p(wins, 30), slower, crate::brain_grok3::sign_p(slower, 30), t.iter().filter(|x| x.plain_event).count(), t.iter().filter(|x| x.gf_event).count(), mean(|x| x.plain_end), mean(|x| x.gf_end));
+        assert!(wins >= GF_MIN_WINS, "Grokfast earlier on {}/30 (need {})", wins, GF_MIN_WINS);
+    }
+
     fn env<T: core::str::FromStr>(k: &str, d: T) -> T { std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d) }
 
     /// Dev runs (env GB_*), dev seeds only: cargo test --release --lib brain_grokbed::tests::dev -- --ignored --nocapture
@@ -660,7 +759,9 @@ mod tests {
         let seeds: Vec<u64> = (0..env("GB_SEEDS", 4u64)).map(|i| 100 + i).collect();
         assert!(seeds.iter().all(|s| !FRESH_SEEDS.contains(s)), "fresh seeds are run only by the falsifier");
         std::println!("{:?}", cfg);
-        let runs: Vec<Vec<Point>> = std::thread::scope(|s| seeds.iter().map(|&sd| s.spawn(move || run(sd, &cfg))).collect::<Vec<_>>().into_iter().map(|h| h.join().unwrap()).collect());
+        let gf = if env("GB_GF", 0) == 1 { Some((env("GB_GFA", 0.98f32), env("GB_GFL", 4.2f32))) } else { None };
+        std::println!("grokfast {:?}", gf);
+        let runs: Vec<Vec<Point>> = std::thread::scope(|s| seeds.iter().map(|&sd| s.spawn(move || run_with(sd, &cfg, gf))).collect::<Vec<_>>().into_iter().map(|h| h.join().unwrap()).collect());
         for (sd, c) in seeds.iter().zip(runs.iter()) {
             std::println!("seed {}", sd);
             for pt in c.iter() {
