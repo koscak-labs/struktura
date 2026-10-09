@@ -31,9 +31,36 @@
 //!   that is seed-specific. Caveat stated in advance: a PASS shows "this compression helps this
 //!   linear brain generalize", not grokking, and not that compression is needed in general.
 //!
-//! ## RESULT
+//! ## RESULT (added after the one run; rule, thresholds and seeds unchanged)
 //!
-//! (added after the one run; rule, thresholds and seeds unchanged)
+//! **PASS: A > B on 12 of 12 fresh seeds, one-sided sign test p = 0.0002** (mean paired difference
+//! +0.245, exact permutation p = 0.0002). The pre-registered analysis prediction holds.
+//!
+//! | seed | held-out A | B | C | A jump (v2 rule) | A senses / base left | B senses / base left |
+//! |------|-----------|---|---|------------------|----------------------|----------------------|
+//! | 7103 | 0.517 | 0.069 | 0.000 | 21 | 6 / 1 | 2 / 13 |
+//! | 7211 | 0.193 | 0.034 | 0.034 | none | 9 / 2 | 2 / 13 |
+//! | 7307 | 0.276 | 0.034 | 0.034 | none | 10 / 1 | 2 / 13 |
+//! | 7417 | 0.345 | 0.000 | 0.034 | 30 | 7 / 1 | 2 / 13 |
+//! | 7523 | 0.093 | 0.000 | 0.034 | none | 11 / 1 | 2 / 13 |
+//! | 7621 | 0.276 | 0.034 | 0.000 | 21 | 5 / 2 | 2 / 13 |
+//! | 7727 | 0.448 | 0.000 | 0.000 | 21 | 5 / 2 | 2 / 13 |
+//! | 7829 | 0.052 | 0.000 | 0.034 | none | 9 / 2 | 2 / 13 |
+//! | 7933 | 0.259 | 0.000 | 0.034 | none | 10 / 1 | 2 / 13 |
+//! | 8039 | 0.483 | 0.034 | 0.034 | 19 | 5 / 1 | 2 / 13 |
+//! | 8147 | 0.103 | 0.000 | 0.034 | none | 7 / 3 | 2 / 13 |
+//! | 8243 | 0.138 | 0.034 | 0.034 | none | 10 / 1 | 2 / 13 |
+//!
+//! Reported, not judged: A > C (grow-only) also 12/12 (p = 0.0002, +0.239). A jumps under v2's
+//! rule on 5/12 (v2: 2/5). One-hot: A > B on 3/12 (p = 0.98), every arm <= 0.041 held-out (chance
+//! 0.143), as predicted. Train accuracy is 1.000 in every arm.
+//!
+//! What it means, and what it does not: compression (removing the base senses that overfit, one
+//! stored copy per example) reliably lifts this linear brain's held-out accuracy, 12/12. It does
+//! NOT get it near the 1.000 the right features give (A: 0.05..0.52): the brain's discrete feature
+//! search does not assemble the full Fourier set. This is the ceiling of the linear + kNN brain on
+//! modular arithmetic, and the reason [`crate::brain_grokbed`] tests grokking with a learned
+//! representation instead.
 
 use crate::brain_grok::{Encoding, END};
 use crate::brain_grok2::{self as g2, GrokTrial2};
@@ -135,9 +162,8 @@ mod tests {
 
     /// PRE-REGISTERED primary falsifier v3: compression > no compression on held-out, Fourier, 12
     /// fresh seeds, one-sided sign test p <= 0.05.
-    /// Run: cargo test --release --lib brain_grok3 -- --ignored --nocapture
+    /// RESULT: PASSED, 12/12 seeds, p = 0.0002 (see module docs). About 8 s in release.
     #[test]
-    #[ignore = "slow: 12 seeds x 3 arms x 300 epochs (run explicitly)"]
     fn falsifier_v3_compression_beats_no_compression() {
         let t = trials(Encoding::Fourier);
         for x in t.iter() {
