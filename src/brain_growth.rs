@@ -128,6 +128,22 @@
 //! ## RESULT 3c
 //!
 //! (added after the one run)
+//!
+//! ## Pre-registration 3d: the gate as a STOP / consolidate signal (#18; committed before its seeds ran)
+//!
+//! - **Rule** ([`stop_run`]): train task 1 with the gate watching; stop [`CONSOLIDATE`] = 2 000 steps
+//!   after it fires; budget [`STOP_BUDGET`] = 12 000 (a run whose gate never fires trains the budget).
+//! - **Claim**, 30 fresh seeds [`ST_SEEDS`]: on the grokking world (290 / decay 1) test accuracy at
+//!   the stop is >= the full-budget test accuracy - 0.02 on >= 27/30 AND the stop comes at <= 60 % of
+//!   the budget on >= 27/30; on the 60 negative runs (no decay; 30 % data) the gate stops none early.
+//! - **Dev** (100..105): fired at 3 100..4 400; test at fire 0.85..0.97, +1 000: 0.958..0.992,
+//!   +2 000: 0.996 on 6/6, budget 1.000; negatives never fired (12/12).
+//! - **Analysis prediction: PASS** (~50 % of the compute saved for <= 0.004 accuracy).
+//!
+//! ## RESULT 3d
+//!
+//! (added after the one run)
+
 
 
 
@@ -505,6 +521,41 @@ pub const SHORT: ShortCfg = ShortCfg { base: GrowCfg { total: 24_000, ..PREREG }
 pub const SF_SEEDS: [u64; 30] = [63029, 63031, 63059, 63067, 63073, 63079, 63097, 63103, 63113, 63127, 63131, 63149, 63179, 63197, 63199,
     63211, 63241, 63247, 63277, 63281, 63299, 63311, 63313, 63317, 63331, 63337, 63347, 63353, 63361, 63367];
 
+/// #18: the gate as a STOP signal. One task-1 run to `steps` with the gate watching; test accuracy is
+/// recorded at the firing plus each of `extra` steps after it (consolidation) and at the full budget.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StopRun {
+    pub fired_at: Option<u32>,
+    /// Test accuracy at fire + extra[i] (None if not reached or the gate never fired).
+    pub test_after: Vec<Option<f32>>,
+    pub test_budget: f32,
+}
+
+pub fn stop_run(seed: u64, n_train1: usize, wd: f32, steps: usize, extra: &[u32]) -> StopRun {
+    let c = GrowCfg { n_train1, wd, total: steps, cap: usize::MAX, ..PREREG };
+    let d = data(seed, &c);
+    let mut rng = Rng::new(seed);
+    let mut net = Net::new(c.p, c.hidden, c.act, c.init, &mut rng);
+    let mut gate = GrokGate::new(GateCfg::DEFAULT);
+    let (mut fired_at, mut test_after, mut last) = (None, vec![None; extra.len()], 0.0f32);
+    for s in 1..=steps {
+        net.step(&d.tr1, c.lr, c.wd);
+        if s % c.eval_every != 0 { continue; }
+        let pt = point(&net, s, &d);
+        last = pt.test1;
+        if fired_at.is_none() && gate.observe(pt.train1, pt.val, pt.norm2) { fired_at = Some(s as u32); }
+        if let Some(f) = fired_at { for (i, &e) in extra.iter().enumerate() { if s as u32 == f + e { test_after[i] = Some(pt.test1); } } }
+    }
+    StopRun { fired_at, test_after, test_budget: last }
+}
+
+/// #18 rule: stop [`CONSOLIDATE`] steps after the gate fires (budget [`STOP_BUDGET`]).
+pub const CONSOLIDATE: u32 = 2_000;
+pub const STOP_BUDGET: usize = 12_000;
+/// #18 fresh seeds.
+pub const ST_SEEDS: [u64; 30] = [64013, 64019, 64033, 64037, 64063, 64067, 64081, 64091, 64109, 64123, 64151, 64153, 64157, 64171, 64187,
+    64189, 64217, 64223, 64231, 64237, 64271, 64279, 64283, 64301, 64303, 64319, 64327, 64333, 64373, 64381];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -711,6 +762,47 @@ mod tests {
         for (j, x) in jobs.iter().zip(r.iter()) {
             std::println!("seed {} {:?}: grows {:?} final_h {} end train {:.3} test {:.3} t_gen {:?} Mparam-steps {:.0}", j.0, x.mode, x.grows, x.final_h, x.end_train, x.end_test, x.t_gen, x.param_steps / 1e6);
         }
+    }
+
+    #[test]
+    fn stop_preregistration_is_pinned() {
+        assert_eq!((CONSOLIDATE, STOP_BUDGET, GATE_POS, GATE_NEG_NODECAY, GATE_NEG_LOWDATA), (2_000, 12_000, (290, 1.0), (290, 0.0), (184, 1.0)));
+        let mut s = ST_SEEDS.to_vec(); s.sort(); s.dedup(); assert_eq!(s.len(), 30);
+        for x in ST_SEEDS.iter() { assert!(!SF_SEEDS.contains(x) && !FRESH_SEEDS.contains(x) && !CONT_SEEDS.contains(x) && !crate::brain_hxo::HX_SEEDS.contains(x)); }
+    }
+
+    /// PRE-REGISTERED #18: stop CONSOLIDATE steps after the gate fires. On the grokking world: test at the stop
+    /// >= budget test - 0.02 AND stop <= 60 % of the budget, each on >= 27/30; on 60 negative runs: 0 early stops.
+    /// Run: GR_THREADS=40 cargo test --release --lib brain_growth::tests::falsifier_stop -- --ignored --nocapture
+    #[test]
+    #[ignore = "slow: 90 runs x 12 000 steps (run explicitly)"]
+    fn falsifier_stop_signal_saves_compute_at_equal_accuracy() {
+        let jobs: Vec<(u64, usize, (usize, f32))> = ST_SEEDS.iter().flat_map(|&s| [(s, 0, GATE_POS), (s, 1, GATE_NEG_NODECAY), (s, 2, GATE_NEG_LOWDATA)]).collect();
+        let r: Vec<StopRun> = par_map(&jobs, |&(s, _, (n, wd))| stop_run(s, n, wd, STOP_BUDGET, &[CONSOLIDATE]));
+        let (mut ok_acc, mut ok_cost, mut early_neg) = (0usize, 0usize, 0usize);
+        let mut saved = 0.0f64;
+        for (j, x) in jobs.iter().zip(r.iter()) {
+            let stop = x.fired_at.map(|f| (f + CONSOLIDATE).min(STOP_BUDGET as u32));
+            let at = x.test_after[0].unwrap_or(x.test_budget);
+            std::println!("  stop seed {} arm {}: fired {:?} stop {:?} test at stop {:.3} budget {:.3}", j.0, j.1, x.fired_at, stop, at, x.test_budget);
+            if j.1 == 0 {
+                if at >= x.test_budget - 0.02 { ok_acc += 1; }
+                if let Some(s) = stop { if (s as f64) <= 0.6 * STOP_BUDGET as f64 { ok_cost += 1; } saved += 1.0 - s as f64 / STOP_BUDGET as f64; }
+            } else if x.fired_at.is_some() { early_neg += 1; }
+        }
+        std::println!("STOP: accuracy kept (>= budget - 0.02) {}/30 | stop <= 60% budget {}/30 | mean compute saved {:.1}% | negative-arm early stops {}/60", ok_acc, ok_cost, 100.0 * saved / 30.0, early_neg);
+        assert!(ok_acc >= 27 && ok_cost >= 27 && early_neg == 0, "acc {}/30 cost {}/30 early_neg {}", ok_acc, ok_cost, early_neg);
+    }
+
+    /// #18 dev, dev seeds only: cargo test --release --lib brain_growth::tests::dev_stop -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn dev_stop() {
+        let extra = [0u32, 500, 1000, 2000, 3000];
+        let seeds: Vec<u64> = (0..env("GR_SEEDS", 6u64)).map(|i| 100 + i).collect();
+        let jobs: Vec<(u64, usize, f32)> = seeds.iter().flat_map(|&s| [(s, 290usize, 1.0f32), (s, 184, 1.0), (s, 290, 0.0)]).collect();
+        let r: Vec<StopRun> = par_map(&jobs, |&(s, n, wd)| stop_run(s, n, wd, 12_000, &extra));
+        for (j, x) in jobs.iter().zip(r.iter()) { std::println!("seed {} n{} wd{}: fired {:?} test after +{:?} = {:?} | budget {:.3}", j.0, j.1, j.2, x.fired_at, extra, x.test_after.iter().map(|t| t.map(|v| (v * 1000.0).round() / 1000.0)).collect::<Vec<_>>(), x.test_budget); }
     }
 
     /// Continual dev, dev seeds only: GR_N2=132 cargo test --release --lib brain_growth::tests::dev_continual -- --ignored --nocapture
