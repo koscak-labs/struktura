@@ -83,6 +83,8 @@ pub const TRIALS: &[(&str, TrialFn)] = &[
     ("genome", trials::genome),
     ("cycle", trials::cycle),
     ("grok", trials::grok),
+    ("compress", trials::compress),
+    ("grokking", trials::grokking),
 ];
 
 /// The gym's result summary.
@@ -267,6 +269,27 @@ mod trials {
         Trial { name: "grok", expect: Expect::Fail,
             claim: "(a+b) mod 7, fixed train set replayed: brain + compression shows a late held-out jump of >= 30 pts after a train plateau, the same brain without compression does not (ONE fresh seed, one-hot; test: 5 seeds x 2 encodings, ignored as FAILED 0/5: the cycle watches the memorized train stream)",
             metric: "held-out accuracy at the end (compression vs none)", value: dec(t.heldout_a), baseline: dec(t.heldout_b), pass: t.pass }
+    }
+
+
+    pub fn compress(seed: u64) -> Trial {
+        use crate::brain_grok::Encoding;
+        let s = seeds::<6>(seed, "compress");
+        let t: [crate::brain_grok2::GrokTrial2; 6] = std::thread::scope(|sc| s.map(|x| sc.spawn(move || crate::brain_grok2::trial(x, Encoding::Fourier))).map(|h| h.join().unwrap()));
+        let wins = t.iter().filter(|x| x.heldout_a > x.heldout_b).count();
+        Trial { name: "compress", expect: Expect::Pass,
+            claim: "(a+b) mod 7, Fourier: the growth cycle with compression ends above the same cycle without compression on held-out on all 6 fresh seeds (sign p 0.016; test brain_grok3: 12/12, p 0.0002)",
+            metric: "mean held-out at the end (compression vs none)", value: dec(t.iter().map(|x| x.heldout_a).sum::<f32>() / 6.0),
+            baseline: dec(t.iter().map(|x| x.heldout_b).sum::<f32>() / 6.0), pass: wins == 6 }
+    }
+
+    pub fn grokking(seed: u64) -> Trial {
+        let s = seeds::<3>(seed, "grokking");
+        let t: [crate::brain_grokbed::Trial; 3] = std::thread::scope(|sc| s.map(|x| sc.spawn(move || crate::brain_grokbed::trial(x))).map(|h| h.join().unwrap()));
+        Trial { name: "grokking", expect: Expect::Pass,
+            claim: "(a+b) mod 23, learned embeddings + quadratic MLP: with weight decay it fits early and generalizes >= 3x later (test >= 0.95, stays); without decay it does not (all 3 fresh seeds; test brain_grokbed: 10/10)",
+            metric: "end test accuracy (decay vs none)", value: dec(t.iter().map(|x| x.decay.end_test).sum::<f32>() / 3.0),
+            baseline: dec(t.iter().map(|x| x.control.end_test).sum::<f32>() / 3.0), pass: t.iter().all(|x| x.pass) }
     }
 
     pub fn cycle(seed: u64) -> Trial {
