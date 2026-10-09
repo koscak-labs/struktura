@@ -141,10 +141,9 @@ pub struct Net {
     pub p: usize,
     pub h: usize,
     pub act: Act,
-    /// Operations (op tokens). With 1 there is no op embedding.
+    /// Operations: one output head each (op 0 = the first head).
     pub ops: usize,
-    /// `[Ea (p x h) | Eb (p x h) | W (p x h) | Eo (ops x h, only if ops > 1)]`, row-major, row =
-    /// token / class / op.
+    /// `[Ea (p x h) | Eb (p x h) | W (ops * p x h)]`, row-major, row = token / (op, class).
     pub w: Vec<f32>,
     m: Vec<f32>,
     v: Vec<f32>,
@@ -175,20 +174,17 @@ impl Net {
     fn eb(&self) -> usize { self.p * self.h }
     #[inline]
     fn wo(&self) -> usize { 2 * self.p * self.h }
-    #[inline]
-    fn eo(&self) -> usize { 3 * self.p * self.h }
     /// Rows of each block.
-    fn rows(&self) -> [usize; 4] { [self.p, self.p, self.p, if self.ops > 1 { self.ops } else { 0 }] }
+    fn rows(&self) -> [usize; 3] { [self.p, self.p, self.p * self.ops] }
 
     /// Logits of one pair into `out` (length `p`); `pre` and `z` are scratch of length `h`.
     fn forward(&self, a: usize, b: usize, op: usize, pre: &mut [f32], z: &mut [f32], out: &mut [f32]) {
         let (h, p) = (self.h, self.p);
         let (ea, eb, wo) = (&self.w[self.ea() + a * h..][..h], &self.w[self.eb() + b * h..][..h], self.wo());
         for j in 0..h { pre[j] = ea[j] + eb[j]; }
-        if self.ops > 1 { let eo = &self.w[self.eo() + op * h..][..h]; for j in 0..h { pre[j] += eo[j]; } }
         for j in 0..h { z[j] = self.act.f(pre[j]); }
         for c in 0..p {
-            let row = &self.w[wo + c * h..][..h];
+            let row = &self.w[wo + (op * p + c) * h..][..h];
             out[c] = row.iter().zip(z.iter()).map(|(x, y)| x * y).sum();
         }
     }
@@ -232,7 +228,7 @@ impl Net {
     /// Mean cross-entropy on `data` and its gradient with respect to every weight.
     pub fn grad(&self, data: &[Pair]) -> (f32, Vec<f32>) {
         let (h, p) = (self.h, self.p);
-        let (ea0, eb0, wo0, eo0) = (self.ea(), self.eb(), self.wo(), self.eo());
+        let (ea0, eb0, wo0) = (self.ea(), self.eb(), self.wo());
         let mut g = vec![0.0f32; self.w.len()];
         let (mut pre, mut z, mut out, mut dz) = (vec![0.0; h], vec![0.0; h], vec![0.0; p], vec![0.0; h]);
         let mut loss = 0.0f64;
@@ -244,15 +240,15 @@ impl Net {
             for d in dz.iter_mut() { *d = 0.0; }
             for c in 0..p {
                 let dl = out[c];
-                let row = &self.w[wo0 + c * h..][..h];
-                let grow = &mut g[wo0 + c * h..][..h];
+                let k = wo0 + (op * p + c) * h;
+                let row = &self.w[k..][..h];
+                let grow = &mut g[k..][..h];
                 for j in 0..h { grow[j] += dl * z[j]; dz[j] += dl * row[j]; }
             }
             for j in 0..h {
                 let d = dz[j] * self.act.df(pre[j]);
                 g[ea0 + a * h + j] += d;
                 g[eb0 + b * h + j] += d;
-                if self.ops > 1 { g[eo0 + op * h + j] += d; }
             }
         }
         let n = data.len().max(1) as f32;
@@ -325,10 +321,10 @@ impl Net {
         self.h = h1; self.w = w; self.m = m; self.v = v;
     }
 
-    /// Add an operation token. Going from 1 to 2 ops creates the op embedding with both rows zero,
-    /// so the function on op 0 is unchanged and op 1 starts as a copy of op 0.
+    /// Add an operation: a new output head with zero weights (op 0..ops-1 are unchanged; the new op
+    /// reads the same hidden neurons through its own head).
     pub fn add_op(&mut self) {
-        let extra = if self.ops == 1 { 2 * self.h } else { self.h };
+        let extra = self.p * self.h;
         self.ops += 1;
         let n = self.w.len() + extra;
         self.w.resize(n, 0.0); self.m.resize(n, 0.0); self.v.resize(n, 0.0);
@@ -506,8 +502,8 @@ mod tests {
             let mut rng = Rng::new(3);
             let mut net = Net::new(5, 7, act, 0.5, &mut rng);
             net.add_op();
-            let eo = net.eo();
-            for x in net.w[eo..].iter_mut() { *x = 0.5 * rng.normal(); }
+            let h1 = 3 * net.p * net.h;
+            for x in net.w[h1..].iter_mut() { *x = 0.5 * rng.normal(); }
             let data: Vec<Pair> = vec![(1, 2, 0, 3), (4, 4, 0, 3), (0, 3, 0, 3), (2, 2, 0, 4), (4, 1, 1, 3), (0, 2, 1, 3)];
             let (_, g) = net.grad(&data);
             let mut checked = 0;
@@ -564,13 +560,13 @@ mod tests {
         net.add_op();
         assert_eq!(net.ops, 2);
         assert_eq!(f0, (0..49).map(|k| net.predict(k / 7, k % 7, 0)).collect::<Vec<_>>());
-        assert_eq!(f0, (0..49).map(|k| net.predict(k / 7, k % 7, 1)).collect::<Vec<_>>(), "op 1 starts as a copy of op 0");
-        let eo = net.eo();
-        for x in net.w[eo..].iter_mut() { *x = rng.normal(); }
+        assert!((0..49).all(|k| net.predict(k / 7, k % 7, 1) == 0), "the new head starts at zero");
+        let h1 = 3 * net.p * net.h;
+        for x in net.w[h1..].iter_mut() { *x = rng.normal(); }
         let both: Vec<usize> = (0..98).map(|k| net.predict(k % 49 / 7, k % 7, k / 49)).collect();
         net.grow(5, 0.5, &mut rng);
         assert_eq!(both, (0..98).map(|k| net.predict(k % 49 / 7, k % 7, k / 49)).collect::<Vec<_>>());
-        assert_eq!(net.w.len(), 3 * 7 * 11 + 2 * 11);
+        assert_eq!(net.w.len(), 4 * 7 * 11);
     }
 
     #[test]

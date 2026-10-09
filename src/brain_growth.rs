@@ -1,0 +1,418 @@
+//! Growth gated by grokking: grow -> compress -> grokking event -> grow bigger.
+//!
+//! Phil (2026-10-06): "it can grow, but it has to grow and compress and compress, reach a grokking
+//! event and then it can grow to become a bigger model". [`crate::brain_grokbed`] showed the event
+//! is real in a network with a learned representation (decay groks on 10/10 fresh seeds, no decay
+//! on 0/10). This module tests the growth rule built on it:
+//!
+//! - **Task 1**: `(a + b) mod p` ([`crate::brain_grokbed`]'s world). A validation slice is carved
+//!   from its training pairs; the slice is never trained on and is the ONLY thing the online
+//!   detector reads besides training accuracy and the weight norm (the test sets drive nothing).
+//! - **Compress + generalize event** (online, every measurement): train accuracy >= `fit`,
+//!   validation accuracy >= `val_ok` for `val_hold` consecutive measurements, and the squared weight
+//!   norm at most `1 - norm_drop` of its running peak (the network compressed).
+//! - **At the growth point**: structural compression ([`Net::prune`]: neurons whose weights decayed
+//!   to nothing are removed), then growth: `grow_by` new neurons ([`Net::grow`], function unchanged)
+//!   and a new output head ([`Net::add_op`]): **task 2** = `(a - b) mod p`, with a small fixed
+//!   training set. From then on the network trains on both tasks' training pairs.
+//! - **Arms** (same seed: same splits, same initial weights for the shared part, same total steps):
+//!   - **G (gated)**: grows at the event (or at `cap` steps if it never fires);
+//!   - **U (ungated)**: grows as soon as task 1's training set is fitted (memorized, before grokking);
+//!   - **S (scratch)**: the final-size network (`h + grow_by` neurons, 2 ops) trained on both tasks
+//!     from step 0.
+//! - **Measured**: `t_both` = first step at which BOTH tasks' test accuracy is >= 0.95 (total steps
+//!   from the start, so G pays for the steps it spent on task 1).
+//!
+//! ## Pre-registration (written and committed before any fresh seed was run)
+//!
+//! - **World** [`PREREG`]: task 1 as in [`crate::brain_grokbed::PREREG`] (`p = 23`, quadratic,
+//!   128 neurons, AdamW `lr 1e-3`, decay 1.0) with 290 training pairs of which 25 are the
+//!   validation slice (so 265 are trained, as in the grokbed falsifier); growth = prune (< 1 % of
+//!   the largest neuron) + 64 neurons + a task-2 head; 16 000 total steps; G's cap 8 000. Gate
+//!   thresholds [`GateCfg::DEFAULT`]: train >= 0.99, validation >= 0.95 for 3 measurements, norm
+//!   <= 0.95 x peak.
+//! - **Primary claim (R1, [`R1`], 53 task-2 training pairs = 10 %)**: G ends (mean task-2 test
+//!   accuracy of the last 10 measurements) above S on >= 20 of the 30 fresh seeds [`FRESH_SEEDS`]
+//!   AND above U on >= 20 of 30 (each a one-sided sign test at p <= 0.05; a tie is a loss).
+//! - **Secondary (R2, [`R2`], 132 pairs = 25 %)**: the same comparisons, plus `t_both` (G faster
+//!   than S / U) and parameter-steps to `t_both` (G cheaper than S); reported, not judged.
+//! - **Detector check** (yin-23's ask: a negative control for the gate): task 1 only, 12 000
+//!   steps, the gate watching, 30 fresh seeds per arm. Positive: the grokking world. Negative 1: no
+//!   weight decay. Negative 2: decay with 30 % data (184 pairs incl. the slice; it compresses but did
+//!   not generalize within 12 000 steps on dev seeds). A FALSE POSITIVE is a firing while task 1's
+//!   test accuracy at that measurement is < 0.90 (the test set is read only to score the gate).
+//!   **Pass iff 0 false positives in all 90 runs and >= 27 of 30 positives fire with test >= 0.90.**
+//! - **Development** (dev seeds 100..102 only). First design: a task-2 op TOKEN added to the
+//!   hidden pre-activation. Every arm failed, scratch included: with a quadratic neuron
+//!   `(A(a) + B(b) + O(op))^2` the `a x b` interaction does not depend on the op, so no op token
+//!   can switch `+` to `-` (an instrument bug, fixed by one output head per op: the grokked
+//!   neurons' `A B` products already contain `cos w (a - b)`). With heads, dev results: R2 (25 %):
+//!   `t_both` S 2 500..3 500 < U 3 200..4 000 < G 5 100..6 600 steps; R1 (10 %): end task-2 test
+//!   G 0.78 / 0.87 / 0.86, U 0.78 / 0.90 / 0.87, S 0.81 / 0.88 / 0.89 (G last on 6 of 6
+//!   comparisons); 5 % and 15 % look the same. Every arm keeps training task 1, so every arm groks
+//!   it by ~4 000 steps and shares its Fourier neurons with the task-2 head: gating buys no edge.
+//! - **Analysis prediction: the primary claim FAILS** (G does not beat S and U), on the dev
+//!   evidence above. A FAIL here falsifies "growing only after the grokking event yields a better
+//!   bigger model" in this world; it does not touch step 2 (the event itself is real) or the gate's
+//!   value as a detector, which is tested separately.
+//!
+//! ## RESULT
+//!
+//! (added after the one run; rule, thresholds and seeds unchanged)
+
+
+use std::vec::Vec;
+
+use crate::brain_grokbed::{split_op, Act, Net, Pair, Rng};
+use crate::grok_gate::{GateCfg, GrokGate};
+
+/// Settings of one growth experiment.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GrowCfg {
+    pub p: usize,
+    /// Task 1 training pairs (including the validation slice).
+    pub n_train1: usize,
+    /// Validation pairs carved from task 1's training pairs.
+    pub n_val: usize,
+    /// Task 2 training pairs.
+    pub n_train2: usize,
+    pub hidden: usize,
+    pub grow_by: usize,
+    pub act: Act,
+    pub init: f32,
+    pub lr: f32,
+    pub wd: f32,
+    /// Total steps for every arm.
+    pub total: usize,
+    pub eval_every: usize,
+    /// G grows at this step at the latest.
+    pub cap: usize,
+    pub fit: f32,
+    pub val_ok: f32,
+    pub val_hold: u8,
+    pub norm_drop: f32,
+    /// Prune neurons below this fraction of the largest squared norm at the growth point.
+    pub prune_frac: f32,
+}
+
+/// Which arm.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Arm { Gated, Ungated, Scratch }
+
+/// One measurement.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GPoint {
+    pub step: u32,
+    pub train1: f32,
+    pub val: f32,
+    pub test1: f32,
+    pub train2: f32,
+    pub test2: f32,
+    pub norm2: f32,
+    pub hidden: u16,
+}
+
+/// One arm's run.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GrowRun {
+    pub arm: Arm,
+    pub curve: Vec<GPoint>,
+    /// Step at which the network grew (S: 0).
+    pub grow_step: Option<u32>,
+    /// Whether G's event fired (false for U and S).
+    pub event: bool,
+    /// Neurons removed by the structural compression at the growth point.
+    pub pruned: usize,
+    /// Parameters just before pruning, after pruning, and after growth.
+    pub params: [usize; 3],
+}
+
+/// Test accuracy both tasks must reach.
+pub const BOTH: f32 = 0.95;
+
+impl GrowRun {
+    /// First step with both tasks' test accuracy >= [`BOTH`].
+    pub fn t_both(&self) -> Option<u32> { self.curve.iter().find(|p| p.test1 >= BOTH && p.test2 >= BOTH).map(|p| p.step) }
+    /// First step with task 2's test accuracy >= [`BOTH`].
+    pub fn t_task2(&self) -> Option<u32> { self.curve.iter().find(|p| p.test2 >= BOTH).map(|p| p.step) }
+    /// Mean of the last `k` measurements of a field.
+    pub fn end(&self, k: usize, f: impl Fn(&GPoint) -> f32) -> f32 {
+        let k = k.min(self.curve.len()).max(1);
+        self.curve[self.curve.len() - k..].iter().map(f).sum::<f32>() / k as f32
+    }
+}
+
+/// The seed's data: task 1 train (without the slice), validation slice, task 1 test, task 2 train, task 2 test.
+pub struct Data { pub tr1: Vec<Pair>, pub val: Vec<Pair>, pub te1: Vec<Pair>, pub tr2: Vec<Pair>, pub te2: Vec<Pair> }
+
+pub fn data(seed: u64, c: &GrowCfg) -> Data {
+    let (mut tr1, te1) = split_op(seed, c.p, c.n_train1, 0);
+    let val = tr1.split_off(c.n_train1 - c.n_val.min(c.n_train1));
+    let (tr2, te2) = split_op(seed, c.p, c.n_train2, 1);
+    Data { tr1, val, te1, tr2, te2 }
+}
+
+fn point(net: &Net, step: usize, d: &Data) -> GPoint {
+    let two = net.ops > 1;
+    GPoint { step: step as u32, train1: net.eval(&d.tr1).0, val: net.eval(&d.val).0, test1: net.eval(&d.te1).0,
+        train2: if two { net.eval(&d.tr2).0 } else { 0.0 }, test2: if two { net.eval(&d.te2).0 } else { 0.0 },
+        norm2: net.norm2(), hidden: net.h as u16 }
+}
+
+/// Run one arm.
+pub fn run_arm(seed: u64, c: &GrowCfg, arm: Arm) -> GrowRun {
+    let d = data(seed, c);
+    let mut both: Vec<Pair> = d.tr1.clone();
+    both.extend_from_slice(&d.tr2);
+    let mut rng = Rng::new(seed);
+    let mut net = Net::new(c.p, c.hidden, c.act, c.init, &mut rng);
+    let mut grow_rng = Rng::new(seed ^ 0x6A0F_0000);
+    let (mut grown, mut grow_step, mut event, mut pruned, mut params) = (false, None, false, 0usize, [0usize; 3]);
+    if arm == Arm::Scratch {
+        net.grow(c.grow_by, c.init, &mut grow_rng);
+        // scratch: the grown neurons get random output weights like the rest (a fresh network)
+        let (p, h) = (net.p, net.h);
+        let s = 1.0 / (h as f32).sqrt();
+        for r in 0..p { for j in c.hidden..h { net.w[2 * p * h + r * h + j] = s * grow_rng.normal(); } }
+        net.add_op();
+        let h1 = 3 * p * h;
+        for x in net.w[h1..].iter_mut() { *x = s * grow_rng.normal(); }
+        grown = true; grow_step = Some(0);
+        params = [net.params(); 3];
+    }
+    let mut curve = Vec::with_capacity(c.total / c.eval_every.max(1) + 2);
+    curve.push(point(&net, 0, &d));
+    let mut gate = GrokGate::new(GateCfg { fit: c.fit, val_ok: c.val_ok, val_hold: c.val_hold, drop: c.norm_drop });
+    for s in 1..=c.total {
+        net.step(if grown { &both } else { &d.tr1 }, c.lr, c.wd);
+        if s % c.eval_every != 0 { continue; }
+        let pt = point(&net, s, &d);
+        curve.push(pt);
+        if grown { continue; }
+        let e = gate.observe(pt.train1, pt.val, pt.norm2);
+        let fire = match arm {
+            Arm::Gated => {
+                if e { event = true; }
+                e || s >= c.cap
+            }
+            Arm::Ungated => pt.train1 >= c.fit,
+            Arm::Scratch => false,
+        };
+        if fire {
+            params[0] = net.params();
+            pruned = net.prune(c.prune_frac);
+            params[1] = net.params();
+            net.grow(c.grow_by, c.init, &mut grow_rng);
+            net.add_op();
+            params[2] = net.params();
+            grown = true; grow_step = Some(s as u32);
+        }
+    }
+    GrowRun { arm, curve, grow_step, event, pruned, params }
+}
+
+/// All three arms of one seed.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GrowTrial { pub seed: u64, pub g: GrowRun, pub u: GrowRun, pub s: GrowRun }
+
+pub fn trial(seed: u64, c: &GrowCfg) -> GrowTrial {
+    GrowTrial { seed, g: run_arm(seed, c, Arm::Gated), u: run_arm(seed, c, Arm::Ungated), s: run_arm(seed, c, Arm::Scratch) }
+}
+
+/// Pre-registered base settings (task 2 size set per regime).
+pub const PREREG: GrowCfg = GrowCfg { p: 23, n_train1: 290, n_val: 25, n_train2: 53, hidden: 128, grow_by: 64, act: Act::Quad, init: 0.1,
+    lr: 1e-3, wd: 1.0, total: 16_000, eval_every: 100, cap: 8_000, fit: 0.99, val_ok: 0.95, val_hold: 3, norm_drop: 0.05, prune_frac: 0.01 };
+/// Regime R1 (primary): task 2 has 53 training pairs (10 %).
+pub const R1: GrowCfg = PREREG;
+/// Regime R2 (secondary): task 2 has 132 training pairs (25 %).
+pub const R2: GrowCfg = GrowCfg { n_train2: 132, ..PREREG };
+/// Pre-registered fresh seeds: 30, never run before the pre-registration was committed.
+pub const FRESH_SEEDS: [u64; 30] = [40009, 40013, 40031, 40037, 40039, 40063, 40087, 40093, 40099, 40111, 40123, 40127, 40129, 40151, 40153,
+    40163, 40169, 40177, 40189, 40193, 40213, 40231, 40237, 40241, 40253, 40277, 40283, 40289, 40343, 40351];
+/// Wins of 30 for a one-sided sign test p <= 0.05 (`P(X >= 20 | 30, 1/2) = 0.0494`).
+pub const MIN_WINS: usize = 20;
+/// Evaluations averaged for "end" accuracy.
+pub const END_EVALS: usize = 10;
+
+/// One regime's primary comparison: wins of G over another arm on task 2's end test accuracy.
+pub fn wins_end_task2(t: &[GrowTrial], other: impl Fn(&GrowTrial) -> &GrowRun) -> usize {
+    t.iter().filter(|x| x.g.end(END_EVALS, |p| p.test2) > other(x).end(END_EVALS, |p| p.test2)).count()
+}
+
+/// `t_both` with "never" scored as `total + 1`.
+pub fn t_both_or_cap(r: &GrowRun, total: usize) -> u32 { r.t_both().unwrap_or(total as u32 + 1) }
+
+/// Detector check: task 1 only, the gate watching, no growth. `fired_at` and test accuracy there.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GateRun { pub fired_at: Option<u32>, pub test_at_fire: f32, pub end_test: f32, pub norm_drop: f32 }
+
+/// Run task 1 with the pre-registered gate for `steps`; never grows.
+pub fn gate_run(seed: u64, n_train1: usize, wd: f32, steps: usize) -> GateRun {
+    let c = GrowCfg { n_train1, wd, total: steps, cap: usize::MAX, ..PREREG };
+    let d = data(seed, &c);
+    let mut rng = Rng::new(seed);
+    let mut net = Net::new(c.p, c.hidden, c.act, c.init, &mut rng);
+    let mut gate = GrokGate::new(GateCfg::DEFAULT);
+    let (mut fired_at, mut test_at_fire, mut last) = (None, 0.0f32, point(&net, 0, &d));
+    for s in 1..=steps {
+        net.step(&d.tr1, c.lr, c.wd);
+        if s % c.eval_every != 0 { continue; }
+        last = point(&net, s, &d);
+        if gate.observe(last.train1, last.val, last.norm2) { fired_at = Some(s as u32); test_at_fire = last.test1; }
+    }
+    GateRun { fired_at, test_at_fire, end_test: last.test1, norm_drop: 1.0 - last.norm2 / gate.peak().max(1e-30) }
+}
+
+/// Detector arms: positive (the grokking world), negative 1 (no weight decay), negative 2 (decay,
+/// 30 % training data: compresses but does not generalize within the budget).
+pub const GATE_STEPS: usize = 12_000;
+pub const GATE_POS: (usize, f32) = (290, 1.0);
+pub const GATE_NEG_NODECAY: (usize, f32) = (290, 0.0);
+pub const GATE_NEG_LOWDATA: (usize, f32) = (184, 1.0);
+/// A firing is a false positive when task 1's test accuracy at that measurement is below this.
+pub const TRUE_GEN: f32 = 0.90;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn env<T: core::str::FromStr>(k: &str, d: T) -> T { std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d) }
+
+    fn dev_cfg() -> GrowCfg {
+        GrowCfg { p: 23, n_train1: env("GR_N1", 265), n_val: env("GR_VAL", 25), n_train2: env("GR_N2", 132), hidden: env("GR_H", 128), grow_by: env("GR_GROW", 64),
+            act: Act::Quad, init: 0.1, lr: 1e-3, wd: env("GR_WD", 1.0), total: env("GR_TOTAL", 16000), eval_every: 100, cap: env("GR_CAP", 8000),
+            fit: 0.99, val_ok: env("GR_VALOK", 0.95), val_hold: env("GR_HOLD", 3), norm_drop: env("GR_DROP", 0.05), prune_frac: env("GR_PRUNE", 0.01) }
+    }
+
+    #[test]
+    fn data_is_disjoint_and_sized() {
+        let c = GrowCfg { n_train1: 100, n_val: 10, n_train2: 50, ..dev_cfg() };
+        let d = data(4, &c);
+        assert_eq!((d.tr1.len(), d.val.len(), d.te1.len(), d.tr2.len(), d.te2.len()), (90, 10, 429, 50, 479));
+        for v in d.val.iter() { assert!(!d.tr1.contains(v) && !d.te1.contains(v)); }
+        assert!(d.tr2.iter().chain(d.te2.iter()).all(|x| x.2 == 1));
+    }
+
+    #[test]
+    fn arms_grow_when_they_should() {
+        let c = GrowCfg { p: 7, n_train1: 30, n_val: 5, n_train2: 20, hidden: 16, grow_by: 8, total: 600, eval_every: 50, cap: 400, ..dev_cfg() };
+        let (g, u, s) = (run_arm(1, &c, Arm::Gated), run_arm(1, &c, Arm::Ungated), run_arm(1, &c, Arm::Scratch));
+        assert_eq!(s.grow_step, Some(0));
+        let fit = u.curve.iter().find(|p| p.train1 >= c.fit).map(|p| p.step);
+        assert_eq!(u.grow_step, fit, "U grows at the first fitted measurement");
+        assert!(if g.event { g.grow_step >= fit } else { g.grow_step == Some(c.cap as u32) }, "G grows at the event, or at the cap");
+        assert!(g.grow_step.unwrap() <= 400);
+        for r in [&g, &u, &s] { assert_eq!(r.curve.len(), 600 / 50 + 1); assert_eq!(r.params[2], 4 * 7 * r.curve.last().unwrap().hidden as usize); }
+        assert_eq!(s.curve.last().unwrap().hidden as usize, 24);
+    }
+
+    /// Map `f` over `items` on `threads` workers (env GR_THREADS, default 16); order preserved.
+    fn par_map<T: Sync, R: Send + Clone>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Mutex;
+        let threads: usize = env("GR_THREADS", 16usize).max(1);
+        let next = AtomicUsize::new(0);
+        let out: Mutex<Vec<Option<R>>> = Mutex::new(vec![None; items.len()]);
+        std::thread::scope(|s| {
+            for _ in 0..threads.min(items.len()) {
+                s.spawn(|| loop {
+                    let i = next.fetch_add(1, Ordering::SeqCst);
+                    if i >= items.len() { break; }
+                    let r = f(&items[i]);
+                    out.lock().unwrap()[i] = Some(r);
+                });
+            }
+        });
+        out.into_inner().unwrap().into_iter().map(|r| r.unwrap()).collect()
+    }
+
+    #[test]
+    fn preregistration_is_pinned() {
+        assert_eq!(PREREG, GrowCfg { p: 23, n_train1: 290, n_val: 25, n_train2: 53, hidden: 128, grow_by: 64, act: Act::Quad, init: 0.1,
+            lr: 1e-3, wd: 1.0, total: 16_000, eval_every: 100, cap: 8_000, fit: 0.99, val_ok: 0.95, val_hold: 3, norm_drop: 0.05, prune_frac: 0.01 });
+        assert_eq!((R1.n_train2, R2.n_train2), (53, 132));
+        assert_eq!(GateCfg::DEFAULT, GateCfg { fit: PREREG.fit, val_ok: PREREG.val_ok, val_hold: PREREG.val_hold, drop: PREREG.norm_drop });
+        assert_eq!(FRESH_SEEDS.len(), 30);
+        let mut s = FRESH_SEEDS.to_vec(); s.sort(); s.dedup(); assert_eq!(s.len(), 30);
+        for x in FRESH_SEEDS.iter() { assert!(!crate::brain_grokbed::FRESH_SEEDS.contains(x) && !crate::brain_grokbed::DEV_SEEDS.contains(x)); }
+        assert!(crate::brain_grok3::sign_p(MIN_WINS, 30) <= 0.05 && crate::brain_grok3::sign_p(MIN_WINS - 1, 30) > 0.05);
+        assert_eq!((GATE_STEPS, GATE_POS, GATE_NEG_NODECAY, GATE_NEG_LOWDATA, TRUE_GEN, END_EVALS), (12_000, (290, 1.0), (290, 0.0), (184, 1.0), 0.90, 10));
+    }
+
+    fn growth_falsifier(name: &str, c: &GrowCfg) -> (usize, usize) {
+        let t: Vec<GrowTrial> = par_map(&FRESH_SEEDS, |&sd| trial(sd, c));
+        for x in t.iter() {
+            let f = |r: &GrowRun| format!("grow {:?} t_both {:?} end t1 {:.3} t2 {:.3}", r.grow_step, r.t_both(), r.end(END_EVALS, |p| p.test1), r.end(END_EVALS, |p| p.test2));
+            std::println!("  {} seed {}: G[{} event {} pruned {}] U[{}] S[{}]", name, x.seed, f(&x.g), x.g.event, x.g.pruned, f(&x.u), f(&x.s));
+        }
+        let (ws, wu) = (wins_end_task2(&t, |x| &x.s), wins_end_task2(&t, |x| &x.u));
+        let p = crate::brain_grok3::sign_p;
+        let mean = |f: &dyn Fn(&GrowTrial) -> f32| t.iter().map(|x| f(x)).sum::<f32>() / t.len() as f32;
+        let tb = |r: &GrowRun| t_both_or_cap(r, c.total);
+        let faster = |o: &dyn Fn(&GrowTrial) -> &GrowRun| t.iter().filter(|x| tb(&x.g) < tb(o(x))).count();
+        // compute to t_both in parameter-steps (G: small net until it grows)
+        let cost = |r: &GrowRun, small: f64, big: f64| -> f64 { let g = r.grow_step.unwrap_or(0) as f64; let tb = tb(r) as f64; if tb <= g { small * tb } else { small * g + big * (tb - g) } };
+        let (small, big) = ((4 * c.p * c.hidden) as f64 * 0.75, (4 * c.p * (c.hidden + c.grow_by)) as f64);
+        let cheaper = t.iter().filter(|x| cost(&x.g, small, big) < cost(&x.s, big, big)).count();
+        std::println!("{}: end task-2 test mean G {:.3} U {:.3} S {:.3} | G>S {}/30 (p {:.4}) G>U {}/30 (p {:.4}) | t_both faster G<S {}/30 G<U {}/30 | G events {}/30 | G cheaper param-steps to t_both than S {}/30",
+            name, mean(&|x| x.g.end(END_EVALS, |p| p.test2)), mean(&|x| x.u.end(END_EVALS, |p| p.test2)), mean(&|x| x.s.end(END_EVALS, |p| p.test2)),
+            ws, p(ws, 30), wu, p(wu, 30), faster(&|x| &x.s), faster(&|x| &x.u), t.iter().filter(|x| x.g.event).count(), cheaper);
+        (ws, wu)
+    }
+
+    /// PRE-REGISTERED primary (R1): G beats S AND U on task 2's end test accuracy, >= 20/30 each.
+    /// Run: GR_THREADS=40 cargo test --release --lib brain_growth::tests::falsifier_r1 -- --ignored --nocapture
+    #[test]
+    #[ignore = "slow: 30 seeds x 3 arms x 16 000 steps (run explicitly)"]
+    fn falsifier_r1_gated_growth_beats_scratch_and_ungated() {
+        let (ws, wu) = growth_falsifier("R1", &R1);
+        assert!(ws >= MIN_WINS && wu >= MIN_WINS, "G>S {}/30, G>U {}/30 (need {} each)", ws, wu, MIN_WINS);
+    }
+
+    /// PRE-REGISTERED secondary (R2, reported): the same comparisons with 132 task-2 pairs.
+    #[test]
+    #[ignore = "slow: 30 seeds x 3 arms x 16 000 steps (run explicitly)"]
+    fn falsifier_r2_reported() {
+        let (ws, wu) = growth_falsifier("R2", &R2);
+        assert!(ws >= MIN_WINS && wu >= MIN_WINS, "G>S {}/30, G>U {}/30 (need {} each)", ws, wu, MIN_WINS);
+    }
+
+    /// PRE-REGISTERED detector check: no false positive on 60 negative runs; fires with test >= 0.90
+    /// on >= 27 of 30 positive runs.
+    #[test]
+    #[ignore = "slow: 90 runs x 12 000 steps (run explicitly)"]
+    fn falsifier_gate_detects_grokking_without_false_positives() {
+        let jobs: Vec<(u64, usize, (usize, f32))> = FRESH_SEEDS.iter().flat_map(|&s| [(s, 0, GATE_POS), (s, 1, GATE_NEG_NODECAY), (s, 2, GATE_NEG_LOWDATA)]).collect();
+        let r: Vec<GateRun> = par_map(&jobs, |&(s, _, (n, wd))| gate_run(s, n, wd, GATE_STEPS));
+        let names = ["pos", "neg-nodecay", "neg-lowdata"];
+        let (mut tp, mut fp, mut fired_neg, mut late_true) = (0usize, 0usize, 0usize, 0usize);
+        for (j, g) in jobs.iter().zip(r.iter()) {
+            std::println!("  gate seed {} {}: fired {:?} test there {:.3} end test {:.3} norm below peak {:.3}", j.0, names[j.1], g.fired_at, g.test_at_fire, g.end_test, g.norm_drop);
+            let fired_true = g.fired_at.is_some() && g.test_at_fire >= TRUE_GEN;
+            if j.1 == 0 { if fired_true { tp += 1; } }
+            else if g.fired_at.is_some() { fired_neg += 1; if fired_true { late_true += 1; } }
+            if g.fired_at.is_some() && g.test_at_fire < TRUE_GEN { fp += 1; }
+        }
+        std::println!("GATE: positives fired correctly {}/30 | false positives (fired, test < {}) {}/90 | negative-arm firings {}/60 (of which truly generalized there {})", tp, TRUE_GEN, fp, fired_neg, late_true);
+        assert!(fp == 0 && tp >= 27, "tp {}/30 fp {}", tp, fp);
+    }
+
+    /// Dev runs, dev seeds only: cargo test --release --lib brain_growth::tests::dev -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn dev() {
+        let c = dev_cfg();
+        std::println!("{:?}", c);
+        let seeds: Vec<u64> = (0..env("GR_SEEDS", 3u64)).map(|i| 100 + i).collect();
+        assert!(seeds.iter().all(|s| !FRESH_SEEDS.contains(s)), "fresh seeds are run only by the falsifiers");
+        let t: Vec<GrowTrial> = std::thread::scope(|s| seeds.iter().map(|&sd| s.spawn(move || trial(sd, &c))).collect::<Vec<_>>().into_iter().map(|h| h.join().unwrap()).collect());
+        let every = env("GR_PRINT", 1000u32);
+        for x in t.iter() {
+            for r in [&x.g, &x.u, &x.s] {
+                std::print!("seed {} {:?}: grow {:?} event {} pruned {} params {:?} t_task2 {:?} t_both {:?} end t1 {:.3} t2 {:.3} |", x.seed, r.arm, r.grow_step, r.event, r.pruned, r.params, r.t_task2(), r.t_both(), r.end(10, |p| p.test1), r.end(10, |p| p.test2));
+                for p in r.curve.iter().filter(|p| p.step % every == 0) { std::print!(" {}:{:.2}/{:.2}/{:.2}", p.step, p.val, p.test1, p.test2); }
+                std::println!();
+            }
+        }
+    }
+}
