@@ -28,9 +28,13 @@
 //!   1.54..1.56, ~4.7 strands), so each pair sees ~16 neurons: the regime where 16 neurons memorize.
 //! - **Analysis prediction: FAIL.**
 //!
-//! ## RESULT
+//! ## RESULT (added after the one run; raven CPU, 40 threads, 61 s)
 //!
-//! (added after the one run)
+//! **FAIL, as predicted, decisively.** Born > softmax on 0/30 seeds. Mean end test Born 0.018,
+//! softmax 0.128; neither generalized on any seed (0/30 each) within 12 000 steps, where the plain
+//! 128-neuron net groks 30/30. Mean routing entropy Born 0.322 nats (~1.4 strands per pair),
+//! softmax 1.540 (~4.7): Born routing collapses onto one strand and memorizes.
+
 
 
 use std::vec;
@@ -302,7 +306,7 @@ mod tests {
     /// PRE-REGISTERED (HxO seed): Born-rule routing ends with higher test accuracy than softmax routing on >= 20/30 seeds.
     /// Run: HX_THREADS=40 cargo test --release --lib brain_hxo::tests::falsifier_born -- --ignored --nocapture
     #[test]
-    #[ignore = "slow: 30 seeds x 2 routes x 12 000 steps (run explicitly)"]
+    #[ignore = "FAILED as pre-registered (predicted): Born > softmax 0/30 (see module docs)"]
     fn falsifier_born_routing_beats_softmax() {
         let jobs: Vec<(u64, Route)> = HX_SEEDS.iter().flat_map(|&s| [(s, Route::Born), (s, Route::Softmax)]).collect();
         let th = env("HX_THREADS", 16usize);

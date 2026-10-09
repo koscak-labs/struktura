@@ -108,9 +108,12 @@
 //!   Coefficient 0.1: 3 300..4 100.
 //! - **Analysis prediction: FAIL** (no speed-up; no harm at the end).
 //!
-//! ## RESULT (Friston F)
+//! ## RESULT (Friston F; added after the one run; raven CPU, 40 threads, 47 s)
 //!
-//! (added after the one run)
+//! **FAIL, as predicted: no effect.** F generalized earlier on 14/30 seeds, later on 13/30 (3 ties;
+//! p 0.71). Mean generalization step CE 3 873, F 3 923; mean end test 1.000 in both. The entropy term
+//! as written neither helps nor hurts grokking here.
+
 
 
 
@@ -816,7 +819,7 @@ mod tests {
     /// PRE-REGISTERED (HxO seed): Friston F (CE + entropy) generalizes earlier than CE on >= 20/30 seeds.
     /// Run: GB_THREADS=40 cargo test --release --lib brain_grokbed::tests::falsifier_friston -- --ignored --nocapture
     #[test]
-    #[ignore = "slow: 30 seeds x 2 arms x 12 000 steps (run explicitly)"]
+    #[ignore = "FAILED as pre-registered (predicted): F earlier 14/30, later 13/30 (see module docs)"]
     fn falsifier_friston_f_groks_faster() {
         assert_eq!(HXO_ENTROPY, 1.0);
         for x in F_SEEDS.iter() { assert!(!GF_SEEDS.contains(x) && !FRESH_SEEDS.contains(x) && !DEV_SEEDS.contains(x)); }

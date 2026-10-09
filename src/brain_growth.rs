@@ -125,9 +125,14 @@
 //!   parameter-steps), Val's total by 24 000 steps 134..154 M.
 //! - **Analysis prediction: FAIL** (Big is cheaper to generalization).
 //!
-//! ## RESULT 3c
+//! ## RESULT 3c (added after the one run; raven CPU, 40 threads, 62 s)
 //!
-//! (added after the one run)
+//! **FAIL, as predicted.** Val-triggered growth reached test 0.95 with fewer parameter-steps than
+//! Big on 3/30 seeds. Generalized: Val 24/30, Big 30/30, Train 0/30, Small 0/30. Mean end test Val
+//! 0.969, Big 1.000, Train 0.442, Small 0.306. Train-triggered growth beats staying small (29/30)
+//! but stops at the size that fits and memorizes. Growing on a measured shortfall gets there late:
+//! spare capacity from the start is both faster and cheaper.
+
 //!
 //! ## Pre-registration 3d: the gate as a STOP / consolidate signal (#18; committed before its seeds ran)
 //!
@@ -726,7 +731,7 @@ mod tests {
     /// fewer parameter-steps than the big network from the start, on >= 20/30 seeds (never = loss).
     /// Run: GR_THREADS=40 cargo test --release --lib brain_growth::tests::falsifier_shortfall -- --ignored --nocapture
     #[test]
-    #[ignore = "slow: 30 seeds x 4 arms x 24 000 steps (run explicitly)"]
+    #[ignore = "FAILED as pre-registered (predicted): Val cheaper than Big 3/30 (see module docs)"]
     fn falsifier_shortfall_growth_is_cheaper() {
         let jobs: Vec<(u64, Short)> = SF_SEEDS.iter().flat_map(|&x| [(x, Short::Val), (x, Short::Big), (x, Short::Train), (x, Short::Small)]).collect();
         let r: Vec<ShortRun> = par_map(&jobs, |&(x, m)| run_shortfall(x, &SHORT, m));
