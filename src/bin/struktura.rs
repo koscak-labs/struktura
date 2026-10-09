@@ -366,6 +366,7 @@ fn main() {
         println!("    struktura copilot-compare <file.csv>      DFA vs boolean threshold (side-by-side)");
         println!("    struktura bench                           Full benchmark with all fault types");
         println!("    struktura benchmark-faults                 F1 scores across 6 telemetry fault types");
+        println!("    struktura adapter-diff <a.safetensors> [b] LoRA adapter update norms / ranks / checkpoint diff");
         println!();
         println!("  INPUT: CSV or one-value-per-line. Uses last column, or --col <index|name>.");
         println!("  MORE: https://github.com/koscak-labs/struktura");
@@ -433,6 +434,7 @@ fn main() {
         "power" => cmd_power(&args),
         "loop" => cmd_loop(&args),
         "track" => cmd_track(&args),
+        "adapter-diff" => cmd_adapter_diff(&args),
         "version" => println!("struktura {}", env!("CARGO_PKG_VERSION")),
         other => {
             eprintln!("Unknown command: {}", other);
@@ -6368,4 +6370,41 @@ fn cmd_recall(args: &[String]) {
     let scope = match (&group, inside) { (Some(g), true) => format!(" · group {}", g), (Some(g), false) => format!(" · no match in group {}: OTHER groups", g), _ => String::new() };
     println!("struktura recall · \"{}\"{} · shown {} of {} · {} records indexed", q, scope, hits.len(), m, ix.records.len());
     for (rank, (k, s)) in hits.iter().enumerate() { println!("{}", card(&ix.records[*k], rank + 1, *s, maxc)); }
+}
+
+fn cmd_adapter_diff(args: &[String]) {
+    use struktura::adapter_diff::{load_adapter, report_diff, report_single};
+    if args.len() < 3 || args[2] == "--help" {
+        println!("struktura adapter-diff <a.safetensors> [<b.safetensors>] [--alpha A] [--rank R] [--top K] [--json]");
+        println!("  Per LoRA module dW = scale * B A, never materialized: |dW|_F, spectral norm, effective rank,");
+        println!("  stable rank, top-K singular values (r-space Jacobi). With b: |dWb - dWa|_F and cos(dWa, dWb)");
+        println!("  per module and per module type, from r x r traces. Scale = lora_alpha / r from adapter_config.json");
+        println!("  beside each file; --alpha / --rank override it; unknown alpha -> scale 1. CPU only.");
+        process::exit(if args.len() < 3 { 2 } else { 0 });
+    }
+    let (mut files, mut alpha, mut rank, mut top, mut json) = (Vec::new(), None, None, 4usize, false);
+    let mut i = 2;
+    let num = |i: usize, f: &str| -> f64 {
+        args.get(i).and_then(|s| s.parse::<f64>().ok()).unwrap_or_else(|| { eprintln!("adapter-diff: {} needs a number", f); process::exit(2) })
+    };
+    while i < args.len() {
+        match args[i].as_str() {
+            "--alpha" => { alpha = Some(num(i + 1, "--alpha")); i += 1 }
+            "--rank" => { rank = Some(num(i + 1, "--rank")); i += 1 }
+            "--top" => { top = num(i + 1, "--top") as usize; i += 1 }
+            "--json" => json = true,
+            f if f.starts_with("--") => { eprintln!("adapter-diff: unknown flag {}", f); process::exit(2) }
+            f => files.push(f.to_string()),
+        }
+        i += 1;
+    }
+    if files.is_empty() || files.len() > 2 { eprintln!("adapter-diff: give one or two .safetensors files"); process::exit(2) }
+    let load = |p: &str| load_adapter(p, alpha, rank).unwrap_or_else(|e| { eprintln!("adapter-diff: {}", e); process::exit(1) });
+    let a = load(&files[0]);
+    if files.len() == 1 { print!("{}", report_single(&a, top, json)); return }
+    let b = load(&files[1]);
+    match report_diff(&a, &b, json) {
+        Ok(s) => print!("{}", s),
+        Err(e) => { eprintln!("adapter-diff: {}", e); process::exit(1) }
+    }
 }

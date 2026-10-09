@@ -1788,3 +1788,5 @@ pub mod brain_grokbed;
 #[cfg(feature = "std")]
 pub mod brain_growth;
 pub mod grok_gate;
+#[cfg(feature = "std")]
+pub mod adapter_diff;
