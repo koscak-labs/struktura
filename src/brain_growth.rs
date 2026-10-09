@@ -79,6 +79,30 @@
 //! compress without generalizing, and the train-carved validation slice keeps the gate shut.
 //! Compression alone is not a grokking signal; the validation condition is what does the work.
 //! A stricter gate would need a new pre-registration and new seeds.
+//!
+//! ## Pre-registration 3b: continual world, no rehearsal (committed before any 3b seed was run)
+//!
+//! yin-23's hypothesis: gating should matter where growth INTERFERES, e.g. when task 1's data is
+//! gone after the growth point. Fair version (equal task-1 exposure; only the growth time differs):
+//!
+//! - **Switch step** per seed = the gate's event on a task-1-only run (cap 8 000): [`switch_step`].
+//!   Task 1 is trained until the switch, task 2 ONLY after it (no task-1 data), 16 000 steps total,
+//!   settings [`CONT`] (= R2: 132 task-2 pairs). [`run_continual`].
+//! - **Arms**: G grows (prune + 64 neurons) at the switch; U grows at the first fit (~step 300) and
+//!   keeps training task 1 until the same switch; N never grows. All add the task-2 head at the switch.
+//! - **Claim**: G's end task-1 test accuracy (retention) > U's on >= 20 of the 30 fresh seeds
+//!   [`CONT_SEEDS`] (sign test p <= 0.05; a tie is a loss) AND G's mean task-2 test accuracy is at
+//!   least U's minus 0.05. Reported: the same against N.
+//! - **Dev** (seeds 100..102): retention G 0.79 / 0.82 / 0.80, U 0.85 / 0.75 / 0.85, N 0.84 /
+//!   0.84 / 0.82; acquisition G 0.29 / 0.26 / 0.18 (lowest on 3/3), U 0.37 / 0.32 / 0.35, N 0.37 /
+//!   0.39 / 0.30. With 53 task-2 pairs G retained worst on 3/3. G's 64 new neurons arrive exactly
+//!   when task 2 starts, with random embeddings, and are trained by task 2 alone.
+//! - **Analysis prediction: FAIL** (G retains no better than U, and acquires worse).
+//!
+//! ## RESULT 3b
+//!
+//! (added after the one run)
+
 
 
 
@@ -293,6 +317,14 @@ pub const GATE_NEG_LOWDATA: (usize, f32) = (184, 1.0);
 /// A firing is a false positive when task 1's test accuracy at that measurement is below this.
 pub const TRUE_GEN: f32 = 0.90;
 
+/// Continual pre-registration (3b): settings = [`R2`] (132 task-2 pairs), task 1 data gone after the switch.
+pub const CONT: GrowCfg = R2;
+/// 3b fresh seeds (disjoint from [`FRESH_SEEDS`] and every earlier set).
+pub const CONT_SEEDS: [u64; 30] = [50021, 50023, 50033, 50047, 50051, 50053, 50069, 50077, 50087, 50093, 50101, 50111, 50119, 50123, 50129,
+    50131, 50147, 50153, 50159, 50177, 50207, 50221, 50227, 50231, 50261, 50263, 50273, 50287, 50291, 50311];
+/// G may acquire task 2 at most this much worse than U (mean) for the claim to hold.
+pub const ACQ_SLACK: f32 = 0.05;
+
 /// Continual world (no rehearsal): arms.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ContArm {
@@ -488,6 +520,40 @@ mod tests {
         }
         std::println!("GATE: positives fired correctly {}/30 | false positives (fired, test < {}) {}/90 | negative-arm firings {}/60 (of which truly generalized there {})", tp, TRUE_GEN, fp, fired_neg, late_true);
         assert!(fp == 0 && tp >= 27, "tp {}/30 fp {}", tp, fp);
+    }
+
+    #[test]
+    fn continual_preregistration_is_pinned() {
+        assert_eq!(CONT, R2);
+        let mut s = CONT_SEEDS.to_vec(); s.sort(); s.dedup(); assert_eq!(s.len(), 30);
+        for x in CONT_SEEDS.iter() { assert!(!FRESH_SEEDS.contains(x) && !crate::brain_grokbed::FRESH_SEEDS.contains(x) && !crate::brain_grokbed::DEV_SEEDS.contains(x)); }
+        assert_eq!(ACQ_SLACK, 0.05);
+    }
+
+    /// PRE-REGISTERED 3b (continual, no rehearsal): G retains task 1 better than U on >= 20/30 seeds
+    /// AND G's mean task-2 acquisition is within 0.05 of U's.
+    /// Run: GR_THREADS=40 cargo test --release --lib brain_growth::tests::falsifier_continual -- --ignored --nocapture
+    #[test]
+    #[ignore = "slow: 30 seeds x 3 arms (run explicitly)"]
+    fn falsifier_continual_gated_growth_retains_better() {
+        let c = CONT;
+        let sw: Vec<u32> = par_map(&CONT_SEEDS, |&s| switch_step(s, &c));
+        let jobs: Vec<(usize, ContArm)> = (0..30).flat_map(|k| [(k, ContArm::Gated), (k, ContArm::Ungated), (k, ContArm::NoGrowth)]).collect();
+        let r: Vec<ContRun> = par_map(&jobs, |&(k, a)| run_continual(CONT_SEEDS[k], &c, a, sw[k]));
+        for k in 0..30 {
+            let (g, u, n) = (&r[3 * k], &r[3 * k + 1], &r[3 * k + 2]);
+            std::println!("  cont seed {}: switch {} | test1@switch G {:.3} U {:.3} N {:.3} | retain G {:.3} U {:.3} N {:.3} | acquire G {:.3} U {:.3} N {:.3}",
+                CONT_SEEDS[k], g.switch, g.test1_at_switch, u.test1_at_switch, n.test1_at_switch, g.retain, u.retain, n.retain, g.acquire, u.acquire, n.acquire);
+        }
+        let arm = |a: usize| -> Vec<&ContRun> { (0..30).map(|k| &r[3 * k + a]).collect() };
+        let (g, u, n) = (arm(0), arm(1), arm(2));
+        let mean = |v: &[&ContRun], f: fn(&ContRun) -> f32| v.iter().map(|x| f(x)).sum::<f32>() / 30.0;
+        let wins_gu = (0..30).filter(|&k| g[k].retain > u[k].retain).count();
+        let wins_gn = (0..30).filter(|&k| g[k].retain > n[k].retain).count();
+        let (ag, au) = (mean(&g, |x| x.acquire), mean(&u, |x| x.acquire));
+        std::println!("CONTINUAL: retain mean G {:.3} U {:.3} N {:.3} | G>U {}/30 (p {:.4}) G>N {}/30 (p {:.4}) | acquire mean G {:.3} U {:.3} N {:.3}",
+            mean(&g, |x| x.retain), mean(&u, |x| x.retain), mean(&n, |x| x.retain), wins_gu, crate::brain_grok3::sign_p(wins_gu, 30), wins_gn, crate::brain_grok3::sign_p(wins_gn, 30), ag, au, mean(&n, |x| x.acquire));
+        assert!(wins_gu >= MIN_WINS && ag >= au - ACQ_SLACK, "G>U retain {}/30, acquire G {:.3} vs U {:.3}", wins_gu, ag, au);
     }
 
     /// Continual dev, dev seeds only: GR_N2=132 cargo test --release --lib brain_growth::tests::dev_continual -- --ignored --nocapture
