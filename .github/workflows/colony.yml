@@ -1,0 +1,43 @@
+name: COLONY exploration experiment
+
+on:
+  pull_request:
+    paths:
+      - 'crates/colony/**'
+      - '.github/workflows/colony.yml'
+  push:
+    branches: ['master']
+    paths:
+      - 'crates/colony/**'
+      - '.github/workflows/colony.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Compile and test
+        run: cargo test --manifest-path crates/colony/Cargo.toml --all-targets
+      - name: Clippy
+        run: cargo clippy --manifest-path crates/colony/Cargo.toml --all-targets -- -D warnings
+      - name: Smoke benchmark
+        run: cargo run --release --manifest-path crates/colony/Cargo.toml --bin colony-bench -- --seeds 3
+
+  python-reference:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reference test suite
+        env:
+          PYTHONPATH: crates/colony/python
+        run: python3 -m unittest discover -s crates/colony/python/tests -v
+      - name: Paired seed smoke benchmark
+        env:
+          PYTHONPATH: crates/colony/python
+        run: python3 -m colony.benchmark --seeds 3 --max-steps 3000
