@@ -46,6 +46,10 @@ jobs:
         env:
           PYTHONPATH: crates/colony/python
         run: python3 -m colony.signalroot --seeds 2 --budget 12
+      - name: Real Struktura DFA -> SIGNALROOT smoke test
+        env:
+          PYTHONPATH: crates/colony/python
+        run: python3 -m colony.signalroot_dfa --seeds 1 --budget 12
       - name: GENESIS quality-diversity smoke test
         env:
           PYTHONPATH: crates/colony/python
