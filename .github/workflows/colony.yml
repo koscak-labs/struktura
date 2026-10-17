@@ -54,6 +54,18 @@ jobs:
         env:
           PYTHONPATH: crates/colony/python
         run: python3 -m colony.trustroot --seeds 8 --budget 24 --travel-cap 85 --seed-start 1000 --out /tmp/trustroot-evidence.json
+      - name: VERITAS independent anomaly confirmation and null calibration
+        env:
+          PYTHONPATH: crates/colony/python
+        run: python3 -m colony.veritas --seeds 8 --budget 24 --travel-cap 85 --seed-start 2000 --out /tmp/veritas-evidence.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: colony-trustroot-veritas-evidence
+          path: |
+            /tmp/trustroot-evidence.json
+            /tmp/veritas-evidence.json
+          if-no-files-found: warn
       - name: GENESIS quality-diversity smoke test
         env:
           PYTHONPATH: crates/colony/python
