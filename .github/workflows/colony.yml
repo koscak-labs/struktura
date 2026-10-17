@@ -42,6 +42,10 @@ jobs:
           PYTHONPATH: crates/colony/python
         run: python3 -m colony.benchmark --seeds 3 --max-steps 3000
 
+      - name: SIGNALROOT active sensing smoke test
+        env:
+          PYTHONPATH: crates/colony/python
+        run: python3 -m colony.signalroot --seeds 2 --budget 12
       - name: GENESIS quality-diversity smoke test
         env:
           PYTHONPATH: crates/colony/python
