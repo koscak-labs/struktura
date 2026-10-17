@@ -61,7 +61,7 @@ impl World {
         if width < 3 || height < 3 || cells.len() != width * height {
             return Err("invalid dimensions or cell count".into());
         }
-        if cells.iter().any(|&tile| tile == Tile::Unknown) {
+        if cells.contains(&Tile::Unknown) {
             return Err("ground truth cannot contain unknown cells".into());
         }
         let world = Self { width, height, cells, start };
