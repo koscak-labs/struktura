@@ -66,6 +66,16 @@ jobs:
             /tmp/trustroot-evidence.json
             /tmp/veritas-evidence.json
           if-no-files-found: warn
+      - name: VERITAS-2 deferred localization versus immediate claiming
+        env:
+          PYTHONPATH: crates/colony/python
+        run: python3 -m colony.veritas_deferred --seeds 8 --budget 24 --travel-cap 85 --seed-start 3000 --out /tmp/veritas-deferred-evidence.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: colony-veritas2-evidence
+          path: /tmp/veritas-deferred-evidence.json
+          if-no-files-found: warn
       - name: GENESIS quality-diversity smoke test
         env:
           PYTHONPATH: crates/colony/python
