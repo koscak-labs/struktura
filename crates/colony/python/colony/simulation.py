@@ -45,7 +45,8 @@ class EpisodeResult:
 def run_episode(world: World, policy: str, *, seed: int = 0,
                 sensor_radius: int = 3, max_steps: int = 3_000,
                 telemetry: Callable[[int, Point], Telemetry] | None = None,
-                trace: list[Point] | None = None) -> EpisodeResult:
+                trace: list[Point] | None = None,
+                growth_parameters: dict | None = None) -> EpisodeResult:
     """Explore an unknown map with fixed range-limited obstacle-occluded sensing.
 
     The evaluation oracle knows true reachable cells, but planning only gets
@@ -66,7 +67,8 @@ def run_episode(world: World, policy: str, *, seed: int = 0,
     observe(world, known, position, sensor_radius)
 
     while steps < max_steps:
-        choice = choose_target(topology, known, position, policy)
+        choice = choose_target(topology, known, position, policy,
+                               **(growth_parameters or {}))
         decisions += 1
         growth_nodes += choice.growth_nodes
         if choice.target is None:

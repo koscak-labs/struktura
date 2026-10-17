@@ -41,3 +41,8 @@ jobs:
         env:
           PYTHONPATH: crates/colony/python
         run: python3 -m colony.benchmark --seeds 3 --max-steps 3000
+
+      - name: GENESIS quality-diversity smoke test
+        env:
+          PYTHONPATH: crates/colony/python
+        run: python3 -m colony.genesis --budget 6 --train-seeds 1 --test-seeds 3

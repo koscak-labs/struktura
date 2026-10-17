@@ -97,3 +97,40 @@ anomaly score as a validated real-time emergency stop.
 
 The package is stored under `crates/` to avoid changing Struktura's published
 anomaly-detection crate. It is not in the root Cargo workspace.
+
+
+## GENESIS + XENOWORLDS + DISCOVERY (v0.3)
+
+Run a bounded, deterministic, MAP-Elites-inspired growth search followed by
+**one post-selection evaluation** on a disjoint environment family:
+
+```bash
+PYTHONPATH=crates/colony/python python3 -m colony.genesis \
+  --budget 24 --train-seeds 3 --test-seeds 30 --out genesis-report.json
+```
+
+- `genesis.py`: four-parameter growth genome, seeded mutation, two-dimensional
+  niche archive, competition by training cost and champion selection.
+- `world.challenge_world`: rooms, scatter and corridor-maze generator families.
+- `discovery_report`: isolated training seeds (1000+) and corridor evaluation
+  seeds (50000+); untuned growth and frontier controls, paired costs,
+  reproducible genealogy and archived elites.
+- No physical robots, independent learning agent, Struktura Guard binding, or
+  claims of intelligence. The feature uses the Python reference planner; Rust
+  parity and hardware integration are future work.
+
+**First experiment** (seed 17, 24 proposals, 20 distinct genomes, six niches;
+training uses three room and three scatter worlds; evaluation 30 corridor worlds):
+
+| Held-out mean traversal/coverage-penalty cost (lower is better) | Cost |
+|---|---:|
+| Selected evolved genome | 167.17 |
+| Untuned growth genome | **166.80** |
+| Nearest-frontier control | 167.47 |
+
+The selected genome is 0.30 steps better than frontier and **0.37 steps worse
+than untuned growth** on the held-out set. Evolution is not demonstrated to
+improve generalization. This is a small toy study and selected protocol; run
+multiple independent search seeds and more challenging worlds before claims.
+See `evidence/genesis-24-evaluations.json` for full history, training/test
+identities and per-world costs.

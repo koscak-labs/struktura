@@ -62,7 +62,9 @@ class Decision:
 
 def choose_target(shape: Topology, known: list[int], position: Point,
                   policy: str, influence_radius: int = 6,
-                  growth_budget: int = 60) -> Decision:
+                  growth_budget: int = 60,
+                  gain_weight: float = 0.35,
+                  distance_penalty: float = 2.0) -> Decision:
     """Decide target from observed free cells only; never inspect shape.cells.
 
     SCA is adapted from continuous attraction-point growth to an integer grid:
@@ -81,6 +83,8 @@ def choose_target(shape: Topology, known: list[int], position: Point,
     nearest = min(targets, key=lambda p: (distances[p], -gain(shape, known, p), p[1], p[0]))
     if policy == "frontier":
         return Decision(nearest, 0, len(targets))
+    if not (0.0 <= gain_weight <= 5.0 and 0.5 <= distance_penalty <= 12.0):
+        raise ValueError("invalid growth weights")
     if influence_radius < 1 or growth_budget < 1:
         raise ValueError("positive influence_radius and growth_budget required")
 
@@ -96,7 +100,7 @@ def choose_target(shape: Topology, known: list[int], position: Point,
             if not 0 < d2 <= radius2:
                 continue
             d = hypot(dx, dy)
-            weight = 1.0 + 0.35 * gain(shape, known, a)
+            weight = 1.0 + gain_weight * gain(shape, known, a)
             prev = directions.get(closest, (0.0, 0.0))
             directions[closest] = (prev[0] + weight*dx/d, prev[1] + weight*dy/d)
         extensions: list[Point] = []
@@ -127,6 +131,6 @@ def choose_target(shape: Topology, known: list[int], position: Point,
     # Score is a hypothesis, not an empirically verified improvement.
     # The +1 prevents favoring a nearly zero-distance cell infinitely.
     choice = max(reached, key=lambda p: ((1.0 + gain(shape, known, p)) /
-                                         (2.0 + distances[p]),
+                                         (distance_penalty + distances[p]),
                                          -distances[p], -p[1], -p[0]))
     return Decision(choice, len(nodes), len(targets))
