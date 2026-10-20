@@ -98,7 +98,7 @@ impl<const B: usize, const G: usize> Grower<B, G> {
     /// Base features followed by the grown features (unfilled slots are 0). `D` must be `B + G`.
     pub fn situation<const D: usize>(&self, base: &[f32; B]) -> [f32; D] {
         let mut x = [0.0f32; D];
-        for i in 0..B.min(D) { x[i] = base[i]; }
+        x[..B.min(D)].copy_from_slice(&base[..B.min(D)]);
         for g in 0..self.grown { if B + g < D { x[B + g] = self.feats[g].eval(base); } }
         x
     }
@@ -111,9 +111,9 @@ impl<const B: usize, const G: usize> Grower<B, G> {
     fn candidate(&self, idx: usize) -> Option<Feat> {
         // Enumerate the grammar deterministically: Prod(i<=j), Step(i,t), Gt(i!=j).
         let mut k = 0usize;
-        for i in 0..B { for j in i..B { if self.constant[i] || self.constant[j] { continue; } if k == idx { return Some(Feat::Prod(i as u8, j as u8)); } k += 1; } }
-        for i in 0..B { if self.constant[i] { continue; } for t in STEPS { if k == idx { return Some(Feat::Step(i as u8, t)); } k += 1; } }
-        for i in 0..B { for j in 0..B { if i == j || self.constant[i] || self.constant[j] { continue; } if k == idx { return Some(Feat::Gt(i as u8, j as u8)); } k += 1; } }
+        for i in 0..B { for j in i..B { if !self.constant[i] && !self.constant[j] { if k == idx { return Some(Feat::Prod(i as u8, j as u8)); } k += 1; } } }
+        for i in 0..B { if !self.constant[i] { for t in STEPS { if k == idx { return Some(Feat::Step(i as u8, t)); } k += 1; } } }
+        for i in 0..B { for j in 0..B { if i != j && !self.constant[i] && !self.constant[j] { if k == idx { return Some(Feat::Gt(i as u8, j as u8)); } k += 1; } } }
         None
     }
 
@@ -129,7 +129,7 @@ impl<const B: usize, const G: usize> Grower<B, G> {
             let slot = free.unwrap();
             self.feats[slot] = f;
             if slot >= self.grown { self.grown = slot + 1; }
-            brain.rekey(|k| { let mut base = [0.0f32; B]; for i in 0..B { base[i] = k[i]; } let mut y = *k; y[B + slot] = f.eval(&base); y });
+            brain.rekey(|k| { let mut base = [0.0f32; B]; base.copy_from_slice(&k[..B]); let mut y = *k; y[B + slot] = f.eval(&base); y });
         }
         Some(g)
     }
@@ -153,7 +153,7 @@ impl<const B: usize, const G: usize> Grower<B, G> {
                 for s in 0..N {
                     let Some(e) = brain.episode(s) else { continue };
                     if !self.coin() { continue; }
-                    let mut base = [0.0f32; B]; for i in 0..B { base[i] = e.key[i]; }
+                    let mut base = [0.0f32; B]; base.copy_from_slice(&e.key[..B]);
                     let fv = f.eval(&base);
                     let r = e.reward - brain.estimates(&e.key)[e.action as usize].expected;
                     sfr[e.action as usize] += fv * r; sff[e.action as usize] += fv * fv;
@@ -165,7 +165,7 @@ impl<const B: usize, const G: usize> Grower<B, G> {
                     let Some(e) = brain.episode(s) else { continue };
                     if self.coin() { continue; }
                     let a = e.action as usize;
-                    let mut base = [0.0f32; B]; for i in 0..B { base[i] = e.key[i]; }
+                    let mut base = [0.0f32; B]; base.copy_from_slice(&e.key[..B]);
                     let fv = f.eval(&base);
                     let r = e.reward - brain.estimates(&e.key)[a].expected;
                     let beta = if sff[a] > 1e-6 { sfr[a] / sff[a] } else { 0.0 };

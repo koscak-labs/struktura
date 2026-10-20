@@ -141,7 +141,7 @@ impl<const N: usize, const D: usize, const A: usize> Dreamer<N, D, A> {
     pub fn decide(&self, x: &[f32; D], allowed: &[bool; A], safe_default: u8) -> Plan {
         let g = self.brain.decide(x, allowed, safe_default);
         let greedy = Plan { action: g.action, value: g.expected, greedy_action: g.action, planned: false, abstained: g.abstained };
-        let depth = if self.depth < 1 { 1 } else if self.depth > MAX_DEPTH { MAX_DEPTH } else { self.depth };
+        let depth = self.depth.clamp(1, MAX_DEPTH);
         if g.abstained || depth == 1 { return greedy; }
         for a in 0..A {
             if allowed[a] && self.predict_next(x, a as u8).1 < self.min_transition_evidence { return greedy; }

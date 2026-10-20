@@ -110,7 +110,7 @@ impl Neuromod {
             self.explore = self.explore_max;
         } else {
             let x = self.slow / self.err_scale;
-            let x = if x > 1.0 { 1.0 } else if x < 0.0 { 0.0 } else { x };
+            let x = x.clamp(0.0, 1.0);
             let target = self.explore_min + (self.explore_max - self.explore_min) * x;
             self.explore += self.settle * (target - self.explore);
         }

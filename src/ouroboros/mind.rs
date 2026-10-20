@@ -208,7 +208,7 @@ impl Mind {
             let h = knob.as_ref().and_then(|k| history.iter().find(|(n, _)| n == k)).map(|(_, h)| *h).unwrap_or_default();
             let base = situation_of(&p.op, &p.value, &p.name, band, &h);
             let x: [f32; DG] = grower.situation(&base);
-            let class = if reward == 0.0 { "fragile/void" } else if (p.verdict == "pass" && p.margin_pct.map(|m| m > 3.0 * lab.floor_pct).unwrap_or(false)) { "easy" } else { "decisive" };
+            let class = if reward == 0.0 { "fragile/void" } else if p.verdict == "pass" && p.margin_pct.map(|m| m > 3.0 * lab.floor_pct).unwrap_or(false) { "easy" } else { "decisive" };
             if let Some(s) = brain.learn(&x, 0, reward) { labels[s] = format!("{}::{} ({}{})", p.pred, p.name, class, if is_goal { ", proves a feature" } else { "" }); }
             episodes += 1;
             if let Some(g) = grower.after_learn(&mut brain) { if let Some(f) = g.adopted { grown.push((episodes, describe(&f), g.gain)); } }
@@ -301,7 +301,7 @@ mod tests {
         }
         let mut l = ledger(&rows);
         // ledger() names pred files by row index; make every speed row belong to 2.tsv with the required name
-        l = l.lines().map(|line| if line.contains("tps-fast-at-64K") { line.replace(|c: char| false, "").replacen("\"pred\":\"", "\"pred\":\"2.tsv-", 1) } else { line.to_string() }).collect::<Vec<_>>().join("\n");
+        l = l.lines().map(|line| if line.contains("tps-fast-at-64K") { line.replace(|_c: char| false, "").replacen("\"pred\":\"", "\"pred\":\"2.tsv-", 1) } else { line.to_string() }).collect::<Vec<_>>().join("\n");
         let lab = crate::lab::analyze(&l);
         let goal = vec![GoalFeature { feature: "gqa2".into(), pred: "2.tsv".into(), required: vec![] }];
         let plain = Mind::from_lab_goal(&lab, &[], &[]);

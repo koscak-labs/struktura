@@ -70,7 +70,7 @@ pub struct SsLora<const D: usize, const A: usize, const R: usize> {
 
 impl<const D: usize, const A: usize, const R: usize> SsLora<D, A, R> {
     /// `p` sparsity (0.5 = SS-LoRA default), `lr` learning rate, `seed` for the masks.
-    pub const fn new(p: f32, lr: f32, seed: u64) -> Self {
+    pub fn new(p: f32, lr: f32, seed: u64) -> Self {
         let mut c = [[0.0f32; D]; R];
         let mut s = seed | 1;
         let mut r = 0;
@@ -179,7 +179,7 @@ impl<const D: usize, const A: usize, const R: usize> SsLora<D, A, R> {
         let g = self.lr * err;
         for r in 0..R {
             if !keep_r[r] { continue; }
-            let sb = if self.granularity == Granularity::Rank { scale } else if keep_b[r] && self.p > 0.0 { scale } else { 1.0 };
+            let sb = if self.granularity == Granularity::Rank || (keep_b[r] && self.p > 0.0) { scale } else { 1.0 };
             let b_old = self.b[a][r];
             if keep_b[r] { self.b[a][r] += g * h[r] * sb - self.lr * self.decay * self.b[a][r]; }
             if !keep_b[r] { continue; }

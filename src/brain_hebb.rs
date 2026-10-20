@@ -170,7 +170,7 @@ impl<const B: usize, const G: usize> Hebb<B, G> {
     /// Base features followed by the grown senses, evaluated in slot order. `D` must be `B + G`.
     pub fn situation<const D: usize>(&self, base: &[f32; B]) -> [f32; D] {
         let mut x = [0.0f32; D];
-        for i in 0..B.min(D) { x[i] = base[i]; }
+        x[..B.min(D)].copy_from_slice(&base[..B.min(D)]);
         for g in 0..self.grown { if B + g < D { x[B + g] = self.senses[g].eval(&x); } }
         x
     }
@@ -323,7 +323,7 @@ impl<const B: usize, const G: usize> Hebb<B, G> {
         }
 
         // 4. Rank candidates by trace strength (summed over actions) into a fixed shortlist.
-        let want = self.shortlist.min(SHORT_MAX).max(1);
+        let want = self.shortlist.clamp(1, SHORT_MAX);
         let mut short = [Cand { inner: Sense::Off, outer: Sense::Off, score: 0.0 }; SHORT_MAX];
         let mut ns = 0usize;
         let grown = &self.senses[..self.grown];

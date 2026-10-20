@@ -264,3 +264,9 @@ mod tests {
         assert_eq!(run(truth_b, 7, true), run(truth_b, 7, true));
     }
 }
+
+impl Default for Sleep {
+    fn default() -> Self {
+        Self::new()
+    }
+}

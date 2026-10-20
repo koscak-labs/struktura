@@ -8,6 +8,10 @@ use struktura::codegen::Channel;
 const NORMAL_SAMPLES: &str = include_str!("../../data/normal_sample.csv");
 const FAULT_SAMPLES: &str = include_str!("../../data/fault_sample.csv");
 
+/// A (timestamp, value) pair from the pulse stream.
+type TsPair = (f64, f64);
+
+
 fn read_input(path: &str) -> Vec<f64> {
     if path == "-" {
         return read_stdin();
@@ -4655,91 +4659,6 @@ fn cmd_copilot_compare(args: &[String]) {
     println!();
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn quoted_delimiter_stays_in_its_field() {
-        assert_eq!(split_fields("a,\"Temp, C\",pressure", ','), ["a", "Temp, C", "pressure"]);
-        assert_eq!(split_fields("1.5;\"x;y\";", ';'), ["1.5", "x;y", ""]);
-        let p = parse_multi_csv("a,\"Temp, C\",pressure\n1,2,3\n4,5,6\n");
-        assert_eq!(p.col_names, ["a", "Temp, C", "pressure"]);
-        // More header fields than data fields: numbered, not shifted.
-        let p = parse_multi_csv("a,Temp, C,pressure\n1,2,3\n4,5,6\n");
-        assert!(p.col_names.is_empty());
-        assert_eq!(p.ch_name(2), "ch2");
-    }
-
-    /// Data policy: a malformed row (wrong field count, or a value that
-    /// doesn't parse as a number) must not be dropped -- dropping it would
-    /// shift every later row's tick index relative to a sidecar keyed on
-    /// the original row number -- but it also must not be partially
-    /// patched up (padded/truncated) into looking like valid data. The
-    /// entire row is marked invalid instead: every channel gets NaN for
-    /// that row, and its 0-based row index comes back in `invalid_rows`.
-    #[test]
-    fn parse_csv_columns_marks_malformed_rows_entirely_invalid_preserving_row_count() {
-        let csv = "time,a,b\n1,10,20\n2,11\n3,12,13,extra\n4,14,15\n";
-        let (header, cols, invalid_rows) = parse_csv_columns(csv);
-        assert_eq!(header, vec!["time", "a", "b"]);
-        // 4 data rows in, 4 rows out on every column -- none dropped.
-        assert_eq!(cols[0].len(), 4);
-        assert_eq!(cols[1].len(), 4);
-        assert_eq!(cols[2].len(), 4);
-        assert_eq!(invalid_rows, vec![1, 2]);
-        // Row 1 ("2,11") is missing "b" -- unlike the old pad-short
-        // behavior, "time" and "a" are ALSO NaN'd out for that row, not
-        // just the missing field.
-        assert!(cols[0][1].is_nan() && cols[1][1].is_nan() && cols[2][1].is_nan());
-        // Row 2 ("3,12,13,extra") has an extra field -- unlike the old
-        // truncate-long behavior, the whole row is invalid, not just the
-        // extra field dropped.
-        assert!(cols[0][2].is_nan() && cols[1][2].is_nan() && cols[2][2].is_nan());
-        // Well-formed rows are untouched.
-        assert_eq!(cols[0][0], 1.0);
-        assert_eq!(cols[1][0], 10.0);
-        assert_eq!(cols[0][3], 4.0);
-        assert_eq!(cols[2][3], 15.0);
-    }
-
-    /// A well-shaped row (right field count) with one non-numeric value is
-    /// NOT malformed -- a `mode`/`command` column legitimately carries
-    /// string labels, and `prepare_input`'s `ColumnSchema` filters those
-    /// columns out before calibration. Only that field goes to NaN; the
-    /// row itself isn't flagged invalid, and the row's other fields are
-    /// untouched.
-    #[test]
-    fn parse_csv_columns_treats_unparseable_field_as_nan_without_flagging_whole_row_invalid() {
-        let csv = "a,mode\n1,cruise\n2,idle\n";
-        let (_, cols, invalid_rows) = parse_csv_columns(csv);
-        assert!(invalid_rows.is_empty());
-        assert_eq!(cols[0], vec![1.0, 2.0]);
-        assert!(cols[1][0].is_nan() && cols[1][1].is_nan());
-    }
-
-    #[test]
-    fn parse_csv_columns_reports_zero_malformed_on_clean_input() {
-        let (_, _, invalid_rows) = parse_csv_columns("a,b\n1,2\n3,4\n");
-        assert!(invalid_rows.is_empty());
-    }
-
-    /// Finding 2: `case save` used to pass ALL parsed columns (timestamp,
-    /// mode, ...) into calibration, unlike `investigate` which filtered to
-    /// measurement columns only. `prepare_input` is now the single place
-    /// that does the filtering, shared by both.
-    #[test]
-    fn prepare_input_filters_to_measurement_columns_only() {
-        let csv = "time,mode,motor_current\n0,cruise,1.0\n1,cruise,1.1\n2,idle,1.2\n";
-        let (names, cols, schema, header) = prepare_input(csv);
-        assert_eq!(names, vec!["motor_current"]);
-        assert_eq!(cols.len(), 1);
-        assert_eq!(cols[0], vec![1.0, 1.1, 1.2]);
-        assert_eq!(header, vec!["time", "mode", "motor_current"]);
-        assert_eq!(schema.measurement_indices(), vec![2]);
-    }
-}
-
 fn cmd_pulse(args: &[String]) {
     use struktura::pulse::{analyze, Row};
     if args.len() < 3 || args[2] == "--help" {
@@ -4843,7 +4762,7 @@ fn cmd_pulse(args: &[String]) {
         let prev_ts = if deploys.len() >= 2 { deploys[deploys.len() - 2].0 } else { 0 };
         // Requests of one conversation are not independent, so the gate bets once per SESSION:
         // its first solo request, fixed the moment it is seen (never revised as the session grows).
-        let session_firsts = |text: &str| -> (Vec<(f64, f64)>, Vec<(f64, f64)>) {
+        let session_firsts = |text: &str| -> (Vec<TsPair>, Vec<TsPair>) {
             // (start, child, slot, ctx_k, ms, solo)
             let mut all: Vec<(u64, u64, u64, f64, f64, bool)> = Vec::new();
             for line in text.lines() {
@@ -5662,5 +5581,90 @@ fn cmd_brain_state(args: &[String]) {
                 f, a, br.len(), B::CAPACITY, br.clock(), pulls.join(","), br.explore, br.min_evidence);
         }
         _ => { eprintln!("brain: init | decide | learn | stats (with --state FILE)"); process::exit(2); }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quoted_delimiter_stays_in_its_field() {
+        assert_eq!(split_fields("a,\"Temp, C\",pressure", ','), ["a", "Temp, C", "pressure"]);
+        assert_eq!(split_fields("1.5;\"x;y\";", ';'), ["1.5", "x;y", ""]);
+        let p = parse_multi_csv("a,\"Temp, C\",pressure\n1,2,3\n4,5,6\n");
+        assert_eq!(p.col_names, ["a", "Temp, C", "pressure"]);
+        // More header fields than data fields: numbered, not shifted.
+        let p = parse_multi_csv("a,Temp, C,pressure\n1,2,3\n4,5,6\n");
+        assert!(p.col_names.is_empty());
+        assert_eq!(p.ch_name(2), "ch2");
+    }
+
+    /// Data policy: a malformed row (wrong field count, or a value that
+    /// doesn't parse as a number) must not be dropped -- dropping it would
+    /// shift every later row's tick index relative to a sidecar keyed on
+    /// the original row number -- but it also must not be partially
+    /// patched up (padded/truncated) into looking like valid data. The
+    /// entire row is marked invalid instead: every channel gets NaN for
+    /// that row, and its 0-based row index comes back in `invalid_rows`.
+    #[test]
+    fn parse_csv_columns_marks_malformed_rows_entirely_invalid_preserving_row_count() {
+        let csv = "time,a,b\n1,10,20\n2,11\n3,12,13,extra\n4,14,15\n";
+        let (header, cols, invalid_rows) = parse_csv_columns(csv);
+        assert_eq!(header, vec!["time", "a", "b"]);
+        // 4 data rows in, 4 rows out on every column -- none dropped.
+        assert_eq!(cols[0].len(), 4);
+        assert_eq!(cols[1].len(), 4);
+        assert_eq!(cols[2].len(), 4);
+        assert_eq!(invalid_rows, vec![1, 2]);
+        // Row 1 ("2,11") is missing "b" -- unlike the old pad-short
+        // behavior, "time" and "a" are ALSO NaN'd out for that row, not
+        // just the missing field.
+        assert!(cols[0][1].is_nan() && cols[1][1].is_nan() && cols[2][1].is_nan());
+        // Row 2 ("3,12,13,extra") has an extra field -- unlike the old
+        // truncate-long behavior, the whole row is invalid, not just the
+        // extra field dropped.
+        assert!(cols[0][2].is_nan() && cols[1][2].is_nan() && cols[2][2].is_nan());
+        // Well-formed rows are untouched.
+        assert_eq!(cols[0][0], 1.0);
+        assert_eq!(cols[1][0], 10.0);
+        assert_eq!(cols[0][3], 4.0);
+        assert_eq!(cols[2][3], 15.0);
+    }
+
+    /// A well-shaped row (right field count) with one non-numeric value is
+    /// NOT malformed -- a `mode`/`command` column legitimately carries
+    /// string labels, and `prepare_input`'s `ColumnSchema` filters those
+    /// columns out before calibration. Only that field goes to NaN; the
+    /// row itself isn't flagged invalid, and the row's other fields are
+    /// untouched.
+    #[test]
+    fn parse_csv_columns_treats_unparseable_field_as_nan_without_flagging_whole_row_invalid() {
+        let csv = "a,mode\n1,cruise\n2,idle\n";
+        let (_, cols, invalid_rows) = parse_csv_columns(csv);
+        assert!(invalid_rows.is_empty());
+        assert_eq!(cols[0], vec![1.0, 2.0]);
+        assert!(cols[1][0].is_nan() && cols[1][1].is_nan());
+    }
+
+    #[test]
+    fn parse_csv_columns_reports_zero_malformed_on_clean_input() {
+        let (_, _, invalid_rows) = parse_csv_columns("a,b\n1,2\n3,4\n");
+        assert!(invalid_rows.is_empty());
+    }
+
+    /// Finding 2: `case save` used to pass ALL parsed columns (timestamp,
+    /// mode, ...) into calibration, unlike `investigate` which filtered to
+    /// measurement columns only. `prepare_input` is now the single place
+    /// that does the filtering, shared by both.
+    #[test]
+    fn prepare_input_filters_to_measurement_columns_only() {
+        let csv = "time,mode,motor_current\n0,cruise,1.0\n1,cruise,1.1\n2,idle,1.2\n";
+        let (names, cols, schema, header) = prepare_input(csv);
+        assert_eq!(names, vec!["motor_current"]);
+        assert_eq!(cols.len(), 1);
+        assert_eq!(cols[0], vec![1.0, 1.1, 1.2]);
+        assert_eq!(header, vec!["time", "mode", "motor_current"]);
+        assert_eq!(schema.measurement_indices(), vec![2]);
     }
 }

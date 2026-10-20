@@ -28,7 +28,7 @@ fn squash(x: f64, scale: f64) -> f32 {
 }
 
 fn clamp01(x: f64) -> f32 {
-    if x.is_finite() { (if x < 0.0 { 0.0 } else if x > 1.0 { 1.0 } else { x }) as f32 } else { 0.0 }
+    if x.is_finite() { x.clamp(0.0, 1.0) as f32 } else { 0.0 }
 }
 
 /// Situation for one sensor window plus up to two context values (each
