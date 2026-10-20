@@ -41,14 +41,14 @@
 //!   `E = 10`, train `>= 0.95`; a seed passes iff A has a jump, B has none, and B ends (mean of the
 //!   last 10 epochs) at least `J / 2` below A. **PASS for an encoding iff >= 4 of the 5 fresh
 //!   seeds [`FRESH_SEEDS`] pass; the thesis passes iff BOTH encodings pass** (one-hot primary).
-//! - **Fresh seeds** [`FRESH_SEEDS`] = 6113, 6229, 6337, 6451, 6563: never run before this
-//!   pre-registration was committed; disjoint from v1's seeds (5101..5505) and the dev seeds.
-//! - **Analysis predictions** (pre-registered): (1) one-hot: all three arms end at or below chance
-//!   + 0.10 held-out on all 5 seeds (v1's a-priori argument is unchanged: the depth-1 grammar over
-//!   one-hot senses cannot link a cell to its anti-diagonal), so the one-hot falsifier FAILS and
-//!   with it the thesis; (2) Fourier: on the 16 dev seeds (below) A jumped on 8 and passed on 7, B
-//!   and C never jumped; with a per-seed pass rate near 0.44, `P(>= 4 of 5)` is about 0.12, so a
-//!   Fourier FAIL is the likely outcome too, with A ahead of B on most seeds.
+//!   - **Fresh seeds** [`FRESH_SEEDS`] = 6113, 6229, 6337, 6451, 6563: never run before this
+//!     pre-registration was committed; disjoint from v1's seeds (5101..5505) and the dev seeds.
+//!   - **Analysis predictions** (pre-registered): (1) one-hot: all three arms end at or below chance
+//!     \+ 0.10 held-out on all 5 seeds (v1's a-priori argument is unchanged: the depth-1 grammar over
+//!     one-hot senses cannot link a cell to its anti-diagonal), so the one-hot falsifier FAILS and
+//!     with it the thesis; (2) Fourier: on the 16 dev seeds (below) A jumped on 8 and passed on 7, B
+//!     and C never jumped; with a per-seed pass rate near 0.44, `P(>= 4 of 5)` is about 0.12, so a
+//!     Fourier FAIL is the likely outcome too, with A ahead of B on most seeds.
 //!
 //! ## Development (before the pre-registration; dev seeds only)
 //!

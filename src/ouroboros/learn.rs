@@ -36,7 +36,7 @@ pub fn parse_relative(value: &str) -> Option<(f64, String, f64)> {
     let need = inner.split("need").nth(1)?;
     let mut w = need.split_whitespace();
     let op = w.next()?.to_string();
-    let p: f64 = w.next()?.trim_end_matches(|c| c == '%' || c == ')').parse().ok()?;
+    let p: f64 = w.next()?.trim_end_matches(['%', ')']).parse().ok()?;
     Some((d, op, p))
 }
 

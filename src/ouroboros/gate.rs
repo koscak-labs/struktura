@@ -4,9 +4,10 @@
 //! (a request up to [`DEPLOY_LEAD_S`] before a row belongs to it: the lab
 //! writes the row after the deploy's verify request was served) and judged by
 //! `pulse::analyze`. Three states:
-//! - **open**: the latest judged deploy is not slower (solo and contention);
-//! - **closed**: the latest judged deploy is slower in solo OR contention;
-//! - **no evidence**: no deploy rows, or too few requests to judge.
+//!   - **open**: the latest judged deploy is not slower (solo and contention);
+//!   - **closed**: the latest judged deploy is slower in solo OR contention;
+//!   - **no evidence**: no deploy rows, or too few requests to judge.
+//!
 //! Server processes are reloads, not deploys, so without ledger deploy rows
 //! the gate never closes.
 

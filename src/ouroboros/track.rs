@@ -148,7 +148,7 @@ pub fn summarize(rows: &[Row], window: usize, bins: usize) -> Track {
     let s = skill(mind, base);
     let verdict = if sc.is_empty() {
         "nothing scored yet: the ledger needs scored predictions in at least two scoring bursts".to_string()
-    } else if !(s > 0.0) {
+    } else if s <= 0.0 || s.is_nan() {
         format!("the mind does NOT beat the running-mean baseline (skill {:+.3}): its yield forecasts are no better than the average past reward", s)
     } else if z >= 1.96 {
         format!("the mind beats the running-mean baseline (skill {:+.3}, burst-level z {:.2})", s, z)
