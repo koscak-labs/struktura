@@ -78,8 +78,13 @@ for w in "${withdrawn[@]}"; do
   [[ "$w" == "$(LC_ALL=C tr 'A-Z' 'a-z' <<<"$w")" ]] || { echo "ERROR withdrawn phrase not lowercase: $w"; fail=1; }
 done
 # Everything a reader or a package index shows.
+# `docs/promotion` is in the set on purpose: those drafts get pasted into
+# Reddit, forums, dev.to and TWiR, so a withdrawn claim sitting in one of them
+# is a withdrawn claim that goes back out into the world. The drafts quote the
+# killed wording in their correction notes -- the "allowed" list below is where
+# those live, so each one is an explicit, reviewed exemption.
 scanned() {
-  find README.md REPRODUCIBILITY.md USE_CASES.md llms.txt Cargo.toml src docs/src examples \
+  find README.md REPRODUCIBILITY.md USE_CASES.md llms.txt Cargo.toml src docs/src docs/promotion examples \
     ogma-template assets/terminal-demo.svg -type f \
     \( -name '*.md' -o -name '*.rs' -o -name '*.toml' -o -name '*.py' -o -name '*.txt' -o -name '*.svg' \)
 }
