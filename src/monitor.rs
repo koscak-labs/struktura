@@ -691,8 +691,10 @@ impl HybridMonitor {
 
             let mut max_run = 1usize;
             let mut run = 1usize;
+            let mut repeats = 0usize;
             for t in 1..length {
                 if c[t] == c[t - 1] {
+                    repeats += 1;
                     run += 1;
                     if run > max_run {
                         max_run = run;
@@ -701,6 +703,25 @@ impl HybridMonitor {
                     run = 1;
                 }
             }
+            // The longest run seen is one sample of a tail: on a 400-sample
+            // recalibration buffer it moved by one between two near-identical
+            // buffers, and one sample of threshold tripled the stuck alarms of
+            // a quantized ESA-ADB channel. Like the other legs, extrapolate to
+            // the design horizon instead: with a repeat probability q per
+            // step, runs are geometric (P(run >= k) = q^(k-1), about (1-q)
+            // runs start per sample), so the limit is the first k at which
+            // fewer than one such run is expected per horizon. Never below the
+            // old limit, so a stuck sensor the old rule caught is still caught.
+            let q = repeats as f64 / (length - 1) as f64;
+            let mut limit = max_run + REPEAT_MARGIN;
+            if q > 0.0 && q < 1.0 {
+                let mut expected = config.design_horizon * (1.0 - q) * crate::powi(q, limit as i32 - 1);
+                while expected > 1.0 && limit < 1 << 16 {
+                    expected *= q;
+                    limit += 1;
+                }
+            }
+            let effective_run = limit - REPEAT_MARGIN;
 
             let resid_z: Vec<f64> = (1..length)
                 .map(|t| (c[t] - (ar_a + ar_b * c[t - 1])) / ar_sd)
@@ -717,7 +738,7 @@ impl HybridMonitor {
                 alpha_sd: crate::sqrt(alpha_var).max(1e-6),
                 mean,
                 roll_thr: roll_thr.max(1e-9),
-                max_run,
+                max_run: effective_run,
                 repeat_enabled: max_run <= REPEAT_MARGIN,
             });
         }
@@ -1447,6 +1468,59 @@ mod tests {
         let hit = run_stream(&mut mon2, &faulted).expect("stuck must alarm");
         assert_eq!(hit.1, Leg::RepeatedValue);
         assert!(hit.0 >= 406, "alarm at {} before fault start", hit.0);
+    }
+
+    /// Quantized telemetry repeats its value by chance: here with
+    /// probability 0.2 per sample. The longest run in a 400-sample
+    /// calibration (a recalibration buffer's length) is 3 or 4, so a limit
+    /// of max + margin (7 or 8) is crossed by chance runs a few times per
+    /// 200,000 clean samples (about 10 runs of 7 or more are expected). The
+    /// limit extrapolated to the design horizon (10 here) is not. A real
+    /// stick of 500 samples must still alarm.
+    #[test]
+    fn repeat_limit_extrapolates_chance_runs_to_the_design_horizon() {
+        let n = 200_400;
+        let generate = |seed: u64| {
+            let mut rng = crate::telemetry_bench::GaussRng::new(seed);
+            let mut series = Vec::with_capacity(n);
+            let mut v = 0.0f64;
+            for _ in 0..n {
+                // New value with probability 0.8 (P(z > -0.8416) = 0.8).
+                if rng.normal(0.0, 1.0) > -0.8416 {
+                    v = (rng.normal(0.0, 50.0) as i64) as f64;
+                }
+                series.push(v);
+            }
+            series
+        };
+        // The first seed whose calibration leaves the stuck leg on (longest
+        // run at most REPEAT_MARGIN); the outcome is not used to choose it.
+        let series = (4711..)
+            .map(generate)
+            .find(|s| HybridMonitor::calibrate(&[s[..400].to_vec()]).is_some_and(|m| m.calib[0].repeat_enabled))
+            .expect("a calibration with the stuck leg on");
+        let run = |data: &[f64]| {
+            let mut mon = HybridMonitor::calibrate(&[series[..400].to_vec()]).expect("calibration");
+            let mut hits = Vec::new();
+            for (t, &x) in data.iter().enumerate() {
+                if mon.push(&[x]) == Some(Leg::RepeatedValue) {
+                    hits.push(t);
+                }
+                if mon.alarmed {
+                    mon.reset();
+                }
+            }
+            hits
+        };
+        let clean = run(&series[400..]);
+        assert!(clean.is_empty(), "chance runs raised stuck alarms at {clean:?}");
+        let mut stuck = series[400..].to_vec();
+        let frozen = stuck[10_000];
+        for x in &mut stuck[10_000..10_500] {
+            *x = frozen;
+        }
+        let hits = run(&stuck);
+        assert!(hits.iter().any(|&t| (10_000..10_500).contains(&t)), "a 500-sample stick was missed: {hits:?}");
     }
 
     #[test]
