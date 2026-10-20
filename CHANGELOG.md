@@ -4,6 +4,16 @@ All notable changes to Struktura are documented here.
 
 ## Unreleased
 
+- New `struktura ab <a> <b>` and `struktura::ab` (no_std): level A/B of two
+  samples, for benchmark runs where `compare` (α shift) is the wrong tool.
+  Median (or mean, 20% trimmed mean) per arm, percent difference with a
+  seeded 95% percentile-bootstrap interval, Mann-Whitney U, Cliff's delta;
+  verdict B HIGHER / B LOWER / EQUIVALENT / INCONCLUSIVE against
+  `--min-effect` (default 1%). On heavy-tailed synthetic pairs from one
+  distribution it called a direction in 2.4-4.7% of pairs from n = 5 to 200;
+  the bootstrap alone called one in 10.7% at n = 3 and 6.8% at n = 4, so
+  below 5 values per arm the verdict is always INCONCLUSIVE
+  (`cargo run --release --example ab_null_rate`).
 - Python and WASM `Guard` merged repeat alarms per detector leg, although
   their docs said "same rule as the CLI". The CLI merges per (channel, leg)
   since b0a8719. Keyed on the leg alone, one channel's repeats hid another

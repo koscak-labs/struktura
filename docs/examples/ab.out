@@ -1,0 +1,12 @@
+$ struktura ab data/ab_a_synthetic.csv data/ab_b_synthetic.csv --col step_ms --lower-is-better
+
+  STRUKTURA - A/B level comparison (B against A)
+  ================================================
+  A  data/ab_a_synthetic.csv  n=229  median 74.5200
+  B  data/ab_b_synthetic.csv  n=222  median 132.5395
+  ------------------------------------------------
+  difference:    +77.86%  95% CI [+74.36%, +80.85%]
+                 (percentile bootstrap, 10000 resamples, seed 0)
+  Mann-Whitney:  U=48931.0  z=+16.99  p=9.65e-65  (two-sided)
+  Cliff's delta: +0.925  (P(b > a) - P(b < a))
+  >>> B WORSE (95% CI excludes 0 and |effect| >= 1%)
