@@ -226,7 +226,7 @@ fn run_c(cc: &str, dir: &std::path::Path, c_src: &str, cases: &[Case], mode: u8)
         .args(["-std=c99", "-O2", "-o"])
         .arg(&exe)
         .arg("driver.c")
-        .arg("-lm")
+        .args(common::link_flags(cc))
         .output()
         .expect("run C compiler");
     assert!(out.status.success(), "{cc} failed:\n{}", String::from_utf8_lossy(&out.stderr));

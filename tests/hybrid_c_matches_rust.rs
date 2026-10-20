@@ -157,7 +157,7 @@ fn hybrid_c_dfa_alpha_matches_rust() {
         .args(["-std=c99", "-O2", "-o"])
         .arg(&exe)
         .arg("harness.c")
-        .arg("-lm")
+        .args(common::link_flags(&cc))
         .output()
         .expect("run C compiler");
     assert!(

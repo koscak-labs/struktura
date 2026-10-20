@@ -207,7 +207,7 @@ fn compile_and_run_cxx(cxx: &str, dir: &Path, source: &str, stdin_text: &str) ->
         .args(["-std=c++17", "-O2", "-o"])
         .arg(&exe)
         .arg(source)
-        .arg("-lm")
+        .args(common::link_flags(cxx))
         .output()
         .expect("run C++ compiler");
     assert!(

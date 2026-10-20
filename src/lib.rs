@@ -44,10 +44,12 @@ use alloc::vec::Vec;
 
 use core::fmt;
 
+pub mod dfa_core;
+
 #[cfg(not(feature = "std"))]
-fn ln(x: f64) -> f64 { libm::log(x) }
+pub(crate) fn ln(x: f64) -> f64 { libm::log(x) }
 #[cfg(feature = "std")]
-fn ln(x: f64) -> f64 { x.ln() }
+pub(crate) fn ln(x: f64) -> f64 { x.ln() }
 
 #[cfg(not(feature = "std"))]
 pub(crate) fn sqrt(x: f64) -> f64 { libm::sqrt(x) }
@@ -55,26 +57,26 @@ pub(crate) fn sqrt(x: f64) -> f64 { libm::sqrt(x) }
 pub(crate) fn sqrt(x: f64) -> f64 { x.sqrt() }
 
 #[cfg(not(feature = "std"))]
-fn powf(x: f64, y: f64) -> f64 { libm::pow(x, y) }
+pub(crate) fn powf(x: f64, y: f64) -> f64 { libm::pow(x, y) }
 #[cfg(feature = "std")]
-fn powf(x: f64, y: f64) -> f64 { x.powf(y) }
+pub(crate) fn powf(x: f64, y: f64) -> f64 { x.powf(y) }
 
 #[cfg(not(feature = "std"))]
-fn powi(x: f64, n: i32) -> f64 { libm::pow(x, n as f64) }
+pub(crate) fn powi(x: f64, n: i32) -> f64 { libm::pow(x, n as f64) }
 #[cfg(feature = "std")]
-fn powi(x: f64, n: i32) -> f64 { x.powi(n) }
+pub(crate) fn powi(x: f64, n: i32) -> f64 { x.powi(n) }
 
 #[cfg(not(feature = "std"))]
-fn sin(x: f64) -> f64 { libm::sin(x) }
+pub(crate) fn sin(x: f64) -> f64 { libm::sin(x) }
 #[cfg(feature = "std")]
-fn sin(x: f64) -> f64 { x.sin() }
+pub(crate) fn sin(x: f64) -> f64 { x.sin() }
 
 #[cfg(not(feature = "std"))]
 #[allow(dead_code)]
-fn cos(x: f64) -> f64 { libm::cos(x) }
+pub(crate) fn cos(x: f64) -> f64 { libm::cos(x) }
 #[cfg(feature = "std")]
 #[allow(dead_code)]
-fn cos(x: f64) -> f64 { x.cos() }
+pub(crate) fn cos(x: f64) -> f64 { x.cos() }
 
 /// Result of a DFA or ACR computation.
 #[derive(Debug, Clone, Copy)]
@@ -858,7 +860,7 @@ fn clamp(v: f64, lo: f64, hi: f64) -> f64 {
     if v < lo { lo } else if v > hi { hi } else { v }
 }
 
-fn linreg(x: &[f64], y: &[f64]) -> DfaResult {
+pub(crate) fn linreg(x: &[f64], y: &[f64]) -> DfaResult {
     let k = x.len() as f64;
     let (mut sx, mut sy, mut sxy, mut sx2) = (0.0, 0.0, 0.0, 0.0);
     for i in 0..x.len() {
