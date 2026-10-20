@@ -189,7 +189,7 @@ pub fn margin(op: &str, value: &str, threshold: &str) -> Option<f64> {
         let inner = &value[open + 1..];
         let d: f64 = inner.split('%').next()?.trim().parse().ok()?;
         let need = inner.split("need").nth(1)?;
-        let p: f64 = need.split_whitespace().nth(1)?.trim_end_matches(|c| c == '%' || c == ')').parse().ok()?;
+        let p: f64 = need.split_whitespace().nth(1)?.trim_end_matches(['%', ')']).parse().ok()?;
         let rel = need.split_whitespace().next()?;
         return match rel { ">%" => Some(d - p), "<%" => Some(-d - p), "~%" => Some(p - d.abs()), _ => None };
     }
@@ -313,6 +313,14 @@ pub fn analyze(ledger: &str) -> LabReport {
     r
 }
 
+/// Two-sided standard-normal tail P(|Z| > z) (Abramowitz-Stegun 7.1.26 erfc, |error| < 1.5e-7).
+pub fn two_sided_tail(z: f64) -> f64 {
+    let x = z.abs() / std::f64::consts::SQRT_2;
+    let t = 1.0 / (1.0 + 0.3275911 * x);
+
+    t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429)))) * (-x * x).exp()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -385,12 +393,4 @@ not json
         assert!((r.job_min_in_windows - 700.0 / 60.0).abs() < 1e-9);
         assert_eq!(r.deploys.len(), 1);
     }
-}
-
-/// Two-sided standard-normal tail P(|Z| > z) (Abramowitz-Stegun 7.1.26 erfc, |error| < 1.5e-7).
-pub fn two_sided_tail(z: f64) -> f64 {
-    let x = z.abs() / std::f64::consts::SQRT_2;
-    let t = 1.0 / (1.0 + 0.3275911 * x);
-    let erfc = t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429)))) * (-x * x).exp();
-    erfc
 }
