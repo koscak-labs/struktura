@@ -1,0 +1,19 @@
+[package]
+name = "colony-exploration"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.70"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Experimental partial-observation exploration research for robotics"
+
+[dependencies]
+# Intentionally dependency-free to keep the planner portable.
+
+[lib]
+name = "colony_exploration"
+path = "src/lib.rs"
+
+[[bin]]
+name = "colony-bench"
+path = "src/main.rs"

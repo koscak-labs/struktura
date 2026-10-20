@@ -1,0 +1,82 @@
+name: COLONY exploration experiment
+
+on:
+  pull_request:
+    paths:
+      - 'crates/colony/**'
+      - '.github/workflows/colony.yml'
+  push:
+    branches: ['master']
+    paths:
+      - 'crates/colony/**'
+      - '.github/workflows/colony.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Compile and test
+        run: cargo test --manifest-path crates/colony/Cargo.toml --all-targets
+      - name: Clippy
+        run: cargo clippy --manifest-path crates/colony/Cargo.toml --all-targets -- -D warnings
+      - name: Smoke benchmark
+        run: cargo run --release --manifest-path crates/colony/Cargo.toml --bin colony-bench -- --seeds 3
+
+  python-reference:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reference test suite
+        env:
+          PYTHONPATH: crates/colony/python
+        run: python3 -m unittest discover -s crates/colony/python/tests -v
+      - name: Paired seed smoke benchmark
+        env:
+          PYTHONPATH: crates/colony/python
+        run: python3 -m colony.benchmark --seeds 3 --max-steps 3000
+
+      - name: SIGNALROOT active sensing smoke test
+        env:
+          PYTHONPATH: crates/colony/python
+        run: python3 -m colony.signalroot --seeds 2 --budget 12
+      - name: Real Struktura DFA -> SIGNALROOT smoke test
+        env:
+          PYTHONPATH: crates/colony/python
+        run: python3 -m colony.signalroot_dfa --seeds 8 --budget 25
+      - name: TRUSTROOT adversarial structural sensing experiment
+        env:
+          PYTHONPATH: crates/colony/python
+        run: python3 -m colony.trustroot --seeds 8 --budget 24 --travel-cap 85 --seed-start 1000 --out /tmp/trustroot-evidence.json
+      - name: VERITAS independent anomaly confirmation and null calibration
+        env:
+          PYTHONPATH: crates/colony/python
+        run: python3 -m colony.veritas --seeds 8 --budget 24 --travel-cap 85 --seed-start 2000 --out /tmp/veritas-evidence.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: colony-trustroot-veritas-evidence
+          path: |
+            /tmp/trustroot-evidence.json
+            /tmp/veritas-evidence.json
+          if-no-files-found: warn
+      - name: VERITAS-2 deferred localization versus immediate claiming
+        env:
+          PYTHONPATH: crates/colony/python
+        run: python3 -m colony.veritas_deferred --seeds 8 --budget 24 --travel-cap 85 --seed-start 3000 --out /tmp/veritas-deferred-evidence.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: colony-veritas2-evidence
+          path: /tmp/veritas-deferred-evidence.json
+          if-no-files-found: warn
+      - name: GENESIS quality-diversity smoke test
+        env:
+          PYTHONPATH: crates/colony/python
+        run: python3 -m colony.genesis --budget 6 --train-seeds 1 --test-seeds 3

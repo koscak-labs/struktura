@@ -1,0 +1,1587 @@
+{
+  "experiment": "COLONY GENESIS 0.3",
+  "protocol": {
+    "train": "rooms+scatter seeds 1000.., optimization only",
+    "test": "corridors seeds 50000.., single post-selection evaluation",
+    "metric": "steps + (1-coverage)*step_cap + incomplete*step_cap; lower is better",
+    "caveat": "toy grid and ideal sensing; held-out families not real-world robustness"
+  },
+  "training": {
+    "algorithm": "mutation + 2D quality-diversity archive (MAP-Elites-inspired)",
+    "seed": 17,
+    "budget": 24,
+    "train_seeds": 3,
+    "train_families": [
+      "rooms",
+      "scatter"
+    ],
+    "train_world_ids": [
+      [
+        "rooms",
+        1000
+      ],
+      [
+        "rooms",
+        1001
+      ],
+      [
+        "rooms",
+        1002
+      ],
+      [
+        "scatter",
+        1000
+      ],
+      [
+        "scatter",
+        1001
+      ],
+      [
+        "scatter",
+        1002
+      ]
+    ],
+    "unique_evaluations": 20,
+    "archive": [
+      {
+        "niche": [
+          0,
+          2
+        ],
+        "genome": {
+          "radius": 2,
+          "budget": 70,
+          "gain_weight": 0.478,
+          "distance_penalty": 4.676
+        },
+        "train_cost": 54.66667
+      },
+      {
+        "niche": [
+          1,
+          2
+        ],
+        "genome": {
+          "radius": 4,
+          "budget": 70,
+          "gain_weight": 0.478,
+          "distance_penalty": 4.676
+        },
+        "train_cost": 51.33333
+      },
+      {
+        "niche": [
+          1,
+          3
+        ],
+        "genome": {
+          "radius": 3,
+          "budget": 100,
+          "gain_weight": 1.157,
+          "distance_penalty": 2.544
+        },
+        "train_cost": 51.33333
+      },
+      {
+        "niche": [
+          2,
+          2
+        ],
+        "genome": {
+          "radius": 7,
+          "budget": 60,
+          "gain_weight": 0.5,
+          "distance_penalty": 2.0
+        },
+        "train_cost": 49.83333
+      },
+      {
+        "niche": [
+          3,
+          0
+        ],
+        "genome": {
+          "radius": 12,
+          "budget": 20,
+          "gain_weight": 0.618,
+          "distance_penalty": 1.114
+        },
+        "train_cost": 49.83333
+      },
+      {
+        "niche": [
+          3,
+          2
+        ],
+        "genome": {
+          "radius": 9,
+          "budget": 60,
+          "gain_weight": 0.5,
+          "distance_penalty": 2.0
+        },
+        "train_cost": 49.83333
+      }
+    ],
+    "history": [
+      {
+        "iteration": 0,
+        "genome": {
+          "radius": 6,
+          "budget": 60,
+          "gain_weight": 0.35,
+          "distance_penalty": 2.0
+        },
+        "niche": [
+          2,
+          2
+        ],
+        "cost": 52.5,
+        "new_elite": true
+      },
+      {
+        "iteration": 1,
+        "genome": {
+          "radius": 6,
+          "budget": 60,
+          "gain_weight": 0.5,
+          "distance_penalty": 2.0
+        },
+        "niche": [
+          2,
+          2
+        ],
+        "cost": 52.5,
+        "new_elite": false
+      },
+      {
+        "iteration": 2,
+        "genome": {
+          "radius": 6,
+          "budget": 70,
+          "gain_weight": 0.35,
+          "distance_penalty": 2.0
+        },
+        "niche": [
+          2,
+          2
+        ],
+        "cost": 52.5,
+        "new_elite": false
+      },
+      {
+        "iteration": 3,
+        "genome": {
+          "radius": 7,
+          "budget": 60,
+          "gain_weight": 0.35,
+          "distance_penalty": 2.0
+        },
+        "niche": [
+          2,
+          2
+        ],
+        "cost": 50.5,
+        "new_elite": true
+      },
+      {
+        "iteration": 4,
+        "genome": {
+          "radius": 7,
+          "budget": 60,
+          "gain_weight": 0.35,
+          "distance_penalty": 1.5
+        },
+        "niche": [
+          2,
+          2
+        ],
+        "cost": 50.5,
+        "new_elite": false
+      },
+      {
+        "iteration": 5,
+        "genome": {
+          "radius": 10,
+          "budget": 60,
+          "gain_weight": 1.281,
+          "distance_penalty": 5.633
+        },
+        "niche": [
+          3,
+          2
+        ],
+        "cost": 53.83333,
+        "new_elite": true
+      },
+      {
+        "iteration": 6,
+        "genome": {
+          "radius": 10,
+          "budget": 70,
+          "gain_weight": 1.281,
+          "distance_penalty": 5.633
+        },
+        "niche": [
+          3,
+          2
+        ],
+        "cost": 53.83333,
+        "new_elite": false
+      },
+      {
+        "iteration": 7,
+        "genome": {
+          "radius": 7,
+          "budget": 70,
+          "gain_weight": 0.35,
+          "distance_penalty": 2.0
+        },
+        "niche": [
+          2,
+          2
+        ],
+        "cost": 50.5,
+        "new_elite": false
+      },
+      {
+        "iteration": 8,
+        "genome": {
+          "radius": 7,
+          "budget": 70,
+          "gain_weight": 0.35,
+          "distance_penalty": 2.0
+        },
+        "niche": [
+          2,
+          2
+        ],
+        "cost": 50.5,
+        "new_elite": false
+      },
+      {
+        "iteration": 9,
+        "genome": {
+          "radius": 7,
+          "budget": 60,
+          "gain_weight": 0.5,
+          "distance_penalty": 2.0
+        },
+        "niche": [
+          2,
+          2
+        ],
+        "cost": 49.83333,
+        "new_elite": true
+      },
+      {
+        "iteration": 10,
+        "genome": {
+          "radius": 12,
+          "budget": 20,
+          "gain_weight": 0.618,
+          "distance_penalty": 1.114
+        },
+        "niche": [
+          3,
+          0
+        ],
+        "cost": 49.83333,
+        "new_elite": true
+      },
+      {
+        "iteration": 11,
+        "genome": {
+          "radius": 10,
+          "budget": 70,
+          "gain_weight": 1.281,
+          "distance_penalty": 5.633
+        },
+        "niche": [
+          3,
+          2
+        ],
+        "cost": 53.83333,
+        "new_elite": false
+      },
+      {
+        "iteration": 12,
+        "genome": {
+          "radius": 10,
+          "budget": 60,
+          "gain_weight": 1.131,
+          "distance_penalty": 5.633
+        },
+        "niche": [
+          3,
+          2
+        ],
+        "cost": 53.83333,
+        "new_elite": false
+      },
+      {
+        "iteration": 13,
+        "genome": {
+          "radius": 12,
+          "budget": 60,
+          "gain_weight": 1.281,
+          "distance_penalty": 5.633
+        },
+        "niche": [
+          3,
+          2
+        ],
+        "cost": 53.83333,
+        "new_elite": false
+      },
+      {
+        "iteration": 14,
+        "genome": {
+          "radius": 7,
+          "budget": 60,
+          "gain_weight": 0.5,
+          "distance_penalty": 1.5
+        },
+        "niche": [
+          2,
+          2
+        ],
+        "cost": 49.83333,
+        "new_elite": false
+      },
+      {
+        "iteration": 15,
+        "genome": {
+          "radius": 2,
+          "budget": 70,
+          "gain_weight": 0.478,
+          "distance_penalty": 4.676
+        },
+        "niche": [
+          0,
+          2
+        ],
+        "cost": 54.66667,
+        "new_elite": true
+      },
+      {
+        "iteration": 16,
+        "genome": {
+          "radius": 10,
+          "budget": 60,
+          "gain_weight": 1.131,
+          "distance_penalty": 5.633
+        },
+        "niche": [
+          3,
+          2
+        ],
+        "cost": 53.83333,
+        "new_elite": false
+      },
+      {
+        "iteration": 17,
+        "genome": {
+          "radius": 7,
+          "budget": 60,
+          "gain_weight": 0.35,
+          "distance_penalty": 2.0
+        },
+        "niche": [
+          2,
+          2
+        ],
+        "cost": 50.5,
+        "new_elite": false
+      },
+      {
+        "iteration": 18,
+        "genome": {
+          "radius": 10,
+          "budget": 60,
+          "gain_weight": 1.431,
+          "distance_penalty": 5.633
+        },
+        "niche": [
+          3,
+          2
+        ],
+        "cost": 53.83333,
+        "new_elite": false
+      },
+      {
+        "iteration": 19,
+        "genome": {
+          "radius": 12,
+          "budget": 20,
+          "gain_weight": 0.468,
+          "distance_penalty": 1.114
+        },
+        "niche": [
+          3,
+          0
+        ],
+        "cost": 49.83333,
+        "new_elite": false
+      },
+      {
+        "iteration": 20,
+        "genome": {
+          "radius": 3,
+          "budget": 100,
+          "gain_weight": 1.157,
+          "distance_penalty": 2.544
+        },
+        "niche": [
+          1,
+          3
+        ],
+        "cost": 51.33333,
+        "new_elite": true
+      },
+      {
+        "iteration": 21,
+        "genome": {
+          "radius": 9,
+          "budget": 60,
+          "gain_weight": 0.5,
+          "distance_penalty": 2.0
+        },
+        "niche": [
+          3,
+          2
+        ],
+        "cost": 49.83333,
+        "new_elite": true
+      },
+      {
+        "iteration": 22,
+        "genome": {
+          "radius": 7,
+          "budget": 60,
+          "gain_weight": 0.5,
+          "distance_penalty": 2.5
+        },
+        "niche": [
+          2,
+          2
+        ],
+        "cost": 52.66667,
+        "new_elite": false
+      },
+      {
+        "iteration": 23,
+        "genome": {
+          "radius": 4,
+          "budget": 70,
+          "gain_weight": 0.478,
+          "distance_penalty": 4.676
+        },
+        "niche": [
+          1,
+          2
+        ],
+        "cost": 51.33333,
+        "new_elite": true
+      }
+    ],
+    "champion": {
+      "radius": 7,
+      "budget": 60,
+      "gain_weight": 0.5,
+      "distance_penalty": 2.0
+    },
+    "champion_train": {
+      "cost": 49.83333,
+      "mean_steps": 49.833333333333336,
+      "mean_coverage": 1.0,
+      "completed": 6,
+      "collisions": 0,
+      "episodes": [
+        {
+          "family": "rooms",
+          "seed": 1000,
+          "steps": 27,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 27.0,
+          "reachable": 37
+        },
+        {
+          "family": "rooms",
+          "seed": 1001,
+          "steps": 9,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 9.0,
+          "reachable": 16
+        },
+        {
+          "family": "rooms",
+          "seed": 1002,
+          "steps": 9,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 9.0,
+          "reachable": 16
+        },
+        {
+          "family": "scatter",
+          "seed": 1000,
+          "steps": 82,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 82.0,
+          "reachable": 186
+        },
+        {
+          "family": "scatter",
+          "seed": 1001,
+          "steps": 78,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 78.0,
+          "reachable": 168
+        },
+        {
+          "family": "scatter",
+          "seed": 1002,
+          "steps": 94,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 94.0,
+          "reachable": 180
+        }
+      ]
+    }
+  },
+  "heldout_worlds": [
+    [
+      "corridors",
+      50000
+    ],
+    [
+      "corridors",
+      50001
+    ],
+    [
+      "corridors",
+      50002
+    ],
+    [
+      "corridors",
+      50003
+    ],
+    [
+      "corridors",
+      50004
+    ],
+    [
+      "corridors",
+      50005
+    ],
+    [
+      "corridors",
+      50006
+    ],
+    [
+      "corridors",
+      50007
+    ],
+    [
+      "corridors",
+      50008
+    ],
+    [
+      "corridors",
+      50009
+    ],
+    [
+      "corridors",
+      50010
+    ],
+    [
+      "corridors",
+      50011
+    ],
+    [
+      "corridors",
+      50012
+    ],
+    [
+      "corridors",
+      50013
+    ],
+    [
+      "corridors",
+      50014
+    ],
+    [
+      "corridors",
+      50015
+    ],
+    [
+      "corridors",
+      50016
+    ],
+    [
+      "corridors",
+      50017
+    ],
+    [
+      "corridors",
+      50018
+    ],
+    [
+      "corridors",
+      50019
+    ],
+    [
+      "corridors",
+      50020
+    ],
+    [
+      "corridors",
+      50021
+    ],
+    [
+      "corridors",
+      50022
+    ],
+    [
+      "corridors",
+      50023
+    ],
+    [
+      "corridors",
+      50024
+    ],
+    [
+      "corridors",
+      50025
+    ],
+    [
+      "corridors",
+      50026
+    ],
+    [
+      "corridors",
+      50027
+    ],
+    [
+      "corridors",
+      50028
+    ],
+    [
+      "corridors",
+      50029
+    ]
+  ],
+  "heldout": {
+    "evolved": {
+      "cost": 167.16667,
+      "mean_steps": 167.16666666666666,
+      "mean_coverage": 1.0,
+      "completed": 30,
+      "collisions": 0,
+      "episodes": [
+        {
+          "family": "corridors",
+          "seed": 50000,
+          "steps": 167,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 167.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50001,
+          "steps": 144,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 144.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50002,
+          "steps": 177,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 177.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50003,
+          "steps": 138,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 138.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50004,
+          "steps": 193,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 193.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50005,
+          "steps": 162,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 162.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50006,
+          "steps": 160,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 160.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50007,
+          "steps": 174,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 174.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50008,
+          "steps": 130,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 130.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50009,
+          "steps": 148,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 148.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50010,
+          "steps": 197,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 197.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50011,
+          "steps": 160,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 160.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50012,
+          "steps": 198,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 198.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50013,
+          "steps": 166,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 166.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50014,
+          "steps": 160,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 160.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50015,
+          "steps": 168,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 168.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50016,
+          "steps": 163,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 163.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50017,
+          "steps": 149,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 149.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50018,
+          "steps": 214,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 214.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50019,
+          "steps": 154,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 154.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50020,
+          "steps": 194,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 194.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50021,
+          "steps": 165,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 165.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50022,
+          "steps": 181,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 181.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50023,
+          "steps": 131,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 131.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50024,
+          "steps": 175,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 175.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50025,
+          "steps": 143,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 143.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50026,
+          "steps": 176,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 176.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50027,
+          "steps": 185,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 185.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50028,
+          "steps": 155,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 155.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50029,
+          "steps": 188,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 188.0,
+          "reachable": 125
+        }
+      ]
+    },
+    "untuned_growth": {
+      "cost": 166.8,
+      "mean_steps": 166.8,
+      "mean_coverage": 1.0,
+      "completed": 30,
+      "collisions": 0,
+      "episodes": [
+        {
+          "family": "corridors",
+          "seed": 50000,
+          "steps": 167,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 167.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50001,
+          "steps": 144,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 144.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50002,
+          "steps": 177,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 177.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50003,
+          "steps": 138,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 138.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50004,
+          "steps": 193,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 193.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50005,
+          "steps": 162,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 162.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50006,
+          "steps": 160,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 160.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50007,
+          "steps": 174,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 174.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50008,
+          "steps": 130,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 130.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50009,
+          "steps": 148,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 148.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50010,
+          "steps": 197,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 197.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50011,
+          "steps": 160,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 160.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50012,
+          "steps": 198,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 198.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50013,
+          "steps": 166,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 166.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50014,
+          "steps": 160,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 160.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50015,
+          "steps": 168,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 168.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50016,
+          "steps": 163,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 163.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50017,
+          "steps": 149,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 149.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50018,
+          "steps": 214,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 214.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50019,
+          "steps": 154,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 154.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50020,
+          "steps": 194,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 194.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50021,
+          "steps": 165,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 165.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50022,
+          "steps": 181,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 181.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50023,
+          "steps": 131,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 131.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50024,
+          "steps": 175,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 175.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50025,
+          "steps": 132,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 132.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50026,
+          "steps": 176,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 176.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50027,
+          "steps": 185,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 185.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50028,
+          "steps": 155,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 155.0,
+          "reachable": 125
+        },
+        {
+          "family": "corridors",
+          "seed": 50029,
+          "steps": 188,
+          "coverage": 1.0,
+          "completed": true,
+          "collisions": 0,
+          "cost": 188.0,
+          "reachable": 125
+        }
+      ]
+    },
+    "frontier": {
+      "cost": 167.46667,
+      "mean_steps": 167.46666666666667,
+      "completed": 30,
+      "episodes": [
+        {
+          "family": "corridors",
+          "seed": 50000,
+          "cost": 180.0,
+          "steps": 180,
+          "completed": true,
+          "coverage": 1.0
+        },
+        {
+          "family": "corridors",
+          "seed": 50001,
+          "cost": 171.0,
+          "steps": 171,
+          "completed": true,
+          "coverage": 1.0
+        },
+        {
+          "family": "corridors",
+          "seed": 50002,
+          "cost": 179.0,
+          "steps": 179,
+          "completed": true,
+          "coverage": 1.0
+        },
+        {
+          "family": "corridors",
+          "seed": 50003,
+          "cost": 176.0,
+          "steps": 176,
+          "completed": true,
+          "coverage": 1.0
+        },
+        {
+          "family": "corridors",
+          "seed": 50004,
+          "cost": 195.0,
+          "steps": 195,
+          "completed": true,
+          "coverage": 1.0
+        },
+        {
+          "family": "corridors",
+          "seed": 50005,
+          "cost": 157.0,
+          "steps": 157,
+          "completed": true,
+          "coverage": 1.0
+        },
+        {
+          "family": "corridors",
+          "seed": 50006,
+          "cost": 163.0,
+          "steps": 163,
+          "completed": true,
+          "coverage": 1.0
+        },
+        {
+          "family": "corridors",
+          "seed": 50007,
+          "cost": 173.0,
+          "steps": 173,
+          "completed": true,
+          "coverage": 1.0
+        },
+        {
+          "family": "corridors",
+          "seed": 50008,
+          "cost": 118.0,
+          "steps": 118,
+          "completed": true,
+          "coverage": 1.0
+        },
+        {
+          "family": "corridors",
+          "seed": 50009,
+          "cost": 213.0,
+          "steps": 213,
+          "completed": true,
+          "coverage": 1.0
+        },
+        {
+          "family": "corridors",
+          "seed": 50010,
+          "cost": 195.0,
+          "steps": 195,
+          "completed": true,
+          "coverage": 1.0
+        },
+        {
+          "family": "corridors",
+          "seed": 50011,
+          "cost": 150.0,
+          "steps": 150,
+          "completed": true,
+          "coverage": 1.0
+        },
+        {
+          "family": "corridors",
+          "seed": 50012,
+          "cost": 194.0,
+          "steps": 194,
+          "completed": true,
+          "coverage": 1.0
+        },
+        {
+          "family": "corridors",
+          "seed": 50013,
+          "cost": 165.0,
+          "steps": 165,
+          "completed": true,
+          "coverage": 1.0
+        },
+        {
+          "family": "corridors",
+          "seed": 50014,
+          "cost": 138.0,
+          "steps": 138,
+          "completed": true,
+          "coverage": 1.0
+        },
+        {
+          "family": "corridors",
+          "seed": 50015,
+          "cost": 153.0,
+          "steps": 153,
+          "completed": true,
+          "coverage": 1.0
+        },
+        {
+          "family": "corridors",
+          "seed": 50016,
+          "cost": 163.0,
+          "steps": 163,
+          "completed": true,
+          "coverage": 1.0
+        },
+        {
+          "family": "corridors",
+          "seed": 50017,
+          "cost": 150.0,
+          "steps": 150,
+          "completed": true,
+          "coverage": 1.0
+        },
+        {
+          "family": "corridors",
+          "seed": 50018,
+          "cost": 164.0,
+          "steps": 164,
+          "completed": true,
+          "coverage": 1.0
+        },
+        {
+          "family": "corridors",
+          "seed": 50019,
+          "cost": 150.0,
+          "steps": 150,
+          "completed": true,
+          "coverage": 1.0
+        },
+        {
+          "family": "corridors",
+          "seed": 50020,
+          "cost": 136.0,
+          "steps": 136,
+          "completed": true,
+          "coverage": 1.0
+        },
+        {
+          "family": "corridors",
+          "seed": 50021,
+          "cost": 165.0,
+          "steps": 165,
+          "completed": true,
+          "coverage": 1.0
+        },
+        {
+          "family": "corridors",
+          "seed": 50022,
+          "cost": 181.0,
+          "steps": 181,
+          "completed": true,
+          "coverage": 1.0
+        },
+        {
+          "family": "corridors",
+          "seed": 50023,
+          "cost": 186.0,
+          "steps": 186,
+          "completed": true,
+          "coverage": 1.0
+        },
+        {
+          "family": "corridors",
+          "seed": 50024,
+          "cost": 177.0,
+          "steps": 177,
+          "completed": true,
+          "coverage": 1.0
+        },
+        {
+          "family": "corridors",
+          "seed": 50025,
+          "cost": 130.0,
+          "steps": 130,
+          "completed": true,
+          "coverage": 1.0
+        },
+        {
+          "family": "corridors",
+          "seed": 50026,
+          "cost": 177.0,
+          "steps": 177,
+          "completed": true,
+          "coverage": 1.0
+        },
+        {
+          "family": "corridors",
+          "seed": 50027,
+          "cost": 156.0,
+          "steps": 156,
+          "completed": true,
+          "coverage": 1.0
+        },
+        {
+          "family": "corridors",
+          "seed": 50028,
+          "cost": 181.0,
+          "steps": 181,
+          "completed": true,
+          "coverage": 1.0
+        },
+        {
+          "family": "corridors",
+          "seed": 50029,
+          "cost": 188.0,
+          "steps": 188,
+          "completed": true,
+          "coverage": 1.0
+        }
+      ]
+    }
+  },
+  "paired_evolved_minus_frontier_cost": [
+    -13.0,
+    -27.0,
+    -2.0,
+    -38.0,
+    -2.0,
+    5.0,
+    -3.0,
+    1.0,
+    12.0,
+    -65.0,
+    2.0,
+    10.0,
+    4.0,
+    1.0,
+    22.0,
+    15.0,
+    0.0,
+    -1.0,
+    50.0,
+    4.0,
+    58.0,
+    0.0,
+    0.0,
+    -55.0,
+    -2.0,
+    13.0,
+    -1.0,
+    29.0,
+    -26.0,
+    0.0
+  ],
+  "paired_delta_mean": -0.3,
+  "beats_frontier_on_this_sample": true,
+  "evolution_gain_over_untuned": -0.36667
+}
