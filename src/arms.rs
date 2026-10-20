@@ -107,8 +107,7 @@ pub struct ArmData {
 }
 
 /// Parse `key=<number>[unit]`; the number is the leading numeric prefix.
-
-/// Like `metric_token`, also accepting pass/fail words (pass ok true yes / fail false no error, any case) as 1/0.
+/// Also accepts pass/fail words (pass ok true yes / fail false no error, any case) as 1/0.
 fn metric_token_kind(tok: &str) -> Option<(String, f64, bool)> {
     let (k, v) = tok.split_once('=')?;
     if k.is_empty() || !k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.') { return None; }
@@ -118,7 +117,7 @@ fn metric_token_kind(tok: &str) -> Option<(String, f64, bool)> {
         _ => {}
     }
     let num: String = v.chars().take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-' || *c == '+' || *c == 'e' || *c == 'E').collect();
-    let x: f64 = num.trim_end_matches(|c| c == 'e' || c == 'E').parse().ok()?;
+    let x: f64 = num.trim_end_matches(['e', 'E']).parse().ok()?;
     if x.is_finite() { Some((k.to_string(), x, false)) } else { None }
 }
 

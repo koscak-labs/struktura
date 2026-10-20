@@ -62,7 +62,7 @@
 //! modular arithmetic, and the reason [`crate::brain_grokbed`] tests grokking with a learned
 //! representation instead.
 
-use crate::brain_grok::{Encoding, END};
+use crate::brain_grok::Encoding;
 use crate::brain_grok2::{self as g2, GrokTrial2};
 
 /// Pre-registered fresh seeds.
@@ -152,6 +152,7 @@ mod tests {
     #[test]
     fn preregistration_is_pinned() {
         use crate::brain_grok as v1;
+        use crate::brain_grok::END;
         assert_eq!(FRESH_SEEDS, [7103, 7211, 7307, 7417, 7523, 7621, 7727, 7829, 7933, 8039, 8147, 8243]);
         for s in FRESH_SEEDS.iter() {
             assert!(!v1::FRESH_SEEDS.contains(s) && !g2::FRESH_SEEDS.contains(s) && !g2::DEV_SEEDS.contains(s), "seed {} is fresh", s);

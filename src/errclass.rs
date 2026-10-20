@@ -2,12 +2,14 @@
 //!
 //! The same mistake never prints the same bytes twice: line numbers, temp paths, identifiers
 //! and payloads differ. A signature keeps what identifies the mistake and drops the rest:
-//! - rustc: `error[E0308]: mismatched types` -> `rustc E0308 mismatched types`
-//! - hxc:   `hxc check: line 15: frameshift — TTT closes a block that was never opened (check …)`
-//!          -> `hxc: frameshift — TTT closes a block that was never opened`
-//!          and `'ACA # brain_gpu <result_var>' needs 1 arg, got 4` -> `hxc: 'ACA' needs N arg, got N`
-//! - anything else: the first line that says error/panic/fail, with numbers, paths and
-//!   quoted text masked.
+//!   - rustc: `error[E0308]: mismatched types` -> `rustc E0308 mismatched types`
+//!   - hxc:
+//!     `hxc check: line 15: frameshift — TTT closes a block that was never opened (check …)`
+//!     -> `hxc: frameshift — TTT closes a block that was never opened`
+//!     and `'ACA # brain_gpu <result_var>' needs 1 arg, got 4` -> `hxc: 'ACA' needs N arg, got N`
+//!   - anything else: the first line that says error/panic/fail, with numbers, paths and
+//!     quoted text masked.
+//!
 //! Zero LLM: the same input always gives the same classes, so a primer A/B can say WHICH
 //! mistakes a change removed, reproducibly.
 
@@ -53,7 +55,7 @@ fn strip_noise(s: &str) -> String {
     let mut t: String = s.split_whitespace().filter(|w| !w.contains('/') || w.len() < 3).collect::<Vec<_>>().join(" ");
     if let Some(i) = t.find(" (check") { t.truncate(i); }
     if let Some(i) = t.find(" (hint") { t.truncate(i); }
-    t.trim().trim_end_matches(|c: char| c == '.' || c == ':').to_string()
+    t.trim().trim_end_matches(['.', ':']).to_string()
 }
 
 /// The stable signature of one error text (possibly multi-line). Empty text -> "none".

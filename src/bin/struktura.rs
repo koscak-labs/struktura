@@ -8,6 +8,13 @@ use struktura::codegen::Channel;
 const NORMAL_SAMPLES: &str = include_str!("../../data/normal_sample.csv");
 const FAULT_SAMPLES: &str = include_str!("../../data/fault_sample.csv");
 
+/// A (timestamp, value) pair from the pulse stream.
+type TsPair = (f64, f64);
+
+/// A pair of file names: a split and its matching pair.
+type FilePair = (String, String);
+
+
 fn read_input(path: &str) -> Vec<f64> {
     if path == "-" {
         return read_stdin();
@@ -4878,7 +4885,7 @@ fn cmd_pulse(args: &[String]) {
         let prev_ts = if deploys.len() >= 2 { deploys[deploys.len() - 2].0 } else { 0 };
         // Requests of one conversation are not independent, so the gate bets once per SESSION:
         // its first solo request, fixed the moment it is seen (never revised as the session grows).
-        let session_firsts = |text: &str| -> (Vec<(f64, f64)>, Vec<(f64, f64)>) {
+        let session_firsts = |text: &str| -> (Vec<TsPair>, Vec<TsPair>) {
             // (start, child, slot, ctx_k, ms, solo)
             let mut all: Vec<(u64, u64, u64, f64, f64, bool)> = Vec::new();
             for line in text.lines() {
@@ -5138,7 +5145,7 @@ fn cmd_arms(args: &[String]) {
     let mut cv: Option<f64> = None;
     let mut only: Option<String> = None;
     let (mut task_range, mut arm_list): (Option<String>, Option<String>) = (None, None);
-    let (mut splits, mut pairs): (Vec<(String, String)>, Vec<(String, String)>) = (Vec::new(), Vec::new());
+    let (mut splits, mut pairs): (Vec<FilePair>, Vec<FilePair>) = (Vec::new(), Vec::new());
     let mut files = Vec::new();
     let mut i = 2;
     while i < args.len() {

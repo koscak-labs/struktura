@@ -143,10 +143,16 @@ pub struct Rng(pub u64);
 
 impl Rng {
     pub fn new(seed: u64) -> Self { Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0xD1B5_4A32_D192_ED03 | 1) }
+    /// Next pseudo-random word. Named `next` for backwards compatibility with
+    /// the published 1.8.x API; `next_u64` is the alias that does not clash
+    /// with [`Iterator::next`].
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> u64 {
         self.0 ^= self.0 >> 12; self.0 ^= self.0 << 25; self.0 ^= self.0 >> 27;
         self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
     }
+    /// Alias for [`Rng::next`] that does not clash with [`Iterator::next`].
+    pub fn next_u64(&mut self) -> u64 { self.next() }
     pub fn below(&mut self, n: usize) -> usize { (self.next() % n as u64) as usize }
     /// Uniform in (0, 1].
     pub fn unit(&mut self) -> f32 { ((self.next() >> 40) as f32 + 1.0) / (1u64 << 24) as f32 }

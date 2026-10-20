@@ -68,7 +68,7 @@ pub fn backtest(ledger: &str) -> Backtest {
         for (key, h) in &hist {
             // Judge each prediction once, at the first cut where it already had a verdict.
             if judged.contains(key) { continue; }
-            let Some(at) = h.iter().filter(|(t, _)| *t < cut).last() else { continue };
+            let Some(at) = h.iter().rfind(|(t, _)| *t < cut) else { continue };
             let later: Vec<&(f64, String)> = h.iter().filter(|(t, _)| *t >= cut).collect();
             if later.is_empty() { continue; }
             judged.insert(key.clone());

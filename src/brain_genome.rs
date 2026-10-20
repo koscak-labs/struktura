@@ -74,7 +74,7 @@ const LEVELS: f32 = 4095.0;
 fn level_of(gene: usize, v: f32) -> u16 {
     let (lo, hi) = RANGE[gene];
     let t = if hi > lo { (v - lo) / (hi - lo) } else { 0.0 };
-    let t = if t < 0.0 { 0.0 } else if t > 1.0 { 1.0 } else { t };
+    let t = t.clamp(0.0, 1.0);
     let t = if gene == 2 { sqrtf(t) } else { t };
     (t * LEVELS + 0.5) as u16
 }
@@ -159,7 +159,13 @@ impl Genome {
 pub struct Rng(u64);
 impl Rng {
     pub const fn new(seed: u64) -> Self { Rng(seed | 1) }
+    /// Next pseudo-random word. Named `next` for backwards compatibility with
+    /// the published 1.8.x API; `next_u64` is the alias that does not clash
+    /// with [`Iterator::next`].
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> u64 { self.0 ^= self.0 << 13; self.0 ^= self.0 >> 7; self.0 ^= self.0 << 17; self.0 }
+    /// Alias for [`Rng::next`] that does not clash with [`Iterator::next`].
+    pub fn next_u64(&mut self) -> u64 { self.next() }
     pub fn below(&mut self, n: usize) -> usize { if n == 0 { 0 } else { (self.next() % n as u64) as usize } }
     pub fn chance(&mut self, p: f32) -> bool { ((self.next() >> 40) as f32 / (1u64 << 24) as f32) < p }
 }

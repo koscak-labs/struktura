@@ -207,7 +207,7 @@ impl<const B: usize, const G: usize> Cycle2<B, G> {
     /// Base senses removed from the model stay in the situation (memory still reads them).
     pub fn situation<const D: usize>(&self, base: &[f32; B]) -> [f32; D] {
         let mut x = [0.0f32; D];
-        for i in 0..B.min(D) { x[i] = base[i]; }
+        x[..B.min(D)].copy_from_slice(&base[..B.min(D)]);
         for g in 0..self.grown { if B + g < D { x[B + g] = self.feats[g].eval(base); } }
         x
     }
@@ -370,9 +370,9 @@ impl<const B: usize, const G: usize> Cycle2<B, G> {
     /// non-constant base senses (as [`crate::brain_grow::Grower`]).
     pub fn candidate(&self, idx: usize) -> Option<Feat> {
         let mut k = 0usize;
-        for i in 0..B { for j in i..B { if self.constant[i] || self.constant[j] { continue; } if k == idx { return Some(Feat::Prod(i as u8, j as u8)); } k += 1; } }
-        for i in 0..B { if self.constant[i] { continue; } for t in STEPS { if k == idx { return Some(Feat::Step(i as u8, t)); } k += 1; } }
-        for i in 0..B { for j in 0..B { if i == j || self.constant[i] || self.constant[j] { continue; } if k == idx { return Some(Feat::Gt(i as u8, j as u8)); } k += 1; } }
+        for i in 0..B { for j in i..B { if !self.constant[i] && !self.constant[j] { if k == idx { return Some(Feat::Prod(i as u8, j as u8)); } k += 1; } } }
+        for i in 0..B { if !self.constant[i] { for t in STEPS { if k == idx { return Some(Feat::Step(i as u8, t)); } k += 1; } } }
+        for i in 0..B { for j in 0..B { if i != j && !self.constant[i] && !self.constant[j] { if k == idx { return Some(Feat::Gt(i as u8, j as u8)); } k += 1; } } }
         None
     }
 
@@ -468,7 +468,7 @@ impl<const B: usize, const G: usize> Cycle2<B, G> {
                 if best.map(|b| p < b.1).unwrap_or(true) { best = Some((j, p)); }
             }
             let Some((j, p)) = best else { break };
-            if !(p <= (1.0 + self.drop_tol) * p0) { break; }
+            if p > (1.0 + self.drop_tol) * p0 || p.is_nan() { break; }
             brain.drop_input(j);
             if j < B {
                 self.base_on[j] = false;
