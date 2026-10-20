@@ -436,6 +436,46 @@ $ struktura redblue
 
 The run is deterministic (seeded; two runs gave byte-identical output) and takes about 100 s.
 
+## 🧪 Experiment lab tools
+
+Four commands for a benchmarking lab (built for an LLM inference server, but nothing in them is specific to that). All are deterministic for a seed and call no model.
+
+| Command | Question it answers |
+|---|---|
+| `struktura pulse <requests.csv> --deploys <ledger.jsonl>` | Did a deploy make real requests faster or slower, once context depth and slot contention are accounted for? |
+| `struktura arms <job.log>...` | Of several configurations, which wins on which metric, and which gaps are just noise? |
+| `struktura lab <ledger.jsonl>` | What has the lab established, and which of its own verdicts are fragile? |
+| `struktura power` | How many runs or tasks does a test need before its verdict means anything? |
+
+**`pulse`** reads one row per finished request (deploy or server process, context depth, share of time the other slot was busy, ms per token).
+- Fits the cost of context depth inside each deploy on solo requests only.
+- Gives two verdicts per deploy, each with a bootstrap 95% interval: **solo speed** and **contention penalty**.
+- A verdict needs the whole interval beyond the noise floor.
+- It also measures the cold-cache cost of model reloads and flags stalls.
+- Server processes are reloads, not deploys, so without a deploy ledger it gives no verdicts.
+
+**`arms`** ranks the configurations a job prints, one per line (`ub512<TAB>d0=3008 d100000=1484`, optionally grouped).
+- Compares every pair, not only against the incumbent.
+- With repeated runs it uses a bootstrap interval. With one run per arm, the gap must clear the noise band (`--cv`: 1.96·√2·CV) or it is a tie.
+- Workbench verdicts (`config<TAB>task<TAB>sample<TAB>pass|fail<TAB>ttd_s=…`) are compared **paired by task**: an exact sign test for pass rate, and per-task ratios for time-to-done.
+
+**`lab`** reads an append-only JSON-lines ledger of jobs, calibration runs and pre-registered predictions.
+- Takes the noise floor from the calibration arm and the latest authoritative verdict per prediction. A void verdict supersedes and is never a fail.
+- Then audits the lab itself:
+  - **fragile** verdicts, whose margin sits inside the single-run noise band;
+  - **easy** passes, whose threshold was set so low the result taught nothing;
+  - verdicts that **flipped** on re-scoring.
+
+**`power`** answers two design questions:
+- Runs per arm for a given effect and per-run CV (`--ledger` reads the CV).
+- Exact power of the paired sign test. Fewer than 6 tasks on which two configurations differ can never reach p < 0.05.
+
+On a real lab ledger (86 rows) and 30 h of production requests these tools found:
+- A 2·CV "believable effect" threshold lets ~16% of no-effect single-run comparisons through.
+- Several confirmed results sat inside the real noise band.
+- Model reloads cost 31.9% of all prompt-read time.
+- A drafter deploy was −38.5% solo ms/token and −27 pp contention.
+
 ## 🎮 Commands
 
 | command | what it does |
