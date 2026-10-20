@@ -4,6 +4,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The seed for a differential test: `STRUKTURA_DIFF_SEED` when set (the
 /// scheduled job passes the date), otherwise `default`. Printed so a failing
@@ -66,9 +67,55 @@ pub fn c_compiler() -> Option<String> {
     found
 }
 
+/// Does this compiler target need a separate `libm`?
+///
+/// The MSVC C runtime already provides `log`, `sqrt` and `fabs`, and LLVM
+/// ships no `libm` for that target — passing `-lm` there fails to link with
+/// "could not open 'm.lib'". Everywhere else (Linux, macOS, mingw) the math
+/// functions live in a separate library that must be named explicitly.
+///
+/// The argument is the compiler's own description of itself: the target
+/// triple from `-dumpmachine`, and/or the `--version` banner.
+pub fn needs_libm(compiler_description: &str) -> bool {
+    !compiler_description.to_ascii_lowercase().contains("msvc")
+}
+
+/// The link flags a compiler needs for the math functions.
+///
+/// The target is read from `-dumpmachine` (both gcc and clang accept it) and
+/// from the `--version` banner, which prints the target triple for clang and
+/// the `mingw32` flavour for gcc. Either signal saying "msvc" is enough to
+/// drop `-lm`; if neither signal is understood the compiler gets `-lm`, which
+/// is the safe default for the platforms that need it.
+pub fn link_flags(cc: &str) -> Vec<&'static str> {
+    let mut signal = String::new();
+    for args in [&["-dumpmachine"][..], &["--version"][..]] {
+        if let Ok(o) = Command::new(cc).args(args).output() {
+            if o.status.success() {
+                signal.push_str(&String::from_utf8_lossy(&o.stdout));
+                signal.push(' ');
+            }
+        }
+    }
+
+    if needs_libm(&signal) {
+        vec!["-lm"]
+    } else {
+        Vec::new()
+    }
+}
+
 /// A fresh scratch directory for one test.
+///
+/// The directory is unique per call, not just per process: tests inside one
+/// binary run on separate threads and share this process id, so a tag that
+/// only names the test would give two of them the same directory and one
+/// would overwrite the other's `prog.exe` mid-run. A per-call counter keeps
+/// them apart.
 pub fn scratch(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("struktura-{tag}-{}", std::process::id()));
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("struktura-{tag}-{}-{n}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
@@ -81,7 +128,7 @@ pub fn compile_and_run(cc: &str, dir: &Path, source: &str, stdin_text: &str) -> 
         .args(["-std=c99", "-O2", "-o"])
         .arg(&exe)
         .arg(source)
-        .arg("-lm")
+        .args(link_flags(cc))
         .output()
         .expect("run C compiler");
     assert!(

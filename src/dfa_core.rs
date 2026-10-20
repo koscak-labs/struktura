@@ -21,7 +21,8 @@ use alloc::vec::Vec;
 
 use crate::{linreg, ln, powf, powi, sqrt, DfaResult};
 
-/// Canonical DFA reference implementation — the entire detector, ~35 lines of math.
+/// Canonical DFA reference implementation — the entire detector, ~68 lines of code
+/// (the DFA math proper is the box loop and the log-log fit).
 ///
 /// Mirrors the textbook algorithm exactly so the method is auditable at a glance.
 /// For hot paths prefer [`crate::dfa`] (reuses a caller buffer) or
