@@ -115,10 +115,10 @@ mod tests {
 
     #[test]
     fn fragile_remeasure_outranks_every_challenger() {
-        let (o, k) = setup("{\"kind\":\"prediction\",\"ts\":1,\"pred\":\"130.tsv\",\"name\":\"gqa2\",\"value\":\"1658 vs 1568 (5.74%, need >% 5%)\",\"op\":\">%\",\"threshold\":\"arm B\",\"verdict\":\"pass\"}\n");
+        let (o, k) = setup("{\"kind\":\"prediction\",\"ts\":1,\"pred\":\"130.tsv\",\"name\":\"gqa2-5pct-at-64K\",\"value\":\"1658 vs 1568 (5.74%, need >% 5%)\",\"op\":\">%\",\"threshold\":\"arm B\",\"verdict\":\"pass\"}\n");
         let a = agenda(&o, &learn(&o), &k, &constraints(&[], &[]));
         assert_eq!(a[0].kind, Kind::Remeasure);
-        assert_eq!(a[0].pred, Some(("130.tsv".into(), "gqa2".into())));
+        assert_eq!(a[0].pred, Some(("130.tsv".into(), "gqa2-5pct-at-64K".into())));
         assert!(a[0].score > a.iter().filter(|i| i.kind == Kind::Challenger).map(|i| i.score).fold(0.0, f64::max));
     }
 

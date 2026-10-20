@@ -55,7 +55,7 @@ fn expf64(x: f64) -> f64 {
     if x > 700.0 { return f64::INFINITY; }
     let mut m = 0u32;
     let mut r = x;
-    while r > 0.5 || r < -0.5 { r *= 0.5; m += 1; }
+    while r.abs() > 0.5 { r *= 0.5; m += 1; }
     let (mut term, mut sum) = (1.0f64, 1.0f64);
     let mut i = 1.0;
     while i <= 10.0 { term *= r / i; sum += term; i += 1.0; }

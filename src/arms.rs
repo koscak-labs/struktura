@@ -44,7 +44,7 @@ pub fn lower_is_better(metric: &str, dir: Direction) -> bool {
         Direction::Higher => false,
         Direction::Lower => true,
         Direction::Auto => metric.to_ascii_lowercase().split(|c: char| !c.is_ascii_alphanumeric())
-            .any(|t| matches!(t, "secs" | "sec" | "seconds" | "ms" | "us" | "time" | "lat" | "latency" | "wall" | "dur" | "duration" | "elapsed" | "ttft" | "gen" | "tokens" | "tok" | "cost" | "attempts" | "turns")),
+            .any(|t| matches!(t, "secs" | "sec" | "seconds" | "ms" | "us" | "time" | "lat" | "latency" | "wall" | "dur" | "duration" | "elapsed" | "ttft" | "ttd" | "gen" | "tokens" | "tok" | "cost" | "attempts" | "turns")),
     }
 }
 
@@ -105,8 +105,7 @@ pub struct ArmData {
 }
 
 /// Parse `key=<number>[unit]`; the number is the leading numeric prefix.
-
-/// Like `metric_token`, also accepting pass/fail words (pass ok true yes / fail false no error, any case) as 1/0.
+/// Also accepts pass/fail words (pass ok true yes / fail false no error, any case) as 1/0.
 fn metric_token_kind(tok: &str) -> Option<(String, f64, bool)> {
     let (k, v) = tok.split_once('=')?;
     if k.is_empty() || !k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.') { return None; }
@@ -116,7 +115,7 @@ fn metric_token_kind(tok: &str) -> Option<(String, f64, bool)> {
         _ => {}
     }
     let num: String = v.chars().take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-' || *c == '+' || *c == 'e' || *c == 'E').collect();
-    let x: f64 = num.trim_end_matches(|c| c == 'e' || c == 'E').parse().ok()?;
+    let x: f64 = num.trim_end_matches(['e', 'E']).parse().ok()?;
     if x.is_finite() { Some((k.to_string(), x, false)) } else { None }
 }
 
@@ -359,6 +358,12 @@ some free text = not a metric line\n";
         assert_eq!(hi.pairs[0].outcome, Outcome::BWins); // higher ms "better" -> slow wins
         assert_eq!(lo.pairs[0].outcome, Outcome::AWins); // lower is better -> fast wins
         assert_eq!(lo.dominant, vec![("lat".to_string(), "fast".to_string())]);
+    }
+
+    #[test]
+    fn time_keys_are_lower_is_better() {
+        for k in ["ttd_s", "ttft_ms", "step_ms", "wall_s", "attempts", "gen", "latency"] { assert!(lower_is_better(k, Direction::Auto), "{}", k); }
+        for k in ["tps", "code_tps", "d100000", "acc", "pass", "params"] { assert!(!lower_is_better(k, Direction::Auto), "{}", k); }
     }
 
     #[test]

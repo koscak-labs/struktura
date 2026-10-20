@@ -270,7 +270,7 @@ mod tests {
 
     #[test]
     fn falsifier_ground_replay_reproduces_every_record_bit_exact() {
-        let mut rec: Box<Recorder<2048>> = Box::new(Recorder::new());
+        let mut rec: Box<Recorder<2048>> = Box::default();
         flight(&mut rec);
         assert_eq!(rec.total() as usize, STEPS);
         let mut buf = vec![0u8; HEADER_BYTES + 2048 * RECORD_BYTES];
@@ -284,7 +284,7 @@ mod tests {
 
     #[test]
     fn falsifier_one_flipped_situation_bit_is_detected() {
-        let mut rec: Box<Recorder<2048>> = Box::new(Recorder::new());
+        let mut rec: Box<Recorder<2048>> = Box::default();
         flight(&mut rec);
         let mut buf = vec![0u8; HEADER_BYTES + 2048 * RECORD_BYTES];
         let used = rec.downlink(&mut buf);

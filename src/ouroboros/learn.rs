@@ -35,7 +35,7 @@ pub fn parse_relative(value: &str) -> Option<(f64, String, f64)> {
     let need = inner.split("need").nth(1)?;
     let mut w = need.split_whitespace();
     let op = w.next()?.to_string();
-    let p: f64 = w.next()?.trim_end_matches(|c| c == '%' || c == ')').parse().ok()?;
+    let p: f64 = w.next()?.trim_end_matches(['%', ')']).parse().ok()?;
     Some((d, op, p))
 }
 
@@ -54,7 +54,7 @@ pub fn learn(obs: &Observation) -> Lessons {
             if let Some(m) = measured { if reg > 0.0 { ratios.push(m / reg); } }
         }
         if let Some(m) = p.margin_pct {
-            if m.abs() < obs.band_pct {
+            if m.abs() < obs.band_pct && crate::lab::band_applies(&p.name, &p.value) {
                 fragile.push(Fragile { pred: p.pred.clone(), name: p.name.clone(), verdict: p.verdict.clone(), margin_pct: m });
             }
         }

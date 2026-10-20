@@ -186,7 +186,10 @@ impl<const N: usize, const D: usize, const A: usize> Brain<N, D, A> {
         self.update_model(x, action, reward);
         self.clock = self.clock.wrapping_add(1);
         let ep = Episode { key: *x, action, reward, surprise: absf(reward - expected), t: self.clock, used: true };
-        if self.len < N {
+        if let Some(free) = (0..self.len).find(|&s| !self.mem[s].used) {
+            self.mem[free] = ep;
+            Some(free)
+        } else if self.len < N {
             self.mem[self.len] = ep;
             self.len += 1;
             Some(self.len - 1)
@@ -219,6 +222,81 @@ impl<const N: usize, const D: usize, const A: usize> Brain<N, D, A> {
         for i in 0..D { for j in 0..D { self.a_inv[a][i][j] -= u[i] * u[j] / den; } }
         for i in 0..D { self.b[a][i] += reward * x[i]; }
         self.pulls[a] = self.pulls[a].saturating_add(1);
+    }
+
+    /// Bytes needed by [`Brain::to_bytes`].
+    pub const fn state_bytes() -> usize {
+        12 + 21 + N * (4 * D + 14) + A * D * D * 4 + A * D * 4 + A * 4 + 4
+    }
+
+    /// Serialize the whole brain (memory, model, settings) into `buf`, little-endian,
+    /// with a magic header, the dimensions and a CRC-32 trailer. Returns bytes written,
+    /// or None if `buf` is too small. No heap.
+    pub fn to_bytes(&self, buf: &mut [u8]) -> Option<usize> {
+        let need = Self::state_bytes();
+        if buf.len() < need { return None; }
+        let mut p = 0usize;
+        let mut put = |bytes: &[u8], p: &mut usize| { buf[*p..*p + bytes.len()].copy_from_slice(bytes); *p += bytes.len(); };
+        put(b"SBRN", &mut p);
+        put(&1u16.to_le_bytes(), &mut p);
+        put(&(N as u16).to_le_bytes(), &mut p); put(&(D as u16).to_le_bytes(), &mut p); put(&(A as u16).to_le_bytes(), &mut p);
+        put(&(self.len as u32).to_le_bytes(), &mut p); put(&self.clock.to_le_bytes(), &mut p);
+        put(&self.explore.to_le_bytes(), &mut p); put(&self.min_evidence.to_le_bytes(), &mut p);
+        put(&self.half_life.to_le_bytes(), &mut p); put(&[self.use_model as u8], &mut p);
+        for e in self.mem.iter() {
+            for v in e.key.iter() { put(&v.to_le_bytes(), &mut p); }
+            put(&[e.action], &mut p); put(&e.reward.to_le_bytes(), &mut p); put(&e.surprise.to_le_bytes(), &mut p);
+            put(&e.t.to_le_bytes(), &mut p); put(&[e.used as u8], &mut p);
+        }
+        for a in 0..A { for i in 0..D { for j in 0..D { put(&self.a_inv[a][i][j].to_le_bytes(), &mut p); } } }
+        for a in 0..A { for i in 0..D { put(&self.b[a][i].to_le_bytes(), &mut p); } }
+        for a in 0..A { put(&self.pulls[a].to_le_bytes(), &mut p); }
+        let crc = crate::brain_fleet::crc32(&buf[..p]);
+        buf[p..p + 4].copy_from_slice(&crc.to_le_bytes());
+        Some(p + 4)
+    }
+
+    /// Load a brain written by [`Brain::to_bytes`]. None on wrong magic, version,
+    /// dimensions, length or CRC (a damaged state is never half-loaded).
+    pub fn from_bytes(buf: &[u8]) -> Option<Self> {
+        let need = Self::state_bytes();
+        if buf.len() < need || &buf[..4] != b"SBRN" { return None; }
+        let crc = u32::from_le_bytes(buf[need - 4..need].try_into().ok()?);
+        if crate::brain_fleet::crc32(&buf[..need - 4]) != crc { return None; }
+        let mut p = 4usize;
+        let u16_ = |p: &mut usize| { let v = u16::from_le_bytes([buf[*p], buf[*p + 1]]); *p += 2; v };
+        if u16_(&mut p) != 1 || u16_(&mut p) as usize != N || u16_(&mut p) as usize != D || u16_(&mut p) as usize != A { return None; }
+        let u32_ = |p: &mut usize| { let v = u32::from_le_bytes([buf[*p], buf[*p + 1], buf[*p + 2], buf[*p + 3]]); *p += 4; v };
+        let f32_ = |p: &mut usize| f32::from_bits(u32_(p));
+        let mut br = Self::new(0.0, 0.0);
+        br.len = (u32_(&mut p) as usize).min(N); br.clock = u32_(&mut p);
+        br.explore = f32_(&mut p); br.min_evidence = f32_(&mut p); br.half_life = u32_(&mut p);
+        br.use_model = buf[p] != 0; p += 1;
+        for e in br.mem.iter_mut() {
+            for v in e.key.iter_mut() { *v = f32_(&mut p); }
+            e.action = buf[p]; p += 1; e.reward = f32_(&mut p); e.surprise = f32_(&mut p);
+            e.t = u32_(&mut p); e.used = buf[p] != 0; p += 1;
+        }
+        for a in 0..A { for i in 0..D { for j in 0..D { br.a_inv[a][i][j] = f32_(&mut p); } } }
+        for a in 0..A { for i in 0..D { br.b[a][i] = f32_(&mut p); } }
+        for a in 0..A { br.pulls[a] = u32_(&mut p); }
+        Some(br)
+    }
+
+    /// Forget one stored episode (compression: its knowledge already lives in the model).
+    /// The slot becomes free; `len` counts slots ever filled, so new episodes reuse freed ones first.
+    pub fn forget_slot(&mut self, slot: usize) -> bool {
+        if let Some(e) = self.mem.get_mut(slot) { if e.used { e.used = false; e.surprise = 0.0; return true; } }
+        false
+    }
+
+    /// Stored episodes currently in use.
+    pub fn in_use(&self) -> usize { self.mem.iter().filter(|e| e.used).count() }
+
+    /// Re-compute every stored situation (e.g. after the situation gained a new feature),
+    /// keeping actions, rewards and surprise. Bounded: one pass over memory.
+    pub fn rekey(&mut self, f: impl Fn(&[f32; D]) -> [f32; D]) {
+        for e in self.mem.iter_mut() { if e.used { e.key = f(&e.key); } }
     }
 
     /// The model's prediction alone (no memory correction); 0 when `use_model` is off.
@@ -385,6 +463,21 @@ mod tests {
         br.forget(0.5);
         assert!(br.estimates(&x)[0].width > w0, "forgetting widens uncertainty");
         assert_eq!(br.neighbours(&x).2, K.min(8));
+    }
+
+    #[test]
+    fn state_roundtrip_is_exact_and_damage_is_refused() {
+        let mut br: Brain<32, 3, 3> = Brain::new(0.3, 0.5);
+        let mut r = Lcg(4);
+        for _ in 0..80 { let x = [r.f(), r.f(), 1.0]; let a = (r.f() * 3.0) as u8 % 3; br.learn(&x, a, world(&x, a)); }
+        let mut buf = [0u8; Brain::<32, 3, 3>::state_bytes()];
+        assert_eq!(br.to_bytes(&mut buf), Some(buf.len()));
+        let back: Brain<32, 3, 3> = Brain::from_bytes(&buf).expect("loads");
+        for _ in 0..50 { let x = [r.f(), r.f(), 1.0]; assert_eq!(br.decide(&x, &[true; 3], 0), back.decide(&x, &[true; 3], 0)); }
+        let mut bad = buf; bad[100] ^= 1;
+        assert!(Brain::<32, 3, 3>::from_bytes(&bad).is_none(), "CRC catches a flipped bit");
+        assert!(Brain::<32, 4, 3>::from_bytes(&buf).is_none(), "wrong dimensions refused");
+        assert!(Brain::<32, 3, 3>::from_bytes(&buf[..buf.len() - 1]).is_none(), "truncated refused");
     }
 
     #[test]
